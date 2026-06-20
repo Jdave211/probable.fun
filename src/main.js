@@ -4339,7 +4339,7 @@ function tradePreviewHtml(market, amount) {
         <small>${esc(outcome?.title || marketOptionTitle(market))} · Avg. Price ${(avgPrice * 100).toFixed(1)}¢</small>
       </div>
       <strong class="trade-payout-value">${money(preview.cashAmount)}</strong>
-      ${pl ? `<div class="trade-pl-note ${pl.value >= 0 ? "gain" : "loss"}">${pl.value >= 0 ? "Gain" : "Loss"} ${signedMoney(pl.value)} vs avg buy</div>` : ""}
+      ${pl ? `<div class="trade-pl-note ${pl.percent >= 0 ? "gain" : "loss"}">${pl.percent >= 0 ? "+" : ""}${pl.percent.toFixed(1)}%</div>` : ""}
       <div class="trade-liquidity-note ${guidance.level}">
         ${guidance.text}
       </div>`;
@@ -4477,8 +4477,10 @@ function sellProfitLossEstimate(market, outcomeId, shares, avgSellPrice, side = 
   if (!state.activeMember || !shares || shares <= 0) return null;
   const basis = averageBuyPriceForPosition(market, outcomeId, side);
   if (!basis || !Number.isFinite(basis.avgPrice) || basis.avgPrice <= 0) return null;
+  const value = (Number(avgSellPrice || 0) - basis.avgPrice) * shares;
   return {
-    value: (Number(avgSellPrice || 0) - basis.avgPrice) * shares,
+    value,
+    percent: ((Number(avgSellPrice || 0) - basis.avgPrice) / basis.avgPrice) * 100,
     avgBuyPrice: basis.avgPrice,
   };
 }
@@ -4552,6 +4554,7 @@ function updateTradeSubmitState(market, preview, amount) {
   const submit = panel.querySelector(".trade-submit");
   const input = panel.querySelector(".trade-input");
   const mode = state.trade.mode || "buy";
+  const balance = getCurrentGroup()?.balances?.[state.activeMember] ?? 0;
   if (state.pendingUi.tradeMarketId === market.id) {
     if (submit) {
       submit.disabled = true;
@@ -4559,10 +4562,12 @@ function updateTradeSubmitState(market, preview, amount) {
     }
     return;
   }
-  const shouldDisable = mode === "sell" && (!preview.held || preview.held <= 0 || preview.oversell || !amount || amount > preview.held + 0.000001);
+  const insufficientBalance = mode === "buy" && Number(amount || 0) > balance;
+  const shouldDisable = insufficientBalance || (mode === "sell" && (!preview.held || preview.held <= 0 || preview.oversell || !amount || amount > preview.held + 0.000001));
   if (submit) {
     submit.disabled = shouldDisable;
     submit.classList.toggle("disabled", shouldDisable);
+    submit.classList.toggle("insufficient-balance", insufficientBalance);
   }
   if (input && mode === "sell" && preview.held > 0) input.dataset.rawMax = formatShareInput(preview.held);
 }
