@@ -2031,13 +2031,6 @@ button { color: inherit; }
   background: #263038;
   opacity: 0.62;
 }
-.trade-submit.insufficient-balance:disabled {
-  color: #fff;
-  opacity: 0.88;
-  filter: saturate(0.92);
-}
-.trade-submit.yes.insufficient-balance:disabled { background: #36a166; }
-.trade-submit.no.insufficient-balance:disabled { background: #91323c; }
 .trade-submit.is-loading:disabled {
   color: #fff;
   cursor: wait;

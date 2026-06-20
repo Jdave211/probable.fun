@@ -4352,15 +4352,18 @@ function tradePreviewHtml(market, amount) {
   const avgPrice = shares > 0 ? amount / shares : price;
   const payout = mode === "sell" ? amount : shares;
   const guidance = liquidityGuidance(market, amount, price, avgPrice, preview);
+  const balance = getCurrentGroup()?.balances?.[state.activeMember] ?? 0;
+  const insufficientBalance = amount > balance;
   return `
     <div class="trade-payout-label">
       <span>${mode === "sell" ? "You receive" : "To win 💸"}</span>
       <small>${esc(outcome?.title || marketOptionTitle(market))} · Avg. Price ${(avgPrice * 100).toFixed(1)}¢</small>
     </div>
     <strong class="trade-payout-value">${money(payout)}</strong>
-    <div class="trade-liquidity-note ${guidance.level}">
-      ${guidance.text}
-    </div>`;
+    ${insufficientBalance ? `<div class="trade-liquidity-note warn">Not enough funds. You have ${money(balance)}.</div>` : `
+      <div class="trade-liquidity-note ${guidance.level}">
+        ${guidance.text}
+      </div>`}`;
 }
 
 function tradeOutcomeId(market, side = "yes") {
@@ -4567,7 +4570,6 @@ function updateTradeSubmitState(market, preview, amount) {
   if (submit) {
     submit.disabled = shouldDisable;
     submit.classList.toggle("disabled", shouldDisable);
-    submit.classList.toggle("insufficient-balance", insufficientBalance);
   }
   if (input && mode === "sell" && preview.held > 0) input.dataset.rawMax = formatShareInput(preview.held);
 }
