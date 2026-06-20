@@ -2116,7 +2116,7 @@ function updateMarketReview(form = dom.marketForm) {
     </div>
     <div class="market-review-description">
       <span>Description</span>
-      <p>${escapeHtml(description)}</p>
+      <div class="market-review-description-box">${escapeHtml(description || "No description added yet.")}</div>
     </div>
   `;
 }
