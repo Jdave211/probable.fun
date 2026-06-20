@@ -226,7 +226,7 @@ DECLARE
   v_outcome_exp numeric;
   v_cash numeric;
   v_curve_cash numeric;
-  v_fee_rate numeric := 0.025;
+  v_fee_rate numeric := 0.015;
   v_multiplier numeric;
   v_shares numeric;
   v_new_quantity numeric;

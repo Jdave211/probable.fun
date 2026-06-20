@@ -251,7 +251,7 @@ Chart.register(CategoryScale, LinearScale, LineController, LineElement, PointEle
 const API = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 const DEFAULT_BALANCE = 100000;
 const DEFAULT_MARKET_LIQUIDITY = 20000;
-const MARKET_FEE_RATE = 0.025;
+const MARKET_FEE_RATE = 0.015;
 let rulesDraftPromise = null;
 const MAX_MARKET_IMAGE_BYTES = 650000;
 const EVENT_CHART_COLORS = ["#2d9cff", "#f23645", "#f2c414", "#ff861c", "#8bd450", "#b87cff", "#18c3b6", "#78b7ff"];

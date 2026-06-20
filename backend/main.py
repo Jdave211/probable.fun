@@ -30,7 +30,7 @@ load_dotenv(dotenv_path=BASE_DIR / ".env", override=False)
 
 DIST_DIR = BASE_DIR / "dist"
 DEFAULT_FAKE_BALANCE = 100000.0
-MARKET_FEE_RATE = 0.025
+MARKET_FEE_RATE = 0.015
 
 
 # ── Pydantic models ────────────────────────────────────────────────────
