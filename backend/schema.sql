@@ -225,6 +225,8 @@ DECLARE
   v_sum_exp numeric;
   v_outcome_exp numeric;
   v_cash numeric;
+  v_curve_cash numeric;
+  v_fee_rate numeric := 0.025;
   v_multiplier numeric;
   v_shares numeric;
   v_new_quantity numeric;
@@ -289,7 +291,8 @@ BEGIN
   WHERE id = p_outcome_id AND event_id = p_event_id;
 
   IF lower(p_action) = 'buy' THEN
-    v_multiplier := EXP(v_cash / v_b);
+    v_curve_cash := ROUND(v_cash * (1 - v_fee_rate), 4);
+    v_multiplier := EXP(v_curve_cash / v_b);
     v_shares := v_b * LN(1 + (v_sum_exp / v_outcome_exp) * (v_multiplier - 1));
     v_new_quantity := (SELECT quantity FROM market_outcomes WHERE id = p_outcome_id) + v_shares;
     UPDATE group_members
@@ -305,12 +308,13 @@ BEGIN
       v_held_shares := 0;
     END IF;
 
-    v_max_cash := v_b * LN(v_sum_exp / (v_sum_exp - v_outcome_exp + v_outcome_exp * EXP(-v_held_shares / v_b)));
+    v_max_cash := (v_b * LN(v_sum_exp / (v_sum_exp - v_outcome_exp + v_outcome_exp * EXP(-v_held_shares / v_b)))) * (1 - v_fee_rate);
     IF v_cash > v_max_cash + 0.0001 THEN
       RAISE EXCEPTION '% does not have enough shares to sell for $%', p_participant, ROUND(v_cash, 2);
     END IF;
 
-    v_multiplier := EXP(v_cash / v_b);
+    v_curve_cash := ROUND(v_cash / (1 - v_fee_rate), 4);
+    v_multiplier := EXP(v_curve_cash / v_b);
     IF (v_sum_exp / v_multiplier - (v_sum_exp - v_outcome_exp)) <= 0 THEN
       RAISE EXCEPTION 'Not enough liquidity to sell that much';
     END IF;
@@ -366,6 +370,9 @@ BEGIN
     'sharesDelta', ROUND(v_shares, 8),
     'avgPrice', v_avg_price,
     'cashAmount', v_cash,
+    'feeRate', v_fee_rate,
+    'fee', ROUND(CASE WHEN lower(p_action) = 'buy' THEN v_cash * v_fee_rate ELSE v_curve_cash - v_cash END, 4),
+    'curveCash', ROUND(v_curve_cash, 4),
     'pricesBefore', v_prices_before,
     'pricesAfter', v_prices_after
   );

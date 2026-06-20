@@ -2001,6 +2001,13 @@ button { color: inherit; }
   font-size: 0.78rem;
   font-weight: 850;
 }
+.trade-fee-note {
+  grid-column: 1 / -1;
+  margin-top: -6px;
+  color: var(--text-3);
+  font-size: 0.76rem;
+  font-weight: 750;
+}
 .trade-pl-note.gain { color: #38d274; }
 .trade-pl-note.loss { color: var(--red); }
 .trade-liquidity-note.ok { color: #38d274; }

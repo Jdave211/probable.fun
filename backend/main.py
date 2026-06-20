@@ -30,6 +30,7 @@ load_dotenv(dotenv_path=BASE_DIR / ".env", override=False)
 
 DIST_DIR = BASE_DIR / "dist"
 DEFAULT_FAKE_BALANCE = 100000.0
+MARKET_FEE_RATE = 0.025
 
 
 # ── Pydantic models ────────────────────────────────────────────────────
@@ -1106,6 +1107,16 @@ def lmsr_sell_cash_for_shares(outcomes: list[dict], b: float, outcome_id: str, s
     return b * math.log(sum_exp / denominator)
 
 
+def trade_net_cash(cash: float) -> float:
+    return max(0.0, float(cash or 0) * (1 - MARKET_FEE_RATE))
+
+
+def sell_gross_cash_for_net(net_cash: float) -> float:
+    if MARKET_FEE_RATE >= 1:
+        return 0.0
+    return max(0.0, float(net_cash or 0) / (1 - MARKET_FEE_RATE))
+
+
 def weighted_allocations(outcomes: list[dict], cash: float) -> dict[str, float]:
     if not outcomes:
         return {}
@@ -1134,6 +1145,8 @@ def event_trade_quote(event: dict, outcomes: list[dict], outcome_id: str, payloa
     is_complement = len(outcomes) > 2 and payload.side == "no"
     target_price = float(target.get("price") or 0)
     price = max(0.0, 1.0 - target_price) if is_complement else target_price
+    fee = amount * MARKET_FEE_RATE if payload.action == "buy" else max(0.0, sell_gross_cash_for_net(amount) - amount)
+    net_amount = trade_net_cash(amount) if payload.action == "buy" else amount
     quote = {
         "eventId": event["id"],
         "outcomeId": outcome_id,
@@ -1146,6 +1159,9 @@ def event_trade_quote(event: dict, outcomes: list[dict], outcome_id: str, payloa
         "shares": 0.0,
         "cashReceived": 0.0,
         "maxCash": 0.0,
+        "feeRate": MARKET_FEE_RATE,
+        "fee": round(fee, 4),
+        "netAmount": round(net_amount, 4),
     }
     if amount <= 0:
         return quote
@@ -1154,11 +1170,11 @@ def event_trade_quote(event: dict, outcomes: list[dict], outcome_id: str, payloa
         if payload.action == "buy":
             allocations = weighted_allocations(complement, amount)
             quote["allocations"] = allocations
-            quote["shares"] = round(sum(lmsr_buy_shares(outcomes, b, oid, cash) for oid, cash in allocations.items()), 8)
+            quote["shares"] = round(sum(lmsr_buy_shares(outcomes, b, oid, trade_net_cash(cash)) for oid, cash in allocations.items()), 8)
         else:
             holdings = positions or {}
             max_by_outcome = {
-                item["id"]: lmsr_sell_cash_for_shares(outcomes, b, item["id"], float(holdings.get(item["id"], 0)))
+                item["id"]: trade_net_cash(lmsr_sell_cash_for_shares(outcomes, b, item["id"], float(holdings.get(item["id"], 0))))
                 for item in complement
             }
             max_cash = sum(max_by_outcome.values())
@@ -1170,10 +1186,10 @@ def event_trade_quote(event: dict, outcomes: list[dict], outcome_id: str, payloa
             )
         return quote
     if payload.action == "buy":
-        quote["shares"] = round(lmsr_buy_shares(outcomes, b, outcome_id, amount), 8)
+        quote["shares"] = round(lmsr_buy_shares(outcomes, b, outcome_id, trade_net_cash(amount)), 8)
     else:
         held = float((positions or {}).get(outcome_id, 0))
-        max_cash = lmsr_sell_cash_for_shares(outcomes, b, outcome_id, held)
+        max_cash = trade_net_cash(lmsr_sell_cash_for_shares(outcomes, b, outcome_id, held))
         quote["maxCash"] = round(max_cash, 4)
         quote["cashReceived"] = round(min(amount, max_cash), 4)
     return quote
@@ -2053,7 +2069,7 @@ def place_trade(market_id: str, payload: TradeCreate) -> dict:
                 positions = {row["outcome_id"]: float(row.get("shares") or 0) for row in position_rows}
                 b = float(event.get("liquidity_b") or DEFAULT_FAKE_BALANCE)
                 max_by_outcome = {
-                    item["id"]: lmsr_sell_cash_for_shares(outcomes, b, item["id"], positions.get(item["id"], 0.0))
+                    item["id"]: trade_net_cash(lmsr_sell_cash_for_shares(outcomes, b, item["id"], positions.get(item["id"], 0.0)))
                     for item in complement
                 }
                 max_cash = sum(max_by_outcome.values())

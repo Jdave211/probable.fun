@@ -251,6 +251,7 @@ Chart.register(CategoryScale, LinearScale, LineController, LineElement, PointEle
 const API = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 const DEFAULT_BALANCE = 100000;
 const DEFAULT_MARKET_LIQUIDITY = 20000;
+const MARKET_FEE_RATE = 0.025;
 let rulesDraftPromise = null;
 const MAX_MARKET_IMAGE_BYTES = 650000;
 const EVENT_CHART_COLORS = ["#2d9cff", "#f23645", "#f2c414", "#ff861c", "#8bd450", "#b87cff", "#18c3b6", "#78b7ff"];
@@ -3818,6 +3819,25 @@ function signedMoney(value) {
   return `${n >= 0 ? "+" : "-"}${money(Math.abs(n))}`;
 }
 
+function tradeNetCash(cash) {
+  return Math.max(0, Number(cash || 0) * (1 - MARKET_FEE_RATE));
+}
+
+function sellGrossCashForNet(netCash) {
+  return MARKET_FEE_RATE >= 1 ? 0 : Math.max(0, Number(netCash || 0) / (1 - MARKET_FEE_RATE));
+}
+
+function tradeFee(amount) {
+  const n = Math.max(0, Number(amount || 0));
+  return n * MARKET_FEE_RATE;
+}
+
+function marketFeeNote(amount) {
+  const fee = tradeFee(amount);
+  if (!fee) return "";
+  return `<div class="trade-fee-note">Market fee ${money(fee)} (${(MARKET_FEE_RATE * 100).toFixed(1)}%)</div>`;
+}
+
 function marketCard(group, market) {
   const prob = Number(market.probability ?? 0.5);
   const yesPct = Math.round(prob * 100);
@@ -4340,6 +4360,7 @@ function tradePreviewHtml(market, amount) {
       </div>
       <strong class="trade-payout-value">${money(preview.cashAmount)}</strong>
       ${pl ? `<div class="trade-pl-note ${pl.percent >= 0 ? "gain" : "loss"}">${pl.percent >= 0 ? "+" : ""}${pl.percent.toFixed(1)}%</div>` : ""}
+      ${marketFeeNote(sellGrossCashForNet(preview.cashAmount))}
       <div class="trade-liquidity-note ${guidance.level}">
         ${guidance.text}
       </div>`;
@@ -4360,6 +4381,7 @@ function tradePreviewHtml(market, amount) {
       <small>${esc(outcome?.title || marketOptionTitle(market))} · Avg. Price ${(avgPrice * 100).toFixed(1)}¢</small>
     </div>
     <strong class="trade-payout-value">${money(payout)}</strong>
+    ${!insufficientBalance ? marketFeeNote(amount) : ""}
     ${insufficientBalance ? `<div class="trade-liquidity-note warn">Not enough funds. You have ${money(balance)}.</div>` : `
       <div class="trade-liquidity-note ${guidance.level}">
         ${guidance.text}
@@ -4416,14 +4438,16 @@ function lmsrPreview(market, outcomeId, mode, amount) {
   const targetExp = Math.exp(Number(target.quantity || 0) / b);
   if (mode === "sell") {
     const held = currentSharesForOutcome(market, outcomeId);
-    const maxCash = b * Math.log(sumExp / (sumExp - targetExp + targetExp * Math.exp(-held / b)));
+    const maxCash = tradeNetCash(b * Math.log(sumExp / (sumExp - targetExp + targetExp * Math.exp(-held / b))));
     const safeAmount = Math.min(amount, Math.max(0, maxCash - 0.0001));
-    const multiplier = Math.exp(safeAmount / b);
+    const curveCash = sellGrossCashForNet(safeAmount);
+    const multiplier = Math.exp(curveCash / b);
     const denominator = sumExp / multiplier - (sumExp - targetExp);
     const shares = denominator > 0 ? -b * Math.log(denominator / targetExp) : held + 1;
     return { shares: -shares, maxCash, held, oversell: amount > maxCash + 0.0001 };
   }
-  const multiplier = Math.exp(amount / b);
+  const curveCash = tradeNetCash(amount);
+  const multiplier = Math.exp(curveCash / b);
   const shares = b * Math.log(1 + (sumExp / targetExp) * (multiplier - 1));
   return { shares, maxCash: 0, held: currentSharesForOutcome(market, outcomeId), oversell: false };
 }
@@ -5574,7 +5598,7 @@ function lmsrSellValueForShares(market, outcomeId, shares) {
   const targetExp = Math.exp(Number(target.quantity || 0) / b);
   const denominator = sumExp - targetExp + targetExp * Math.exp(-amount / b);
   if (denominator <= 0 || sumExp <= 0) return 0;
-  return b * Math.log(sumExp / denominator);
+  return tradeNetCash(b * Math.log(sumExp / denominator));
 }
 
 function leaderboardSortValue(entry) {
