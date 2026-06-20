@@ -1,0 +1,21 @@
+{
+  "name": "probable-groups",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.2.2",
+    "tailwindcss": "4.2.2",
+    "vite": "^8.0.16"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.108.2",
+    "chart.js": "^4.5.1",
+    "motion": "^12.40.0"
+  }
+}

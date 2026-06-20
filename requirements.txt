@@ -1,0 +1,5 @@
+fastapi[standard]==0.135.2
+anthropic>=0.40.0
+httpx>=0.27.0
+supabase>=2.0.0
+pillow>=10.0.0
