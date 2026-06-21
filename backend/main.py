@@ -778,13 +778,17 @@ def find_assembled_event(event_id: str) -> tuple[dict, dict]:
     raise HTTPException(404, "Event not found")
 
 
-def public_base_url() -> str:
-    return (
+def configured_public_base_url() -> str | None:
+    explicit = (
         os.environ.get("PUBLIC_SHARE_BASE_URL")
         or os.environ.get("PUBLIC_BASE_URL")
         or os.environ.get("BACKEND_BASE_URL")
-        or "http://localhost:8000"
-    ).rstrip("/")
+    )
+    return explicit.rstrip("/") if explicit else None
+
+
+def public_base_url() -> str:
+    return configured_public_base_url() or "http://localhost:8000"
 
 
 def request_base_url(request: Request | None) -> str | None:
@@ -810,7 +814,7 @@ def frontend_base_url(request: Request | None = None) -> str:
 
 
 def share_base_url(request: Request | None = None) -> str:
-    return request_base_url(request) or public_base_url()
+    return configured_public_base_url() or request_base_url(request) or public_base_url()
 
 
 def share_market_payload(market_id: str, request: Request | None = None) -> dict:
