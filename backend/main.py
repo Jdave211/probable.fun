@@ -817,12 +817,26 @@ def share_base_url(request: Request | None = None) -> str:
     return configured_public_base_url() or request_base_url(request) or public_base_url()
 
 
+def is_binary_no_row(market: dict) -> bool:
+    titles = {
+        str(outcome.get("title") or "").strip().lower()
+        for outcome in (market.get("outcomes") or [])
+    }
+    return titles == {"yes", "no"} and str(market.get("question") or "").strip().lower() == "no"
+
+
+def share_yes_no_prices(market: dict) -> tuple[float, float]:
+    selected = max(0.0, min(1.0, float(market.get("probability") or 0)))
+    if is_binary_no_row(market):
+        return 1 - selected, selected
+    return selected, 1 - selected
+
+
 def share_market_payload(market_id: str, request: Request | None = None) -> dict:
     group, event, market = find_assembled_market(market_id)
     share_base = share_base_url(request)
     app_base = frontend_base_url(request)
-    price = float(market.get("probability") or 0)
-    no_price = max(0.0, 1.0 - price)
+    yes_price, no_price = share_yes_no_prices(market)
     title = event["title"]
     outcome = market.get("question") or "Yes"
     return {
@@ -831,7 +845,7 @@ def share_market_payload(market_id: str, request: Request | None = None) -> dict
         "group": {"id": group["id"], "name": group["name"], "emoji": group["emoji"]},
         "share": {
             "title": f"{title}: {outcome}",
-            "description": f"{round(price * 100)}% Yes · {round(no_price * 100)}% No · {group['emoji']} {group['name']}",
+            "description": f"{round(yes_price * 100)}% Yes · {round(no_price * 100)}% No · {group['emoji']} {group['name']}",
             "url": f"{share_base}/market/{market['id']}",
             "appUrl": f"{app_base}/market/{market['id']}",
             "embedUrl": f"{share_base}/embed/market/{market['id']}",
@@ -877,6 +891,17 @@ def share_card_history_values(market: dict) -> list[float]:
         indexes = sorted({round(index * (len(values) - 1) / 179) for index in range(180)})
         values = [values[index] for index in indexes]
     return values
+
+
+def share_card_yes_no_values(market: dict) -> tuple[list[float], list[float]]:
+    selected_values = share_card_history_values(market)
+    if is_binary_no_row(market):
+        no_values = selected_values
+        yes_values = [1 - value for value in selected_values]
+    else:
+        yes_values = selected_values
+        no_values = [1 - value for value in selected_values]
+    return yes_values, no_values
 
 
 def share_card_chart_domain(values: list[float], *, min_range: float = 8.0, pad: float = 1.6) -> tuple[float, float, float]:
@@ -1724,18 +1749,17 @@ def market_share_card_svg(market_id: str, request: Request) -> Response:
     market = payload["market"]
     event = payload["event"]
     group = payload["group"]
-    yes = round(float(market.get("probability") or 0) * 100)
-    no = 100 - yes
+    yes_price, no_price = share_yes_no_prices(market)
+    yes = round(yes_price * 100)
+    no = round(no_price * 100)
     volume = float(market.get("volume") or market.get("totalBet") or 0)
-    yes_values = share_card_history_values(market)
-    no_values = [1 - value for value in yes_values]
+    yes_values, no_values = share_card_yes_no_values(market)
     low, high = share_card_chart_bounds(yes_values)
     title = esc_html(event["title"])[:72]
     outcome = esc_html(market.get("question") or "Yes")[:40]
     group_name = esc_html(f"{group['emoji']} {group['name']}")
     closes = esc_html(fmt_card_date(market.get("closesAt")))
-    yes_values = share_card_history_values(market)
-    no_values = [1 - value for value in yes_values]
+    yes_values, no_values = share_card_yes_no_values(market)
     low, high = share_card_chart_bounds(yes_values)
     chart_left, chart_top, chart_width, chart_height = 120, 286, 760, 184
     yes_points = share_card_svg_points(yes_values, chart_left, chart_top, chart_width, chart_height, low, high)
@@ -1789,11 +1813,11 @@ def market_share_card_png(market_id: str, request: Request) -> Response:
     market = payload["market"]
     event = payload["event"]
     group = payload["group"]
-    yes = round(float(market.get("probability") or 0) * 100)
-    no = 100 - yes
+    yes_price, no_price = share_yes_no_prices(market)
+    yes = round(yes_price * 100)
+    no = round(no_price * 100)
     volume = float(market.get("volume") or market.get("totalBet") or 0)
-    yes_values = share_card_history_values(market)
-    no_values = [1 - value for value in yes_values]
+    yes_values, no_values = share_card_yes_no_values(market)
     low, high, tick_step = share_card_chart_domain(yes_values + no_values, min_range=8, pad=1.6)
 
     def font(size: int, bold: bool = False):
@@ -1974,8 +1998,9 @@ def market_share_card_png(market_id: str, request: Request) -> Response:
 
 
 def embed_market_html(market: dict, event: dict, group: dict, *, chart: bool = True, buttons: bool = True, dark: bool = True, border: bool = True, app_base: str | None = None) -> str:
-    yes = round(float(market.get("probability") or 0) * 100)
-    no = 100 - yes
+    yes_price, no_price = share_yes_no_prices(market)
+    yes = round(yes_price * 100)
+    no = round(no_price * 100)
     bg = "#101820" if dark else "#ffffff"
     fg = "#f4f7fa" if dark else "#121417"
     muted = "#8fa0ad" if dark else "#66717b"
@@ -1983,7 +2008,8 @@ def embed_market_html(market: dict, event: dict, group: dict, *, chart: bool = T
     border_css = f"border:1px solid {line};" if border else ""
     chart_html = ""
     if chart:
-        points = " ".join(f"{80 + idx * 44},{160 - (float(p.get('probability') or 0) * 120)}" for idx, p in enumerate((market.get("probabilityHistory") or [])[-8:]))
+        yes_values, _no_values = share_card_yes_no_values(market)
+        points = " ".join(f"{80 + idx * 44},{160 - (float(value or 0) * 120)}" for idx, value in enumerate(yes_values[-8:]))
         if not points:
             points = f"80,{160 - yes * 1.2} 388,{160 - yes * 1.2}"
         chart_html = f"""<svg class="chart" viewBox="0 0 480 180" aria-hidden="true"><path d="M40 35H440M40 90H440M40 145H440" stroke="{line}" stroke-dasharray="3 5"/><polyline points="{points}" fill="none" stroke="#2d9cff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>"""
