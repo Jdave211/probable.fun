@@ -4862,7 +4862,7 @@ function renderLeaderboard() {
         <div>
           <p class="eyebrow">${esc(group.name)} leaderboard</p>
           <h1>Portfolio race</h1>
-          <p>${state.leaderboardMetric === "percent" ? "Ranked by return on money actually put into trades." : `Ranked by nominal gain from ${money(DEFAULT_BALANCE)} starting cash.`}</p>
+          <p>${state.leaderboardMetric === "percent" ? "Ranked by return on money actually put into trades." : "Ranked by nominal gain from each trader's starting bankroll."}</p>
         </div>
         <div class="leaderboard-controls probable-leaderboard-controls">
           ${leaderboardMetricToggle()}
@@ -5051,7 +5051,9 @@ function portfolioSnapshot() {
       const markValue = owner ? currentMarkValue(group, owner) : 0;
       const cashOutValue = owner ? currentPositionValue(group, owner) : 0;
       const activity = owner ? portfolioActivityForGroup(group, owner) : [];
-      return { group, owner, open, closed, cash, markValue, cashOutValue, activity };
+      const cashFlow = owner ? portfolioCashFlowForGroup(group, owner) : { buys: 0, sells: 0, payouts: 0 };
+      const startingValue = owner ? inferredGroupStartingValue(cash, cashFlow) : 0;
+      return { group, owner, open, closed, cash, markValue, cashOutValue, activity, cashFlow, startingValue };
     })
     .filter(item => item.owner || item.open.length || item.closed.length || item.activity.length);
 
@@ -5065,7 +5067,7 @@ function portfolioSnapshot() {
   const activity = groups.flatMap(item => item.activity).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   const tradeCount = activity.length;
   const volume = activity.reduce((sum, item) => sum + Math.abs(Number(item.amount || 0)), 0);
-  const startingValue = groups.length * DEFAULT_BALANCE;
+  const startingValue = groups.reduce((sum, item) => sum + item.startingValue, 0);
   const pnl = groups.length ? portfolioMark - startingValue : 0;
   const pnlPct = startingValue > 0 ? (pnl / startingValue) * 100 : 0;
 
@@ -5085,6 +5087,57 @@ function portfolioSnapshot() {
     pnl,
     pnlPct,
   };
+}
+
+function portfolioCashFlowForGroup(group, participant) {
+  const flow = { buys: 0, sells: 0, payouts: 0 };
+  const seenEvents = new Set();
+  for (const market of group.markets ?? []) {
+    if (market.eventId && Array.isArray(market.outcomes)) {
+      if (seenEvents.has(market.eventId)) continue;
+      seenEvents.add(market.eventId);
+      for (const trade of market.eventTrades ?? []) {
+        if (trade.participant !== participant) continue;
+        const amount = tradeCashAmount(trade);
+        if ((trade.action || "buy") === "sell") flow.sells += amount;
+        else flow.buys += amount;
+      }
+      if (market.status === "resolved" && market.outcome) {
+        flow.payouts += Number(market.positions?.[participant]?.[market.outcome] || 0);
+      }
+      continue;
+    }
+
+    const sharesBySide = { yes: 0, no: 0 };
+    for (const trade of market.trades ?? []) {
+      if (trade.participant !== participant) continue;
+      const amount = tradeCashAmount(trade);
+      const side = trade.side === "no" ? "no" : "yes";
+      const shares = Math.abs(Number(trade.shares || 0));
+      if ((trade.action || "buy") === "sell") {
+        flow.sells += amount;
+        sharesBySide[side] -= shares;
+      } else {
+        flow.buys += amount;
+        sharesBySide[side] += shares;
+      }
+    }
+    if (market.status === "resolved" && (market.outcome === "yes" || market.outcome === "no")) {
+      flow.payouts += Math.max(0, sharesBySide[market.outcome] || 0);
+    }
+  }
+  return flow;
+}
+
+function inferredGroupStartingValue(cash, flow) {
+  const inferred = Number(cash || 0) + Number(flow?.buys || 0) - Number(flow?.sells || 0) - Number(flow?.payouts || 0);
+  if (Number.isFinite(inferred) && inferred > 0.0001) return inferred;
+  const fallback = Number(cash || 0);
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : DEFAULT_BALANCE;
+}
+
+function tradeCashAmount(trade) {
+  return Math.abs(Number(trade?.amount ?? trade?.cashAmount ?? 0));
 }
 
 function portfolioActivityForGroup(group, participant) {
@@ -5208,23 +5261,10 @@ function portfolioChartCardHtml(snapshot = portfolioSnapshot()) {
 function portfolioChartConfig(snapshot = portfolioSnapshot()) {
   const metric = state.portfolioChartMetric === "cashout" ? "cashout" : "mark";
   const range = ["7d", "30d", "all"].includes(state.portfolioChartRange) ? state.portfolioChartRange : "all";
-  const sorted = [...snapshot.activity].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   const now = Date.now();
   const baseline = snapshot.startingValue || snapshot.portfolioMark || DEFAULT_BALANCE;
   const finalValue = Math.round((metric === "cashout" ? snapshot.cashOutPortfolio : snapshot.portfolioMark) || baseline);
-  const fullStartTime = sorted[0]?.createdAt ? new Date(sorted[0].createdAt).getTime() : now - 7 * 24 * 60 * 60 * 1000;
-  const points = [{ time: fullStartTime, value: Math.round(baseline) }];
-
-  if (sorted.length) {
-    sorted.forEach((item, index) => {
-      const progress = (index + 1) / Math.max(1, sorted.length + 1);
-      points.push({
-        time: new Date(item.createdAt).getTime(),
-        value: Math.round(baseline + (finalValue - baseline) * progress),
-      });
-    });
-  }
-  points.push({ time: now, value: finalValue });
+  const points = portfolioValueTimeline(snapshot, metric, now, finalValue);
 
   const cutoff = range === "7d" ? now - 7 * 24 * 60 * 60 * 1000 : range === "30d" ? now - 30 * 24 * 60 * 60 * 1000 : -Infinity;
   let visible = points.filter(point => point.time >= cutoff);
@@ -5256,6 +5296,191 @@ function portfolioChartConfig(snapshot = portfolioSnapshot()) {
     currentValue: data.at(-1),
     delta,
   };
+}
+
+function portfolioValueTimeline(snapshot, metric, now = Date.now(), finalValue = null) {
+  const states = [];
+  const events = [];
+
+  for (const item of snapshot.groups) {
+    const owner = item.owner;
+    if (!owner) continue;
+    const state = {
+      groupId: item.group.id,
+      owner,
+      cash: Number(item.startingValue || 0),
+      positions: new Map(),
+      prices: new Map(),
+      quantities: new Map(),
+      liquidity: new Map(),
+    };
+    states.push(state);
+
+    const seenEvents = new Set();
+    for (const market of item.group.markets ?? []) {
+      if (market.eventId && Array.isArray(market.outcomes)) {
+        if (seenEvents.has(market.eventId)) continue;
+        seenEvents.add(market.eventId);
+        seedEventPrices(state, market);
+        for (const trade of sortedTrades(market.eventTrades)) {
+          events.push({ type: "trade", time: timeValue(trade.createdAt), state, market, trade });
+        }
+        if (market.status === "resolved" && market.resolvedAt) {
+          events.push({ type: "resolve", time: timeValue(market.resolvedAt), state, market });
+        }
+        continue;
+      }
+      seedLegacyMarketPrices(state, market);
+      for (const trade of sortedTrades(market.trades)) {
+        events.push({ type: "legacy-trade", time: timeValue(trade.createdAt), state, market, trade });
+      }
+      if (market.status === "resolved" && market.resolvedAt) {
+        events.push({ type: "legacy-resolve", time: timeValue(market.resolvedAt), state, market });
+      }
+    }
+  }
+
+  events.sort((a, b) => a.time - b.time);
+  const startTime = events[0]?.time || now - 7 * 24 * 60 * 60 * 1000;
+  const points = [{ time: startTime, value: Math.round(portfolioTimelineValue(states, metric)) }];
+
+  for (const event of events) {
+    if (!Number.isFinite(event.time)) continue;
+    applyPortfolioTimelineEvent(event);
+    const value = Math.round(portfolioTimelineValue(states, metric));
+    if (Number.isFinite(value)) points.push({ time: event.time, value });
+  }
+
+  const exactFinal = Number.isFinite(finalValue) ? finalValue : Math.round(portfolioTimelineValue(states, metric));
+  if (!points.length) return [{ time: now - 24 * 60 * 60 * 1000, value: exactFinal }, { time: now, value: exactFinal }];
+  if (points.at(-1).time !== now || points.at(-1).value !== exactFinal) points.push({ time: now, value: exactFinal });
+  return points;
+}
+
+function sortedTrades(trades = []) {
+  return [...(trades || [])].sort((a, b) => timeValue(a.createdAt) - timeValue(b.createdAt));
+}
+
+function timeValue(value) {
+  const time = new Date(value || 0).getTime();
+  return Number.isFinite(time) && time > 0 ? time : Date.now();
+}
+
+function seedEventPrices(state, market) {
+  const trades = sortedTrades(market.eventTrades);
+  const firstTrade = trades[0];
+  const before = firstTrade?.pricesBefore || {};
+  const prices = new Map();
+  const quantities = new Map();
+  for (const outcome of market.outcomes ?? []) {
+    prices.set(outcome.id, Number(before[outcome.id] ?? outcome.price ?? 0));
+    quantities.set(outcome.id, Number(outcome.quantity || 0));
+  }
+  for (const trade of trades) {
+    const outcomeId = trade.outcomeId;
+    if (!outcomeId) continue;
+    quantities.set(outcomeId, Number(quantities.get(outcomeId) || 0) - Number(trade.shares || trade.sharesDelta || 0));
+  }
+  state.prices.set(market.eventId, prices);
+  state.quantities.set(market.eventId, quantities);
+  state.liquidity.set(market.eventId, Number(market.initialLiquidity || market.liquidity || DEFAULT_MARKET_LIQUIDITY));
+}
+
+function seedLegacyMarketPrices(state, market) {
+  const firstTrade = sortedTrades(market.trades)[0];
+  const probability = Number(firstTrade?.probBefore ?? market.probability ?? 0.5);
+  state.prices.set(market.id, new Map([
+    ["yes", probability],
+    ["no", 1 - probability],
+  ]));
+}
+
+function applyPortfolioTimelineEvent(event) {
+  if (event.type === "trade") {
+    const prices = event.state.prices.get(event.market.eventId) || new Map();
+    Object.entries(event.trade.pricesAfter || {}).forEach(([id, price]) => prices.set(id, Number(price || 0)));
+    event.state.prices.set(event.market.eventId, prices);
+    const quantities = event.state.quantities.get(event.market.eventId) || new Map();
+    const outcomeId = event.trade.outcomeId;
+    if (outcomeId) {
+      quantities.set(outcomeId, Number(quantities.get(outcomeId) || 0) + Number(event.trade.shares || event.trade.sharesDelta || 0));
+      event.state.quantities.set(event.market.eventId, quantities);
+    }
+    if (event.trade.participant !== event.state.owner) return;
+    event.state.cash += (event.trade.action || "buy") === "sell" ? tradeCashAmount(event.trade) : -tradeCashAmount(event.trade);
+    addTimelineShares(event.state, event.market.eventId, event.trade.outcomeId, Number(event.trade.shares || event.trade.sharesDelta || 0));
+    return;
+  }
+  if (event.type === "resolve") {
+    const positions = event.state.positions.get(event.market.eventId) || new Map();
+    event.state.cash += Math.max(0, Number(positions.get(event.market.outcome) || 0));
+    event.state.positions.delete(event.market.eventId);
+    const prices = event.state.prices.get(event.market.eventId) || new Map();
+    for (const outcome of event.market.outcomes ?? []) prices.set(outcome.id, outcome.id === event.market.outcome ? 1 : 0);
+    event.state.prices.set(event.market.eventId, prices);
+    event.state.quantities.delete(event.market.eventId);
+    return;
+  }
+  if (event.type === "legacy-trade") {
+    const side = event.trade.side === "no" ? "no" : "yes";
+    const prices = event.state.prices.get(event.market.id) || new Map();
+    const probability = Number(event.trade.probAfter ?? event.market.probability ?? 0.5);
+    prices.set("yes", probability);
+    prices.set("no", 1 - probability);
+    event.state.prices.set(event.market.id, prices);
+    if (event.trade.participant !== event.state.owner) return;
+    event.state.cash += (event.trade.action || "buy") === "sell" ? tradeCashAmount(event.trade) : -tradeCashAmount(event.trade);
+    const shares = Math.abs(Number(event.trade.shares || 0)) * ((event.trade.action || "buy") === "sell" ? -1 : 1);
+    addTimelineShares(event.state, event.market.id, side, shares);
+    return;
+  }
+  if (event.type === "legacy-resolve") {
+    const positions = event.state.positions.get(event.market.id) || new Map();
+    event.state.cash += Math.max(0, Number(positions.get(event.market.outcome) || 0));
+    event.state.positions.delete(event.market.id);
+    event.state.prices.set(event.market.id, new Map([
+      ["yes", event.market.outcome === "yes" ? 1 : 0],
+      ["no", event.market.outcome === "no" ? 1 : 0],
+    ]));
+  }
+}
+
+function addTimelineShares(state, eventId, outcomeId, shares) {
+  if (!eventId || !outcomeId || !Number.isFinite(shares) || Math.abs(shares) < 0.000001) return;
+  const positions = state.positions.get(eventId) || new Map();
+  positions.set(outcomeId, Math.max(0, Number(positions.get(outcomeId) || 0) + shares));
+  state.positions.set(eventId, positions);
+}
+
+function portfolioTimelineValue(states, metric) {
+  return states.reduce((total, state) => {
+    let value = Number(state.cash || 0);
+    for (const [eventId, positions] of state.positions.entries()) {
+      const prices = state.prices.get(eventId) || new Map();
+      const quantities = state.quantities.get(eventId);
+      const b = Number(state.liquidity.get(eventId) || DEFAULT_MARKET_LIQUIDITY);
+      for (const [outcomeId, shares] of positions.entries()) {
+        const ownedShares = Math.max(0, Number(shares || 0));
+        value += metric === "cashout" && quantities
+          ? lmsrSellValueForQuantityMap(quantities, outcomeId, ownedShares, b)
+          : ownedShares * Number(prices.get(outcomeId) || 0);
+      }
+    }
+    return total + value;
+  }, 0);
+}
+
+function lmsrSellValueForQuantityMap(quantities, outcomeId, shares, b) {
+  const amount = Math.max(0, Number(shares || 0));
+  if (!amount || !Number.isFinite(b) || b <= 0 || !quantities?.has(outcomeId)) return 0;
+  const values = [...quantities.entries()].map(([id, quantity]) => ({ id, quantity: Number(quantity || 0) }));
+  const sumExp = values.reduce((sum, item) => sum + Math.exp(item.quantity / b), 0);
+  const target = values.find(item => item.id === outcomeId);
+  if (!target || sumExp <= 0) return 0;
+  const targetExp = Math.exp(target.quantity / b);
+  const denominator = sumExp - targetExp + targetExp * Math.exp(-amount / b);
+  if (denominator <= 0) return 0;
+  return tradeNetCash(b * Math.log(sumExp / denominator));
 }
 
 function refreshPortfolioChartComponent() {
@@ -5711,7 +5936,8 @@ function expandedLeaderRow(entry, index) {
 }
 
 function leaderDetailHtml(entry, rank = 1) {
-  const progress = Math.max(4, Math.min(100, Math.round((entry.bal / Math.max(DEFAULT_BALANCE, entry.bal + Math.abs(entry.pnl))) * 100)));
+  const start = Number(entry.startingValue || DEFAULT_BALANCE);
+  const progress = Math.max(4, Math.min(100, Math.round((entry.bal / Math.max(start, entry.bal + Math.abs(entry.pnl))) * 100)));
   return `
     <div class="leader-detail-hero probable-detail-hero">
       <div class="leader-avatar leader-detail-avatar">${avatarText(entry.name)}</div>
@@ -5724,7 +5950,7 @@ function leaderDetailHtml(entry, rank = 1) {
     <div class="probable-detail-value">
       <span>Portfolio mark</span>
       <strong>${money(entry.bal)}</strong>
-      <em>${money(DEFAULT_BALANCE)} start</em>
+      <em>${money(start)} start</em>
     </div>
     <div class="probable-detail-grid">
       <span><strong>${money(entry.cash)}</strong><em>cash</em></span>
@@ -5795,6 +6021,8 @@ function leaderboardChart(entries) {
 function leaderboardEntries(group) {
   return (group.members ?? []).map(name => {
     const cash = Number(group.balances?.[name] ?? DEFAULT_BALANCE);
+    const cashFlow = portfolioCashFlowForGroup(group, name);
+    const startingValue = inferredGroupStartingValue(cash, cashFlow);
     const trades = (group.markets ?? []).flatMap(market =>
       (market.trades ?? [])
         .filter(t => t.participant === name)
@@ -5807,10 +6035,11 @@ function leaderboardEntries(group) {
     const positionValue = markValue;
     const bal = cash + markValue;
     const cashOutPortfolio = cash + cashOutValue;
-    const pnl = bal - DEFAULT_BALANCE;
+    const pnl = bal - startingValue;
     return {
       name,
       cash,
+      startingValue,
       markValue,
       cashOutValue,
       cashOutPortfolio,
