@@ -1447,6 +1447,30 @@ button { color: inherit; }
   align-items: center;
   gap: 6px;
 }
+.outcome-flag {
+  position: relative;
+  display: inline-block;
+  width: 18px;
+  height: 12px;
+  margin-right: 6px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+  vertical-align: -1px;
+}
+.flag-england {
+  background:
+    linear-gradient(90deg, transparent 42%, #d21f3c 42% 58%, transparent 58%),
+    linear-gradient(0deg, transparent 38%, #d21f3c 38% 62%, transparent 62%),
+    #f3f5f7;
+}
+.flag-scotland {
+  background:
+    linear-gradient(32deg, transparent 43%, #fff 43% 57%, transparent 57%),
+    linear-gradient(-32deg, transparent 43%, #fff 43% 57%, transparent 57%),
+    #005eb8;
+}
 .focused-legend-item i,
 .focused-outcome-name i {
   width: 8px;
@@ -2146,6 +2170,12 @@ button { color: inherit; }
     linear-gradient(90deg, transparent 42%, #d21f3c 42% 58%, transparent 58%),
     linear-gradient(0deg, transparent 42%, #d21f3c 42% 58%, transparent 58%),
     #f3f5f7;
+}
+.thumb-scotland {
+  background:
+    linear-gradient(32deg, transparent 43%, #fff 43% 57%, transparent 57%),
+    linear-gradient(-32deg, transparent 43%, #fff 43% 57%, transparent 57%),
+    #005eb8;
 }
 .thumb-portugal {
   background: linear-gradient(90deg, #0f7a39 0 42%, #d72630 42% 100%);
@@ -5004,6 +5034,92 @@ button { color: inherit; }
   white-space: pre-wrap;
   font-size: 0.84rem;
   line-height: 1.42;
+}
+.market-odds-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(45, 156, 255, 0.24);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at top right, rgba(20, 92, 168, 0.22), transparent 42%),
+    rgba(255, 255, 255, 0.025);
+}
+.market-odds-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  cursor: pointer;
+}
+.market-odds-toggle input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: var(--primary);
+}
+.market-odds-toggle strong {
+  display: block;
+  color: var(--text);
+  font-size: 0.96rem;
+}
+.market-odds-toggle small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+.market-odds-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.market-odds-actions [data-market-odds-status] {
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+.market-odds-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+.market-odds-preview:empty {
+  display: none;
+}
+.market-odds-preview span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(45, 156, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(18, 79, 143, 0.14);
+  color: var(--text-2);
+  font-size: 0.76rem;
+  font-weight: 800;
+  padding: 6px 9px;
+}
+.market-odds-preview strong {
+  color: var(--text);
+  font-size: inherit;
+}
+.market-review-odds {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.market-review-odds > span {
+  color: var(--text-2);
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .shared-market-shell .focused-market-stage {

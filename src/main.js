@@ -301,6 +301,13 @@ const API_CONFIG_ERROR = "Production API is not configured. Set VITE_API_BASE_UR
 const DEFAULT_BALANCE = 100000;
 const DEFAULT_MARKET_LIQUIDITY = 20000;
 const MARKET_FEE_RATE = 0.015;
+
+function defaultMarketLiquidityForOutcomeCount(count) {
+  const n = Math.max(2, Number(count || 2));
+  if (n <= 2) return DEFAULT_MARKET_LIQUIDITY;
+  if (n <= 10) return 50000;
+  return Math.min(200000, Math.max(80000, Math.round((n * 3000) / 1000) * 1000));
+}
 let rulesDraftPromise = null;
 const MAX_MARKET_IMAGE_BYTES = 650000;
 const EVENT_CHART_COLORS = ["#2d9cff", "#f23645", "#f2c414", "#ff861c", "#8bd450", "#b87cff", "#18c3b6", "#78b7ff"];
@@ -350,10 +357,14 @@ const state = {
   marketFormStep: 1,
   marketImageDataUrl: "",
   marketImageName: "",
+  marketOddsSeed: null,
   marketImages: [],
-  pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, tradeMarketId: null, resolveMarketId: null },
+  pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, tradeMarketId: null, resolveMarketId: null },
   loaded: false,
 };
+
+const tradeQuoteCache = new Map();
+const tradeQuoteInflight = new Map();
 
 document.querySelector("#app").innerHTML = `
   <nav class="topnav" id="topnav">
@@ -511,7 +522,7 @@ document.querySelector("#app").innerHTML = `
         <div class="market-form-progress">
           <div class="market-progress-meta">
             <span data-market-step-label>Basics</span>
-            <span data-market-step-count>Step 1 of 5</span>
+            <span data-market-step-count>Step 1</span>
           </div>
           <div class="market-progress-track" aria-hidden="true">
             <span data-market-progress-fill></span>
@@ -569,6 +580,23 @@ document.querySelector("#app").innerHTML = `
           </div>
         </div>
         <div class="market-form-step hidden" data-market-form-step="4">
+          <p class="form-helper">Optional for multi-outcome markets.</p>
+          <div class="market-odds-card">
+            <label class="market-odds-toggle">
+              <input type="checkbox" data-market-odds-toggle />
+              <span>
+                <strong>Seed starting odds with AI</strong>
+                <small>Useful for big fields like World Cup winner. We look up current context, then soften it so favorites get a head start without killing longshots.</small>
+              </span>
+            </label>
+            <div class="market-odds-actions">
+              <button type="button" class="btn btn-ghost" data-generate-market-odds>Generate seed odds</button>
+              <span data-market-odds-status>Off. This market will start equal.</span>
+            </div>
+            <div class="market-odds-preview" data-market-odds-preview></div>
+          </div>
+        </div>
+        <div class="market-form-step hidden" data-market-form-step="5">
           <p class="form-helper">Check the setup before it goes live.</p>
           <div class="market-review" data-market-review></div>
         </div>
@@ -1222,6 +1250,11 @@ async function onGlobalClick(e) {
     return;
   }
 
+  if (e.target.closest("[data-generate-market-odds]")) {
+    await generateMarketOddsSeed();
+    return;
+  }
+
   if (e.target.closest("[data-market-step-next]")) {
     await goMarketFormStep(state.marketFormStep + 1);
     return;
@@ -1450,15 +1483,27 @@ function onGlobalInput(e) {
     return;
   }
   if (e.target.matches("#marketForm [name=outcomes]")) {
+    resetMarketOddsSeed();
     updateOutcomePreviews();
-    if (state.marketFormStep === 4) updateMarketReview();
+    updateMarketOddsPanel();
+    if (state.marketFormStep === marketReviewStep()) updateMarketReview();
   }
   if (e.target.matches("#marketForm [name=description], #marketForm [name=question], #marketForm [name=closesAt]")) {
-    if (state.marketFormStep === 4) updateMarketReview();
+    if (e.target.matches("#marketForm [name=question], #marketForm [name=closesAt]")) resetMarketOddsSeed();
+    updateMarketOddsPanel();
+    if (state.marketFormStep === marketReviewStep()) updateMarketReview();
   }
 }
 
 function onGlobalChange(e) {
+  if (e.target.matches("[data-market-odds-toggle]")) {
+    e.target.dataset.userSet = "true";
+    updateMarketOddsPanel();
+    if (e.target.checked && !state.marketOddsSeed && !state.pendingUi.oddsSeed) {
+      generateMarketOddsSeed();
+    }
+    return;
+  }
   if (e.target.matches("#marketForm [name=image]")) {
     handleMarketImageInput(e.target);
     return;
@@ -1827,7 +1872,7 @@ async function onDashboardCreate(e) {
   }
 }
 
-function marketPayloadFromForm(fd) {
+function marketPayloadFromForm(fd, { includeOddsSeed = false } = {}) {
   const question = fd.get("question")?.toString().trim() ?? "";
   const description = fd.get("description")?.toString().trim() ?? "";
   const closesAtRaw = fd.get("closesAt")?.toString().trim() ?? "";
@@ -1854,16 +1899,21 @@ function marketPayloadFromForm(fd) {
     toast(descriptionError);
     return null;
   }
-  return {
+  const payload = {
     question,
     description,
     category: "General",
     closesAt: closesAt.toISOString(),
     outcomes,
     initialProbability: 0.5,
-    initialLiquidity: DEFAULT_MARKET_LIQUIDITY,
+    initialLiquidity: defaultMarketLiquidityForOutcomeCount(outcomes.length),
     oracleType: "ai",
   };
+  if (includeOddsSeed) {
+    const seed = selectedMarketOddsSeed(outcomes);
+    if (seed) payload.initialProbabilities = seed;
+  }
+  return payload;
 }
 
 function escapeHtml(value) {
@@ -1977,7 +2027,7 @@ async function autoFleshOutDescription(form = dom.marketForm) {
     ].filter(Boolean).join("\n\n");
     if (descriptionInput && merged && !descriptionInput.value.trim()) {
       descriptionInput.value = merged;
-      if (state.marketFormStep === 4) updateMarketReview(form);
+      if (state.marketFormStep === marketReviewStep(form)) updateMarketReview(form);
     }
   } catch {
     // Silent: the user can still type their own description if AI assist fails.
@@ -2017,7 +2067,7 @@ function handleMarketImageInput(input) {
     state.marketImageDataUrl = typeof reader.result === "string" ? reader.result : "";
     state.marketImageName = file.name;
     updateMarketImagePreview();
-    if (state.marketFormStep === 4) updateMarketReview();
+    if (state.marketFormStep === marketReviewStep()) updateMarketReview();
   };
   reader.onerror = () => {
     input.value = "";
@@ -2048,8 +2098,33 @@ function marketOracleLabel(value) {
 }
 
 function marketTypeLabel(outcomes) {
-  const keys = outcomes.map(outcome => outcome.toLowerCase());
-  return keys.length === 2 && keys.includes("yes") && keys.includes("no") ? "Binary" : "Multiple choice";
+  return isBinaryOutcomeSet(outcomes) ? "Binary" : "Multiple choice";
+}
+
+function isBinaryOutcomeSet(outcomes) {
+  const keys = (outcomes || []).map(outcome => outcome.toLowerCase());
+  return keys.length === 2 && keys.includes("yes") && keys.includes("no");
+}
+
+function marketFormOutcomes(form = dom.marketForm) {
+  return parseOutcomeOptions(form?.querySelector("[name=outcomes]")?.value ?? "");
+}
+
+function marketFormIsMulti(form = dom.marketForm) {
+  const outcomes = marketFormOutcomes(form);
+  return outcomes.length > 2 || (outcomes.length === 2 && !isBinaryOutcomeSet(outcomes));
+}
+
+function marketFormTotalSteps(form = dom.marketForm) {
+  return marketFormIsMulti(form) ? 5 : 4;
+}
+
+function marketReviewStep(form = dom.marketForm) {
+  return marketFormTotalSteps(form);
+}
+
+function marketPanelStep(step, form = dom.marketForm) {
+  return !marketFormIsMulti(form) && step === 4 ? "5" : String(step);
 }
 
 function outcomePreviewHtml(outcomes, { limit = Infinity } = {}) {
@@ -2080,6 +2155,119 @@ function updateOutcomePreviews(form = dom.marketForm) {
   });
 }
 
+function selectedMarketOddsSeed(outcomes) {
+  const toggle = dom.marketForm?.querySelector("[data-market-odds-toggle]");
+  const seed = state.marketOddsSeed;
+  if (!toggle?.checked || !seed?.available || !seed.probabilities || isBinaryOutcomeSet(outcomes)) return null;
+  const values = {};
+  outcomes.forEach(outcome => {
+    const direct = seed.probabilities[outcome];
+    if (Number.isFinite(Number(direct))) values[outcome] = Number(direct);
+  });
+  return Object.keys(values).length ? values : null;
+}
+
+function resetMarketOddsSeed() {
+  state.marketOddsSeed = null;
+}
+
+function shouldDefaultMarketOddsSeed(outcomes) {
+  return outcomes.length > 10 && !isBinaryOutcomeSet(outcomes);
+}
+
+function oddsSeedPreviewHtml(seed, outcomes) {
+  if (!seed?.probabilities) return "";
+  return outcomes.map(outcome => {
+    const value = Number(seed.probabilities[outcome] ?? 0);
+    return `<span><strong>${escapeHtml(outcome)}</strong>${Math.round(value * 1000) / 10}%</span>`;
+  }).join("");
+}
+
+function updateMarketOddsPanel(form = dom.marketForm) {
+  if (!form) return;
+  const outcomes = marketFormOutcomes(form);
+  const multi = marketFormIsMulti(form);
+  const toggle = form.querySelector("[data-market-odds-toggle]");
+  const button = form.querySelector("[data-generate-market-odds]");
+  const status = form.querySelector("[data-market-odds-status]");
+  const preview = form.querySelector("[data-market-odds-preview]");
+  if (toggle) {
+    toggle.disabled = !multi;
+    if (multi && !toggle.dataset.userSet) toggle.checked = shouldDefaultMarketOddsSeed(outcomes);
+    if (!multi) toggle.checked = false;
+  }
+  if (button) {
+    button.disabled = !multi || !toggle?.checked || state.pendingUi.oddsSeed;
+  }
+  if (!preview || !status) return;
+  if (!multi) {
+    status.textContent = "Binary markets start at 50/50.";
+    preview.innerHTML = "";
+    return;
+  }
+  if (!toggle?.checked) {
+    status.textContent = "Off. Every outcome starts equal.";
+    preview.innerHTML = "";
+    return;
+  }
+  if (state.pendingUi.oddsSeed) {
+    status.textContent = "Looking up current odds context...";
+    preview.innerHTML = "";
+    return;
+  }
+  const seed = state.marketOddsSeed;
+  if (!seed) {
+    status.textContent = "On. Generate seed odds before review, or continue with equal prices.";
+    preview.innerHTML = "";
+    return;
+  }
+  status.textContent = seed.available ? (seed.summary || "Seed odds ready.") : (seed.summary || "Seed odds unavailable.");
+  preview.innerHTML = seed.available ? oddsSeedPreviewHtml(seed, outcomes) : "";
+}
+
+async function generateMarketOddsSeed(form = dom.marketForm) {
+  if (!form || state.pendingUi.oddsSeed) return;
+  if (!marketFormIsMulti(form)) {
+    toast("AI odds seeding is only for multi-outcome markets.");
+    return;
+  }
+  if (!validateMarketBasics(form)) return;
+  const fd = new FormData(form);
+  const question = fd.get("question")?.toString().trim() ?? "";
+  const description = fd.get("description")?.toString().trim() ?? "";
+  const closesAtRaw = fd.get("closesAt")?.toString().trim() ?? "";
+  const closesAt = closesAtRaw ? new Date(closesAtRaw) : null;
+  const outcomes = parseOutcomeOptions(fd.get("outcomes")?.toString() ?? "");
+  const button = form.querySelector("[data-generate-market-odds]");
+  state.pendingUi.oddsSeed = true;
+  setButtonPending(button, true, "Checking odds");
+  updateMarketOddsPanel(form);
+  try {
+    const data = await api("/api/markets/odds/seed", {
+      method: "POST",
+      body: JSON.stringify({
+        question,
+        brief: description || question,
+        outcomes,
+        closesAt: closesAt && Number.isFinite(closesAt.getTime()) ? closesAt.toISOString() : null,
+        category: "General",
+      }),
+    });
+    state.marketOddsSeed = data.seed || null;
+    if (!state.marketOddsSeed?.available) {
+      toast(state.marketOddsSeed?.summary || "Could not seed odds. Equal prices will be used.");
+    }
+  } catch (err) {
+    state.marketOddsSeed = null;
+    toast(err.message || "Could not seed odds.");
+  } finally {
+    state.pendingUi.oddsSeed = false;
+    setButtonPending(button, false);
+    updateMarketOddsPanel(form);
+    if (state.marketFormStep === marketReviewStep(form)) updateMarketReview(form);
+  }
+}
+
 function updateMarketReview(form = dom.marketForm) {
   const review = form.querySelector("[data-market-review]");
   if (!review) return;
@@ -2091,6 +2279,10 @@ function updateMarketReview(form = dom.marketForm) {
   const outcomes = parseOutcomeOptions(fd.get("outcomes")?.toString() ?? "");
   const oracle = fd.get("oracle")?.toString() || "ai";
   const closeLabel = closesAt && Number.isFinite(closesAt.getTime()) ? fmtDate(closesAt) : "Not set";
+  const selectedSeed = selectedMarketOddsSeed(outcomes);
+  const oddsLabel = selectedSeed
+    ? "AI-seeded, softened"
+    : (isBinaryOutcomeSet(outcomes) ? "50/50 start" : "Equal start");
   review.innerHTML = `
     <div class="market-review-summary">
       <div>
@@ -2110,10 +2302,20 @@ function updateMarketReview(form = dom.marketForm) {
         <strong>${marketOracleLabel(oracle)}</strong>
       </div>
       <div>
+        <span>Starting odds</span>
+        <strong>${escapeHtml(oddsLabel)}</strong>
+      </div>
+      <div>
         <span>Image</span>
         <strong>${state.marketImageDataUrl ? "Custom upload" : "Stock football image"}</strong>
       </div>
     </div>
+    ${selectedSeed ? `
+      <div class="market-review-odds">
+        <span>Seed preview</span>
+        <div class="market-odds-preview">${oddsSeedPreviewHtml({ probabilities: selectedSeed }, outcomes)}</div>
+      </div>
+    ` : ""}
     <div class="market-review-description">
       <span>Description</span>
       <div class="market-review-description-box">${escapeHtml(description || "No description added yet.")}</div>
@@ -2122,7 +2324,8 @@ function updateMarketReview(form = dom.marketForm) {
 }
 
 async function goMarketFormStep(step) {
-  const nextStep = Math.max(1, Math.min(4, Number(step) || 1));
+  const totalSteps = marketFormTotalSteps();
+  const nextStep = Math.max(1, Math.min(totalSteps, Number(step) || 1));
   if (nextStep > 1 && !validateMarketBasics()) return;
   if (state.marketFormStep < 2 && nextStep >= 2 && !rulesDraftPromise) {
     rulesDraftPromise = autoFleshOutDescription(dom.marketForm).finally(() => {
@@ -2133,34 +2336,46 @@ async function goMarketFormStep(step) {
     if (rulesDraftPromise) await rulesDraftPromise;
     if (!validateMarketDescription()) return;
   }
-  if (nextStep === 4) updateMarketReview();
+  if (nextStep === marketReviewStep()) updateMarketReview();
   state.marketFormStep = nextStep;
   updateMarketFormStep();
+  if (nextStep === 4 && marketFormIsMulti()) {
+    const toggle = dom.marketForm.querySelector("[data-market-odds-toggle]");
+    if (toggle?.checked && !state.marketOddsSeed && !state.pendingUi.oddsSeed) await generateMarketOddsSeed();
+  }
 }
 
 function updateMarketFormStep() {
-  const step = Math.max(1, Math.min(4, state.marketFormStep || 1));
+  const totalSteps = marketFormTotalSteps();
+  const step = Math.max(1, Math.min(totalSteps, state.marketFormStep || 1));
   state.marketFormStep = step;
-  const stepLabels = ["Basics", "Description", "Image", "Review"];
+  const stepLabels = marketFormIsMulti()
+    ? ["Basics", "Description", "Image", "AI odds", "Review"]
+    : ["Basics", "Description", "Image", "Review"];
+  const visiblePanelStep = marketPanelStep(step);
   dom.marketForm.querySelectorAll("[data-market-form-step]").forEach(panel => {
-    panel.classList.toggle("hidden", panel.dataset.marketFormStep !== String(step));
+    panel.classList.toggle("hidden", panel.dataset.marketFormStep !== visiblePanelStep);
   });
   const progressFill = dom.marketForm.querySelector("[data-market-progress-fill]");
   const stepLabel = dom.marketForm.querySelector("[data-market-step-label]");
   const stepCount = dom.marketForm.querySelector("[data-market-step-count]");
-  if (progressFill) progressFill.style.width = `${(step / 4) * 100}%`;
+  if (progressFill) progressFill.style.width = `${(step / totalSteps) * 100}%`;
   if (stepLabel) stepLabel.textContent = stepLabels[step - 1] || "Basics";
-  if (stepCount) stepCount.textContent = `Step ${step} of 4`;
+  if (stepCount) stepCount.textContent = `Step ${step} of ${totalSteps}`;
   updateOutcomePreviews();
   updateMarketImagePreview();
-  if (step === 4) updateMarketReview();
+  updateMarketOddsPanel();
+  if (step === marketReviewStep()) updateMarketReview();
   dom.marketForm.querySelector("[data-market-step-back]")?.classList.toggle("hidden", step === 1);
-  dom.marketForm.querySelector("[data-market-step-next]")?.classList.toggle("hidden", step === 4);
-  dom.marketForm.querySelector("[data-market-submit]")?.classList.toggle("hidden", step !== 4);
+  dom.marketForm.querySelector("[data-market-step-next]")?.classList.toggle("hidden", step === totalSteps);
+  dom.marketForm.querySelector("[data-market-submit]")?.classList.toggle("hidden", step !== totalSteps);
 }
 
 function setMarketType(type) {
   const normalized = type === "multi" ? "multi" : "binary";
+  resetMarketOddsSeed();
+  const oddsToggle = dom.marketForm.querySelector("[data-market-odds-toggle]");
+  if (oddsToggle) delete oddsToggle.dataset.userSet;
   dom.marketForm.querySelectorAll("[data-market-type]").forEach(button => {
     const active = button.dataset.marketType === normalized;
     button.classList.toggle("active", active);
@@ -2177,6 +2392,8 @@ function setMarketType(type) {
     outcomes.placeholder = "England, France, Portugal, Brazil";
   }
   updateOutcomePreviews();
+  updateMarketOddsPanel();
+  updateMarketFormStep();
 }
 
 function parseOutcomeOptions(value) {
@@ -2860,13 +3077,14 @@ async function joinGroup(groupId, myName) {
 async function onCreateMarket(e) {
   e.preventDefault();
   if (state.pendingUi.marketCreate) return;
-  if (state.marketFormStep !== 4) {
+  const totalSteps = marketFormTotalSteps();
+  if (state.marketFormStep !== totalSteps) {
     await goMarketFormStep(state.marketFormStep + 1);
     return;
   }
   const form = e.currentTarget;
   const fd = new FormData(form);
-  const basePayload = marketPayloadFromForm(fd);
+  const basePayload = marketPayloadFromForm(fd, { includeOddsSeed: true });
   if (!basePayload) return;
   if (!requireLogin("create-market")) return;
   const submit = form.querySelector("[data-market-submit]");
@@ -2874,7 +3092,7 @@ async function onCreateMarket(e) {
     ...basePayload,
     category: fd.get("category")?.toString().trim() || "General",
     initialProbability: Number(fd.get("initialProb") || 50) / 100,
-    initialLiquidity: Number(fd.get("liquidity") || DEFAULT_MARKET_LIQUIDITY),
+    initialLiquidity: Number(fd.get("liquidity") || basePayload.initialLiquidity || defaultMarketLiquidityForOutcomeCount(basePayload.outcomes?.length || 2)),
     oracleType: fd.get("oracle")?.toString() || "ai",
     imageUrl: state.marketImageDataUrl || null,
     slug: marketSlugFor(basePayload.question),
@@ -3418,7 +3636,7 @@ function focusedLegendItem(market, index, event) {
   return `
     <span class="focused-legend-item">
       <i style="--series-color:${chartColorForMarket(market, index, event)}"></i>
-      ${esc(marketOptionTitle(market))} <strong>${pct}%</strong>
+      ${outcomeTitleHtml(marketOptionTitle(market))} <strong>${pct}%</strong>
     </span>`;
 }
 
@@ -3438,7 +3656,7 @@ function focusedOutcomeRow(market, activeMarketId, index, event) {
     <div class="focused-outcome-row ${active ? "active" : ""}" data-market-id="${tradeTarget.marketId}">
       <div class="focused-outcome-name">
         <i style="--series-color:${chartColorForMarket(market, index, event)}"></i>
-        <span>${esc(option)}</span>
+        <span>${outcomeTitleHtml(option)}</span>
       </div>
       <strong>${yesPct}%</strong>
       ${market.status === "open" ? `
@@ -3892,7 +4110,7 @@ function eventOutcomeRow(market, event) {
   return `
     <div class="event-outcome-row ${market.status === "resolved" ? (rowIsWinner ? "is-winner" : "is-loser") : ""}" data-market-id="${tradeTarget.marketId}">
       <div class="event-outcome-main">
-        <span class="event-outcome-name">${esc(option)}</span>
+        <span class="event-outcome-name">${outcomeTitleHtml(option)}</span>
         <strong>${yesPct}%</strong>
       </div>
       ${market.status === "open" ? `
@@ -3913,6 +4131,7 @@ function eventThumb(title, imageUrl = "") {
   if (lower.includes("world cup") || lower.includes("wc")) return `<img src="/ball.png" alt="" />`;
   if (lower.includes("golden") || lower.includes("trophy") || lower.includes("cup")) return `<span class="thumb-trophy"></span>`;
   if (lower.includes("england")) return `<span class="thumb-flag thumb-england"></span>`;
+  if (lower.includes("scotland")) return `<span class="thumb-flag thumb-scotland"></span>`;
   if (lower.includes("portugal")) return `<span class="thumb-flag thumb-portugal"></span>`;
   if (lower.includes("brazil")) return `<span class="thumb-flag thumb-brazil"></span>`;
   if (lower.includes("sign") || lower.includes("transfer")) return `<span class="thumb-paper"></span>`;
@@ -3926,6 +4145,7 @@ function eventThumbClass(title, imageUrl = "") {
   if (lower.includes("world cup") || lower.includes("wc")) return "event-thumb-image";
   if (lower.includes("golden") || lower.includes("trophy") || lower.includes("cup")) return "event-thumb-trophy";
   if (lower.includes("england")) return "event-thumb-flag";
+  if (lower.includes("scotland")) return "event-thumb-flag";
   if (lower.includes("portugal")) return "event-thumb-flag";
   if (lower.includes("brazil")) return "event-thumb-flag";
   if (lower.includes("sign") || lower.includes("transfer")) return "event-thumb-paper";
@@ -4095,7 +4315,7 @@ function tradePanel(market, yesPrice, noPrice, event = null) {
         <div class="trade-context-thumb ${eventThumbClass(eventTitle, event?.imageUrl || market.imageUrl)}" aria-hidden="true">${eventThumb(eventTitle, event?.imageUrl || market.imageUrl)}</div>
         <div>
           <span>${esc(eventTitle)}</span>
-          <strong><em data-trade-side-label>${esc(activeLabel)}</em></strong>
+          <strong><em data-trade-side-label>${tradeSideLabelHtml(activeLabel)}</em></strong>
         </div>
       </div>
       <div class="trade-panel-header">
@@ -4106,8 +4326,8 @@ function tradePanel(market, yesPrice, noPrice, event = null) {
         <button class="trade-close" type="button" data-close-trade aria-label="Close">×</button>
       </div>
       <div class="trade-pick-row">
-        <button class="trade-pick ${side === "yes" ? "yes active" : "yes"} ${yesSellDisabled ? "disabled" : ""}" type="button" data-buy="yes" ${yesSellDisabled ? "disabled" : ""}><span>${esc(yesLabel)}</span> <strong>${(yesTradePrice * 100).toFixed(0)}¢</strong></button>
-        <button class="trade-pick ${side === "no" ? "no active" : "no"} ${noSellDisabled ? "disabled" : ""}" type="button" data-buy="no" ${noSellDisabled ? "disabled" : ""}><span>${esc(noLabel)}</span> <strong>${(noTradePrice * 100).toFixed(0)}¢</strong></button>
+        <button class="trade-pick ${side === "yes" ? "yes active" : "yes"} ${yesSellDisabled ? "disabled" : ""}" type="button" data-buy="yes" ${yesSellDisabled ? "disabled" : ""}><span>${outcomeTitleHtml(yesLabel)}</span> <strong>${(yesTradePrice * 100).toFixed(0)}¢</strong></button>
+        <button class="trade-pick ${side === "no" ? "no active" : "no"} ${noSellDisabled ? "disabled" : ""}" type="button" data-buy="no" ${noSellDisabled ? "disabled" : ""}><span>${outcomeTitleHtml(noLabel)}</span> <strong>${(noTradePrice * 100).toFixed(0)}¢</strong></button>
       </div>
       <form class="trade-form-el">
         <div class="trade-amount-row">
@@ -4642,6 +4862,7 @@ function tradePreviewHtml(market, amount) {
   const outcomeId = tradeOutcomeId(market, side);
   const outcome = market.outcomes?.find(item => item.id === outcomeId);
   const price = Number(outcome?.price ?? market.probability ?? 0.5);
+  let displayPrice = isComplementNoTrade(market, side) ? Math.max(0.000001, 1 - price) : price;
   if (!amount || amount <= 0) {
     return "";
   }
@@ -4649,13 +4870,13 @@ function tradePreviewHtml(market, amount) {
     const preview = sellPreviewForShares(market, outcomeId, amount, side);
     updateTradeSubmitState(market, preview, amount);
     const shares = Math.min(Math.max(0, amount), preview.held || 0);
-    const avgPrice = shares > 0 ? preview.cashAmount / shares : price;
-    const guidance = liquidityGuidance(market, preview.cashAmount, price, avgPrice, preview);
+    const avgPrice = shares > 0 ? preview.cashAmount / shares : displayPrice;
+    const guidance = liquidityGuidance(market, preview.cashAmount, displayPrice, avgPrice, preview);
     const pl = sellProfitLossEstimate(market, outcomeId, shares, avgPrice, side);
     return `
       <div class="trade-payout-label">
         <span>You'll receive 💸</span>
-        <small>${esc(outcome?.title || marketOptionTitle(market))} · Avg. Price ${(avgPrice * 100).toFixed(1)}¢</small>
+        <small>${outcomeTitleHtml(outcome?.title || marketOptionTitle(market))} · Avg. Price ${(avgPrice * 100).toFixed(1)}¢</small>
       </div>
       <strong class="trade-payout-value">${money(preview.cashAmount)}</strong>
       ${pl ? `<div class="trade-pl-note ${pl.percent >= 0 ? "gain" : "loss"}">${pl.percent >= 0 ? "+" : ""}${pl.percent.toFixed(1)}%</div>` : ""}
@@ -4664,20 +4885,35 @@ function tradePreviewHtml(market, amount) {
         ${guidance.text}
       </div>`;
   }
-  const preview = isComplementNoTrade(market, side)
+  const quote = cachedTradeQuote(market, amount);
+  if (!quote) requestTradeQuote(market, amount);
+  if (isComplementNoTrade(market, side) && !quote) {
+    updateTradeSubmitState(market, { held: 0, oversell: false, needsQuote: true }, amount);
+    return `
+      <div class="trade-payout-label">
+        <span>To win 💸</span>
+        <small>${outcomeTitleHtml(outcome?.title || marketOptionTitle(market))} · getting market quote</small>
+      </div>
+      <strong class="trade-payout-value">...</strong>
+      <div class="trade-liquidity-note caution">Quoting the full complement basket.</div>`;
+  }
+  displayPrice = Number(quote?.price ?? displayPrice);
+  const preview = quote
+    ? quoteToPreview(market, quote, outcomeId)
+    : isComplementNoTrade(market, side)
     ? complementBuyPreview(market, outcomeId, amount)
     : lmsrPreview(market, outcomeId, mode, amount);
   updateTradeSubmitState(market, preview, amount);
   const shares = Math.abs(preview.shares || 0);
-  const avgPrice = shares > 0 ? amount / shares : price;
+  const avgPrice = shares > 0 ? amount / shares : displayPrice;
   const payout = mode === "sell" ? amount : shares;
-  const guidance = liquidityGuidance(market, amount, price, avgPrice, preview);
+  const guidance = liquidityGuidance(market, amount, displayPrice, avgPrice, preview);
   const balance = getCurrentGroup()?.balances?.[state.activeMember] ?? 0;
   const insufficientBalance = amount > balance;
   return `
     <div class="trade-payout-label">
       <span>${mode === "sell" ? "You receive" : "To win 💸"}</span>
-      <small>${esc(outcome?.title || marketOptionTitle(market))} · Avg. Price ${(avgPrice * 100).toFixed(1)}¢</small>
+      <small>${outcomeTitleHtml(outcome?.title || marketOptionTitle(market))} · Avg. Price ${(avgPrice * 100).toFixed(1)}¢</small>
     </div>
     <strong class="trade-payout-value">${money(payout)}</strong>
     ${!insufficientBalance ? marketFeeNote(amount) : ""}
@@ -4685,6 +4921,65 @@ function tradePreviewHtml(market, amount) {
       <div class="trade-liquidity-note ${guidance.level}">
         ${guidance.text}
       </div>`}`;
+}
+
+function tradeQuoteKey(market, amount) {
+  const side = state.trade.side || "yes";
+  const mode = state.trade.mode || "buy";
+  const outcomeId = tradeOutcomeId(market, side);
+  const participant = state.activeMember || "";
+  const normalizedAmount = Number(amount || 0).toFixed(4);
+  return [market.id, outcomeId, side, mode, participant, normalizedAmount].join(":");
+}
+
+function cachedTradeQuote(market, amount) {
+  if ((state.trade.mode || "buy") !== "buy") return null;
+  return tradeQuoteCache.get(tradeQuoteKey(market, amount)) || null;
+}
+
+function quoteToPreview(market, quote, outcomeId) {
+  return {
+    shares: Number(quote.shares || 0),
+    maxCash: Number(quote.maxCash || 0),
+    held: currentSharesForOutcome(market, outcomeId),
+    oversell: false,
+    syntheticPrice: Number(quote.price || 0),
+    isComplement: Boolean(quote.isComplement),
+    serverQuoted: true,
+  };
+}
+
+async function requestTradeQuote(market, amount) {
+  if ((state.trade.mode || "buy") !== "buy") return;
+  if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) return;
+  const key = tradeQuoteKey(market, amount);
+  if (tradeQuoteCache.has(key) || tradeQuoteInflight.has(key)) return;
+  tradeQuoteInflight.set(key, true);
+  try {
+    const side = state.trade.side || "yes";
+    const data = await api(`/api/markets/${market.id}/quote`, {
+      method: "POST",
+      body: JSON.stringify({
+        participant: state.activeMember || undefined,
+        side,
+        action: "buy",
+        amount: Number(amount),
+        outcomeId: tradeOutcomeId(market, side),
+      }),
+    });
+    tradeQuoteCache.set(key, data.quote);
+    const currentMarket = findMarket(market.id);
+    const panel = [...document.querySelectorAll(".trade-panel")]
+      .find(item => item.dataset.marketId === market.id);
+    const input = panel?.querySelector(".trade-input");
+    if (currentMarket && input && tradeQuoteKey(currentMarket, tradeInputAmount(input)) === key) {
+      renderTradePreview(currentMarket, tradeInputAmount(input));
+    }
+  } catch {
+    // Keep the instant local estimate if the quote endpoint is temporarily unavailable.
+  } finally {
+    tradeQuoteInflight.delete(key);
+  }
 }
 
 function tradeOutcomeId(market, side = "yes") {
@@ -4708,10 +5003,10 @@ function complementOutcomes(market, outcomeId = tradeOutcomeId(market, "yes")) {
 
 function complementShareState(market, outcomeId = tradeOutcomeId(market, "yes")) {
   const outcomes = complementOutcomes(market, outcomeId);
-  const shares = outcomes.reduce((sum, outcome) => sum + currentSharesForOutcome(market, outcome.id), 0);
+  const heldByOutcome = outcomes.map(outcome => currentSharesForOutcome(market, outcome.id));
+  const shares = heldByOutcome.length ? Math.min(...heldByOutcome) : 0;
   const maxCash = outcomes.reduce((sum, outcome) => {
-    const held = currentSharesForOutcome(market, outcome.id);
-    return sum + lmsrSellValueForShares(market, outcome.id, held);
+    return sum + lmsrSellValueForShares(market, outcome.id, shares);
   }, 0);
   return { shares, maxCash, outcomes };
 }
@@ -4751,22 +5046,69 @@ function lmsrPreview(market, outcomeId, mode, amount) {
   return { shares, maxCash: 0, held: currentSharesForOutcome(market, outcomeId), oversell: false };
 }
 
-function complementBuyPreview(market, outcomeId, amount) {
-  const complement = complementOutcomes(market, outcomeId);
-  const weightTotal = complement.reduce((sum, outcome) => sum + Math.max(0.000001, Number(outcome.price || 0)), 0) || complement.length || 1;
-  const allocations = complement.map(outcome => ({
-    outcomeId: outcome.id,
-    amount: amount * (Math.max(0.000001, Number(outcome.price || 0)) / weightTotal),
+function lmsrStateForMarket(market) {
+  const outcomes = market.outcomes?.length ? market.outcomes : [{ id: market.outcomeId || market.id, price: market.probability, quantity: 0 }];
+  const b = Number(market.initialLiquidity || market.liquidity || DEFAULT_MARKET_LIQUIDITY);
+  const values = outcomes.map(item => ({
+    ...item,
+    quantity: Number(item.quantity || 0),
+    exp: Math.exp(Number(item.quantity || 0) / b),
   }));
-  const shares = allocations.reduce((sum, allocation) => {
-    return sum + Math.max(0, lmsrPreview(market, allocation.outcomeId, "buy", allocation.amount).shares || 0);
-  }, 0);
+  return {
+    outcomes: values,
+    b,
+    sumExp: values.reduce((sum, item) => sum + item.exp, 0),
+  };
+}
+
+function lmsrGrossCostForComplementShares(market, excludedOutcomeId, shares) {
+  const { outcomes, b, sumExp } = lmsrStateForMarket(market);
+  const target = outcomes.find(item => item.id === excludedOutcomeId);
+  if (!target || !Number.isFinite(b) || b <= 0 || shares <= 0) return 0;
+  const complementExp = Math.max(0, sumExp - target.exp);
+  const newSum = target.exp + complementExp * Math.exp(shares / b);
+  const netCost = b * Math.log(newSum / sumExp);
+  return sellGrossCashForNet(netCost);
+}
+
+function lmsrComplementSharesForCash(market, excludedOutcomeId, amount) {
+  const gross = Math.max(0, Number(amount || 0));
+  if (!gross) return 0;
+  let low = 0;
+  let high = Math.max(1, gross / Math.max(0.01, 1 - Number(market.outcomes?.find(item => item.id === excludedOutcomeId)?.price || 0)));
+  for (let i = 0; i < 40 && lmsrGrossCostForComplementShares(market, excludedOutcomeId, high) < gross; i += 1) {
+    high *= 2;
+  }
+  for (let i = 0; i < 50; i += 1) {
+    const mid = (low + high) / 2;
+    if (lmsrGrossCostForComplementShares(market, excludedOutcomeId, mid) > gross) high = mid;
+    else low = mid;
+  }
+  return low;
+}
+
+function lmsrCashForComplementSellShares(market, excludedOutcomeId, shares) {
+  const { outcomes, b, sumExp } = lmsrStateForMarket(market);
+  const target = outcomes.find(item => item.id === excludedOutcomeId);
+  const amount = Math.max(0, Number(shares || 0));
+  if (!target || !Number.isFinite(b) || b <= 0 || amount <= 0) return 0;
+  const complementExp = Math.max(0, sumExp - target.exp);
+  const newSum = target.exp + complementExp * Math.exp(-amount / b);
+  if (newSum <= 0) return 0;
+  return tradeNetCash(b * Math.log(sumExp / newSum));
+}
+
+function complementBuyPreview(market, outcomeId, amount) {
+  const shares = lmsrComplementSharesForCash(market, outcomeId, amount);
+  const targetPrice = Number(market.outcomes?.find(item => item.id === outcomeId)?.price ?? market.probability ?? 0);
+  const noPrice = Math.max(0.000001, 1 - targetPrice);
   return {
     shares,
     maxCash: 0,
     held: complementShareState(market, outcomeId).shares,
     oversell: false,
-    allocations,
+    syntheticPrice: noPrice,
+    isComplement: true,
   };
 }
 
@@ -4775,8 +5117,7 @@ function sellPreviewForShares(market, outcomeId, shares, side = state.trade.side
     const basket = complementShareState(market, outcomeId);
     const requestedShares = Math.max(0, Number(shares || 0));
     const safeShares = Math.min(requestedShares, basket.shares);
-    const fraction = basket.shares > 0 ? safeShares / basket.shares : 0;
-    const cashAmount = basket.maxCash * fraction;
+    const cashAmount = lmsrCashForComplementSellShares(market, outcomeId, safeShares);
     return {
       shares: -safeShares,
       cashAmount,
@@ -4819,6 +5160,7 @@ function averageBuyPriceForPosition(market, outcomeId, side = state.trade.side |
   const trades = market.eventTrades?.length ? market.eventTrades : market.trades || [];
   let buyCash = 0;
   let buyShares = 0;
+  const complementShares = new Map();
   for (const trade of trades) {
     if (trade.participant !== state.activeMember) continue;
     const tradeOutcomeId = trade.outcomeId || outcomeId;
@@ -4829,6 +5171,14 @@ function averageBuyPriceForPosition(market, outcomeId, side = state.trade.side |
     if (sharesDelta <= 0 || cash <= 0) continue;
     buyCash += cash;
     buyShares += sharesDelta;
+    if (isComplementNoTrade(market, side)) {
+      complementShares.set(tradeOutcomeId, Number(complementShares.get(tradeOutcomeId) || 0) + sharesDelta);
+    }
+  }
+  if (isComplementNoTrade(market, side)) {
+    const syntheticShares = complementShares.size ? Math.min(...complementShares.values()) : 0;
+    if (syntheticShares <= 0) return null;
+    return { avgPrice: buyCash / syntheticShares, buyCash, buyShares: syntheticShares };
   }
   if (buyShares <= 0) return null;
   return { avgPrice: buyCash / buyShares, buyCash, buyShares };
@@ -4891,7 +5241,7 @@ function updateTradeSubmitState(market, preview, amount) {
   }
   const insufficientBalance = mode === "buy" && Number(amount || 0) > balance;
   const exceedsBuyCap = mode === "buy" && Number(amount || 0) > buyCap + 0.000001;
-  const shouldDisable = insufficientBalance || exceedsBuyCap || (mode === "sell" && (!preview.held || preview.held <= 0 || preview.oversell || !amount || amount > preview.held + 0.000001));
+  const shouldDisable = insufficientBalance || exceedsBuyCap || preview.needsQuote || (mode === "sell" && (!preview.held || preview.held <= 0 || preview.oversell || !amount || amount > preview.held + 0.000001));
   if (submit) {
     submit.disabled = shouldDisable;
     submit.classList.toggle("disabled", shouldDisable);
@@ -4958,8 +5308,9 @@ function setTradeSide(marketId, side) {
   const sideLabel = panel.querySelector("[data-trade-side-label]");
   const activePick = panel.querySelector(`.trade-pick[data-buy="${side}"] span`);
   if (sideLabel) sideLabel.textContent = market.outcomes?.length > 2
-    ? `${marketOptionTitle(market)} · ${side === "no" ? "No" : "Yes"}`
+    ? `${stripRegionalFlagGlyph(marketOptionTitle(market))} · ${side === "no" ? "No" : "Yes"}`
     : (activePick?.textContent || (side === "yes" ? "Yes" : "No"));
+  if (sideLabel) sideLabel.innerHTML = tradeSideLabelHtml(sideLabel.textContent);
   const context = panel.querySelector(".trade-panel-context");
   context?.classList.toggle("yes", side === "yes");
   context?.classList.toggle("no", side === "no");
@@ -5006,8 +5357,9 @@ function setTradeMode(marketId, mode) {
   const sideLabel = panel.querySelector("[data-trade-side-label]");
   const activePick = panel.querySelector(`.trade-pick[data-buy="${nextSide}"] span`);
   if (sideLabel) sideLabel.textContent = market.outcomes?.length > 2
-    ? `${marketOptionTitle(market)} · ${nextSide === "no" ? "No" : "Yes"}`
+    ? `${stripRegionalFlagGlyph(marketOptionTitle(market))} · ${nextSide === "no" ? "No" : "Yes"}`
     : (activePick?.textContent || (nextSide === "yes" ? "Yes" : "No"));
+  if (sideLabel) sideLabel.innerHTML = tradeSideLabelHtml(sideLabel.textContent);
   const context = panel.querySelector(".trade-panel-context");
   context?.classList.toggle("yes", nextSide === "yes");
   context?.classList.toggle("no", nextSide === "no");
@@ -7066,6 +7418,8 @@ function ammPreview(poolYes, poolNo, side, amount) {
 
 function setGroups(groups) {
   state.groups = groups ?? [];
+  tradeQuoteCache.clear();
+  tradeQuoteInflight.clear();
 }
 
 function isPbMyMarketsGroup(group) {
@@ -7084,6 +7438,39 @@ function isSampleMarket(market) {
 
 function slug(value) {
   return String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function isEmailLike(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function stripRegionalFlagGlyph(value) {
+  return String(value || "")
+    .replace(/[\u{E0061}-\u{E007A}\u{E007F}]/gu, "")
+    .replace(/^🏴\s*/u, "")
+    .trim();
+}
+
+function regionalFlagClass(value) {
+  const normalized = stripRegionalFlagGlyph(value).toLowerCase();
+  if (/\bengland\b/.test(normalized)) return "flag-england";
+  if (/\bscotland\b/.test(normalized)) return "flag-scotland";
+  return "";
+}
+
+function outcomeTitleHtml(value) {
+  const label = stripRegionalFlagGlyph(value);
+  const flagClass = regionalFlagClass(label);
+  return flagClass
+    ? `<span class="outcome-flag ${flagClass}" aria-hidden="true"></span>${esc(label)}`
+    : esc(label);
+}
+
+function tradeSideLabelHtml(value) {
+  const raw = String(value || "");
+  const suffix = raw.match(/\s·\s(?:Yes|No)$/i)?.[0] || "";
+  const base = suffix ? raw.slice(0, -suffix.length) : raw;
+  return `${outcomeTitleHtml(base)}${esc(suffix)}`;
 }
 
 function normalizeSelection() {
@@ -7288,12 +7675,13 @@ function authDisplayName() {
   const user = state.authUser;
   if (!user) return "";
   const storedName = localStorage.getItem("probable_display_name")?.trim();
-  const providerName = (
+  let providerName = (
     user.user_metadata?.full_name ||
     user.user_metadata?.name ||
     user.user_metadata?.preferred_username ||
     ""
   ).trim();
+  if (isEmailLike(providerName)) providerName = "";
   return (
     providerName ||
     storedName ||
@@ -7352,12 +7740,18 @@ function resetMarketForm() {
   const probSliderVal = document.querySelector("#probSliderVal");
   const probLabel = document.querySelector("#probLabel");
   const imageInput = document.querySelector("#marketForm [name=image]");
+  const oddsToggle = document.querySelector("#marketForm [data-market-odds-toggle]");
   if (oracle) oracle.value = "ai";
   if (probSliderVal) probSliderVal.textContent = "50%";
   if (probLabel) probLabel.textContent = "50% YES";
   if (imageInput) imageInput.value = "";
   state.marketImageDataUrl = "";
   state.marketImageName = "";
+  state.marketOddsSeed = null;
+  if (oddsToggle) {
+    oddsToggle.checked = false;
+    delete oddsToggle.dataset.userSet;
+  }
   state.marketFormStep = 1;
   state.marketSlugSuffix = randomSlugSuffix();
   setMarketType("binary");

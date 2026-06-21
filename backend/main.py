@@ -62,6 +62,7 @@ class MarketCreate(BaseModel):
     category: str = Field(default="General", max_length=120)
     closesAt: str = Field(min_length=1)
     outcomes: list[str] = Field(default_factory=lambda: ["Yes", "No"])
+    initialProbabilities: dict[str, float] | None = None
     initialProbability: float = Field(default=0.5, ge=0.01, le=0.99)
     initialLiquidity: float = Field(default=20000.0, ge=2000.0, le=200000.0)
     oracleType: Literal["manual", "ai", "vote"] = "ai"
@@ -78,6 +79,14 @@ class MarketRulesDraft(BaseModel):
     resolutionSource: str | None = Field(default=None, max_length=240)
     category: str = Field(default="General", max_length=120)
     oracleType: Literal["manual", "ai", "vote"] = "manual"
+
+
+class MarketOddsSeed(BaseModel):
+    question: str = Field(min_length=1, max_length=100)
+    brief: str | None = Field(default=None, max_length=900)
+    outcomes: list[str] = Field(default_factory=list)
+    closesAt: str | None = Field(default=None, max_length=80)
+    category: str = Field(default="General", max_length=120)
 
 
 class TradeCreate(BaseModel):
@@ -168,6 +177,68 @@ def normalize_outcomes(values: list[str] | None) -> list[str]:
     if any(label.lower() in weak for label in cleaned):
         raise HTTPException(400, "Use specific prediction labels")
     return cleaned
+
+
+def probability_key(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    text = re.sub(r"^[^\w]+", "", text)
+    return text
+
+
+def normalize_probability_values(outcomes: list[str], values: dict[str, float] | None) -> list[float]:
+    if not outcomes:
+        return []
+    equal = [1.0 / len(outcomes) for _ in outcomes]
+    if not values:
+        return equal
+    keyed = {probability_key(key): value for key, value in values.items()}
+    raw: list[float] = []
+    for outcome in outcomes:
+        value = keyed.get(probability_key(outcome), values.get(outcome, 0.0))
+        try:
+            raw.append(max(0.0, float(value)))
+        except (TypeError, ValueError):
+            raw.append(0.0)
+    total = sum(raw)
+    if total <= 0:
+        return equal
+    normalized = [value / total for value in raw]
+    # Keep every listed outcome alive on new LMSR markets. This is not a prediction,
+    # it prevents tiny or missing priors from making longshots feel impossible.
+    floor = min(0.0025, 0.35 / len(outcomes))
+    floored = [max(floor, value) for value in normalized]
+    total = sum(floored)
+    return [value / total for value in floored]
+
+
+def soften_odds_probabilities(outcomes: list[str], raw_values: dict[str, float]) -> list[float]:
+    normalized = normalize_probability_values(outcomes, raw_values)
+    if not normalized:
+        return []
+    equal = 1.0 / len(outcomes)
+    # Big multi-outcome fields need more compression; sportsbook-style favorites
+    # are too punishing as initial LMSR prices for small friend groups.
+    market_weight = 0.50 if len(outcomes) >= 16 else 0.58
+    softened = [(value * market_weight) + (equal * (1 - market_weight)) for value in normalized]
+    total = sum(softened) or 1.0
+    return [value / total for value in softened]
+
+
+def probability_map(outcomes: list[str], values: list[float]) -> dict[str, float]:
+    return {outcome: round(float(values[idx] if idx < len(values) else 0), 6) for idx, outcome in enumerate(outcomes)}
+
+
+def initial_outcome_prices(outcomes: list[str], initial_probabilities: dict[str, float] | None) -> list[float]:
+    return normalize_probability_values(outcomes, initial_probabilities)
+
+
+def default_event_liquidity(outcome_count: int) -> float:
+    count = max(2, int(outcome_count or 2))
+    if count <= 2:
+        return 20_000.0
+    if count <= 10:
+        return 50_000.0
+    return float(min(200_000, max(80_000, round(count * 3_000, -3))))
 
 
 def clean_market_question(value: str) -> str:
@@ -417,6 +488,147 @@ async def ai_market_rules_draft(payload: MarketRulesDraft, outcomes: list[str], 
         return fallback_market_rules_draft(payload, outcomes, closes_at, "template")
 
 
+def extract_openai_response_text(data: dict) -> str:
+    if data.get("output_text"):
+        return str(data["output_text"])
+    chunks: list[str] = []
+    for item in data.get("output", []) or []:
+        for content in item.get("content", []) or []:
+            if isinstance(content, dict) and content.get("text"):
+                chunks.append(str(content["text"]))
+    return "\n".join(chunks).strip()
+
+
+def parse_json_object_text(text: str) -> dict:
+    cleaned = str(text or "").strip()
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.S | re.I)
+    if fence:
+        cleaned = fence.group(1).strip()
+    if not cleaned.startswith("{"):
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start >= 0 and end > start:
+            cleaned = cleaned[start:end + 1]
+    return json.loads(cleaned)
+
+
+async def ai_market_odds_seed(payload: MarketOddsSeed, outcomes: list[str], closes_at: datetime | None) -> dict:
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    equal = probability_map(outcomes, [1.0 / len(outcomes) for _ in outcomes])
+    if len(outcomes) <= 2:
+        return {
+            "available": False,
+            "source": "binary_skipped",
+            "summary": "AI odds seeding is only useful for multi-outcome markets.",
+            "probabilities": equal,
+            "rawProbabilities": equal,
+            "sources": [],
+        }
+    if not openai_key:
+        return {
+            "available": False,
+            "source": "missing_openai_key",
+            "summary": "OpenAI is not configured, so this market will start from equal prices.",
+            "probabilities": equal,
+            "rawProbabilities": equal,
+            "sources": [],
+        }
+
+    outcome_lines = "\n".join(f"{idx + 1}. {item}" for idx, item in enumerate(outcomes))
+    close_label = closes_at.isoformat() if closes_at else "not specified"
+    brief = re.sub(r"\s+", " ", str(payload.brief or "").strip()) or payload.question
+    system = (
+        "You are estimating starting-price context for a friend-group prediction market. "
+        "Use web search to find current sportsbook, prediction-market, or credible consensus odds when available. "
+        "Do not copy external odds directly. Return raw context probabilities, then explain that the app will soften them. "
+        "Never eliminate a listed outcome unless it is factually impossible or eliminated. "
+        "If current odds are unavailable, use informed public-football context and say so."
+    )
+    user = (
+        f"Market question: {payload.question}\n"
+        f"Creator context: {brief}\n"
+        f"Category: {payload.category}\n"
+        f"Maturity: {close_label}\n"
+        f"Outcomes, in exact app order:\n{outcome_lines}\n\n"
+        "Return JSON only with this shape:\n"
+        "{\n"
+        '  "probabilities": [{"outcome": "exact listed outcome", "probability": 0.123}],\n'
+        '  "summary": "one sentence on what current odds/context suggests",\n'
+        '  "sources": [{"title": "source title", "url": "https://..."}]\n'
+        "}\n"
+        "Probabilities should sum roughly to 1 before app softening."
+    )
+    raw_values: dict[str, float] = {}
+    summary = "Current odds context was used, then softened for friend-group trading."
+    sources: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=28.0) as client:
+            response = await client.post(
+                "https://api.openai.com/v1/responses",
+                headers={
+                    "Authorization": f"Bearer {openai_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": os.environ.get("OPENAI_ODDS_MODEL", "gpt-4.1-mini"),
+                    "tools": [{"type": "web_search_preview"}],
+                    "input": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    "temperature": 0.1,
+                    "max_output_tokens": 1200,
+                },
+            )
+        if response.status_code >= 400:
+            raise ValueError(f"OpenAI odds seed failed with status {response.status_code}")
+        text = extract_openai_response_text(response.json())
+        draft = parse_json_object_text(text)
+        for item in draft.get("probabilities", []) or []:
+            outcome = str(item.get("outcome") or "").strip()
+            if not outcome:
+                continue
+            raw_values[outcome] = float(item.get("probability") or 0)
+        summary = re.sub(r"\s+", " ", str(draft.get("summary") or summary).strip())[:240]
+        raw_sources = draft.get("sources", []) or []
+        for item in raw_sources[:5]:
+            if isinstance(item, dict):
+                title = re.sub(r"\s+", " ", str(item.get("title") or "").strip())[:120]
+                url = str(item.get("url") or "").strip()[:400]
+                if title or url:
+                    sources.append({"title": title or url, "url": url})
+    except Exception:
+        return {
+            "available": False,
+            "source": "fallback_equal",
+            "summary": "Odds lookup failed, so this market will start from equal prices.",
+            "probabilities": equal,
+            "rawProbabilities": equal,
+            "sources": [],
+        }
+
+    if not raw_values:
+        return {
+            "available": False,
+            "source": "fallback_equal",
+            "summary": "No usable odds were found, so this market will start from equal prices.",
+            "probabilities": equal,
+            "rawProbabilities": equal,
+            "sources": sources,
+        }
+    raw = normalize_probability_values(outcomes, raw_values)
+    softened = soften_odds_probabilities(outcomes, raw_values)
+    return {
+        "available": True,
+        "source": "openai_web_softened",
+        "summary": summary,
+        "probabilities": probability_map(outcomes, softened),
+        "rawProbabilities": probability_map(outcomes, raw),
+        "sources": sources,
+        "softening": "Blended toward equal pricing before LMSR initialization.",
+    }
+
+
 # ── Helpers ────────────────────────────────────────────────────────────
 
 def create_id() -> str:
@@ -565,10 +777,30 @@ def assemble_market_analytics(m: dict, trades_raw: list[dict]) -> dict:
 
 
 def event_probability_history(event: dict, outcome: dict, trades_raw: list[dict]) -> list[dict]:
-    history = [{
-        "createdAt": event["created_at"],
-        "probability": round(float(outcome.get("price") or 0), 4),
-    }]
+    outcome_count = max(1, len(event.get("_assembled_outcomes") or []))
+    equal_probability = 1.0 / outcome_count
+    seed_probability = float(outcome.get("price") or equal_probability)
+    if trades_raw:
+        seed_probability = float((trades_raw[0].get("prices_before") or {}).get(outcome["id"], seed_probability))
+
+    created_at = event["created_at"]
+    seed_at_dt = parse_iso_datetime(created_at)
+    seed_at = (seed_at_dt + timedelta(seconds=10)).isoformat() if seed_at_dt else created_at
+    history = []
+    if outcome_count > 2 and abs(seed_probability - equal_probability) > 0.0005:
+        history.append({
+            "createdAt": created_at,
+            "probability": round(float(equal_probability), 4),
+        })
+        history.append({
+            "createdAt": seed_at,
+            "probability": round(float(seed_probability), 4),
+        })
+    else:
+        history.append({
+            "createdAt": created_at,
+            "probability": round(float(seed_probability), 4),
+        })
     relevant_prices: list[dict] = []
     for trade in trades_raw:
         prices_after = trade.get("prices_after") or {}
@@ -578,13 +810,13 @@ def event_probability_history(event: dict, outcome: dict, trades_raw: list[dict]
                 "probability": round(float(prices_after[outcome["id"]]), 4),
             })
     if relevant_prices:
-        history[0]["probability"] = round(float((trades_raw[0].get("prices_before") or {}).get(outcome["id"], history[0]["probability"])), 4)
         history.extend(relevant_prices)
     return history
 
 
 def assemble_event_markets(event: dict) -> list[dict]:
     outcomes = sorted(event.pop("market_outcomes", []), key=lambda x: x.get("sort_order") or 0)
+    event["_assembled_outcomes"] = outcomes
     trades_raw = sorted(event.pop("event_trades", []), key=lambda x: x.get("created_at") or "")
     positions_raw = event.pop("event_positions", [])
     outcome_lookup = {outcome["id"]: outcome for outcome in outcomes}
@@ -1136,6 +1368,64 @@ def lmsr_sell_cash_for_shares(outcomes: list[dict], b: float, outcome_id: str, s
     return b * math.log(sum_exp / denominator)
 
 
+def lmsr_complement_buy_shares(outcomes: list[dict], b: float, excluded_outcome_id: str, gross_cash: float) -> float:
+    net_cash = trade_net_cash(gross_cash)
+    if net_cash <= 0 or b <= 0:
+        return 0.0
+    values = [(item["id"], math.exp(float(item.get("quantity") or 0) / b)) for item in outcomes]
+    sum_exp = sum(value for _id, value in values)
+    target_exp = next((value for oid, value in values if oid == excluded_outcome_id), None)
+    if not target_exp or sum_exp <= 0:
+        return 0.0
+    complement_exp = max(0.0, sum_exp - target_exp)
+    if complement_exp <= 0:
+        return 0.0
+    new_sum = sum_exp * math.exp(net_cash / b)
+    ratio = (new_sum - target_exp) / complement_exp
+    if ratio <= 1:
+        return 0.0
+    return b * math.log(ratio)
+
+
+def lmsr_complement_sell_cash_for_shares(outcomes: list[dict], b: float, excluded_outcome_id: str, shares: float) -> float:
+    amount = max(0.0, float(shares or 0))
+    if amount <= 0 or b <= 0:
+        return 0.0
+    values = [(item["id"], math.exp(float(item.get("quantity") or 0) / b)) for item in outcomes]
+    sum_exp = sum(value for _id, value in values)
+    target_exp = next((value for oid, value in values if oid == excluded_outcome_id), None)
+    if not target_exp or sum_exp <= 0:
+        return 0.0
+    complement_exp = max(0.0, sum_exp - target_exp)
+    new_sum = target_exp + complement_exp * math.exp(-amount / b)
+    if new_sum <= 0:
+        return 0.0
+    return trade_net_cash(b * math.log(sum_exp / new_sum))
+
+
+def lmsr_complement_sell_shares_for_cash(outcomes: list[dict], b: float, excluded_outcome_id: str, net_cash: float, max_shares: float) -> float:
+    target_cash = max(0.0, float(net_cash or 0))
+    high = max(0.0, float(max_shares or 0))
+    if target_cash <= 0 or high <= 0:
+        return 0.0
+    if lmsr_complement_sell_cash_for_shares(outcomes, b, excluded_outcome_id, high) < target_cash - 0.0001:
+        return high + 1
+    low = 0.0
+    for _ in range(60):
+        mid = (low + high) / 2
+        if lmsr_complement_sell_cash_for_shares(outcomes, b, excluded_outcome_id, mid) > target_cash:
+            high = mid
+        else:
+            low = mid
+    return low
+
+
+def lmsr_prices_for_quantities(outcomes: list[dict], b: float) -> dict[str, float]:
+    exps = {item["id"]: math.exp(float(item.get("quantity") or 0) / b) for item in outcomes}
+    total = sum(exps.values()) or 1.0
+    return {oid: value / total for oid, value in exps.items()}
+
+
 def trade_net_cash(cash: float) -> float:
     return max(0.0, float(cash or 0) * (1 - MARKET_FEE_RATE))
 
@@ -1197,22 +1487,16 @@ def event_trade_quote(event: dict, outcomes: list[dict], outcome_id: str, payloa
     if is_complement:
         complement = [item for item in outcomes if item["id"] != outcome_id]
         if payload.action == "buy":
-            allocations = weighted_allocations(complement, amount)
-            quote["allocations"] = allocations
-            quote["shares"] = round(sum(lmsr_buy_shares(outcomes, b, oid, trade_net_cash(cash)) for oid, cash in allocations.items()), 8)
+            shares = lmsr_complement_buy_shares(outcomes, b, outcome_id, amount)
+            quote["shares"] = round(shares, 8)
+            quote["allocations"] = weighted_allocations(complement, amount)
         else:
             holdings = positions or {}
-            max_by_outcome = {
-                item["id"]: trade_net_cash(lmsr_sell_cash_for_shares(outcomes, b, item["id"], float(holdings.get(item["id"], 0))))
-                for item in complement
-            }
-            max_cash = sum(max_by_outcome.values())
+            max_shares = min([float(holdings.get(item["id"], 0)) for item in complement] or [0.0])
+            max_cash = lmsr_complement_sell_cash_for_shares(outcomes, b, outcome_id, max_shares)
             quote["maxCash"] = round(max_cash, 4)
             quote["cashReceived"] = round(min(amount, max_cash), 4)
-            quote["allocations"] = weighted_allocations(
-                [{"id": oid, "price": max_cash_value} for oid, max_cash_value in max_by_outcome.items() if max_cash_value > 0],
-                min(amount, max_cash),
-            )
+            quote["shares"] = round(lmsr_complement_sell_shares_for_cash(outcomes, b, outcome_id, min(amount, max_cash), max_shares), 8)
         return quote
     if payload.action == "buy":
         quote["shares"] = round(lmsr_buy_shares(outcomes, b, outcome_id, trade_net_cash(amount)), 8)
@@ -1618,6 +1902,158 @@ async def draft_market_rules(payload: MarketRulesDraft) -> dict:
     return {"draft": draft}
 
 
+@app.post("/api/markets/odds/seed")
+async def seed_market_odds(payload: MarketOddsSeed) -> dict:
+    question = clean_market_question(payload.question)
+    outcomes = normalize_outcomes(payload.outcomes)
+    closes_at = parse_iso_datetime(payload.closesAt) if payload.closesAt else None
+    seed_payload = payload.model_copy(update={"question": question, "outcomes": outcomes})
+    seed = await ai_market_odds_seed(seed_payload, outcomes, closes_at)
+    return {"seed": seed}
+
+
+def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded_outcome_id: str, payload: TradeCreate) -> dict:
+    participant = payload.participant.strip()
+    amount = round(float(payload.amount or 0), 4)
+    if amount <= 0:
+        raise HTTPException(400, "Trade amount must be positive")
+    if event["status"] != "open":
+        raise HTTPException(400, "Market is not open for trading")
+    closes_at = parse_iso_datetime(event.get("closes_at"))
+    if closes_at and closes_at <= datetime.now(timezone.utc):
+        db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
+        raise HTTPException(400, "Market is closed for trading")
+
+    complement = [item for item in outcomes if item["id"] != excluded_outcome_id]
+    if not complement:
+        raise HTTPException(400, "No complement outcomes available")
+
+    member_rows = (
+        db.table("group_members")
+        .select("balance")
+        .eq("group_id", event["group_id"])
+        .eq("name", participant)
+        .execute()
+        .data or []
+    )
+    if not member_rows:
+        db.table("group_members").insert({
+            "group_id": event["group_id"],
+            "name": participant,
+            "balance": DEFAULT_FAKE_BALANCE,
+        }).execute()
+        balance = DEFAULT_FAKE_BALANCE
+    else:
+        balance = float(member_rows[0].get("balance") or 0)
+
+    b = float(event.get("liquidity_b") or DEFAULT_FAKE_BALANCE)
+    prices_before = {item["id"]: round(float(item.get("price") or 0), 8) for item in outcomes}
+    quantities = {item["id"]: float(item.get("quantity") or 0) for item in outcomes}
+
+    if payload.action == "buy":
+        if amount > balance:
+            raise HTTPException(400, f"{participant} only has ${round(balance, 0)}")
+        shares = lmsr_complement_buy_shares(outcomes, b, excluded_outcome_id, amount)
+        if shares <= 0:
+            raise HTTPException(400, "Trade amount is too small")
+        cash_delta = -amount
+        share_delta = shares
+    else:
+        position_rows = (
+            db.table("event_positions")
+            .select("outcome_id, shares")
+            .eq("event_id", event["id"])
+            .eq("participant", participant)
+            .execute()
+            .data or []
+        )
+        positions = {row["outcome_id"]: float(row.get("shares") or 0) for row in position_rows}
+        max_shares = min([positions.get(item["id"], 0.0) for item in complement] or [0.0])
+        max_cash = lmsr_complement_sell_cash_for_shares(outcomes, b, excluded_outcome_id, max_shares)
+        if amount > max_cash + 0.0001:
+            raise HTTPException(400, f"{participant} can cash out up to ${round(max_cash, 2)} on this NO basket")
+        shares = lmsr_complement_sell_shares_for_cash(outcomes, b, excluded_outcome_id, amount, max_shares)
+        if shares <= 0 or shares > max_shares + 0.0001:
+            raise HTTPException(400, f"{participant} does not have enough NO shares to sell")
+        cash_delta = amount
+        share_delta = -shares
+
+    for item in complement:
+        quantities[item["id"]] = quantities[item["id"]] + share_delta
+        if quantities[item["id"]] < -1_000_000_000:
+            raise HTTPException(400, "Invalid complement trade")
+
+    priced_outcomes = [{**item, "quantity": quantities[item["id"]]} for item in outcomes]
+    prices_after = lmsr_prices_for_quantities(priced_outcomes, b)
+    now = now_iso()
+    for item in priced_outcomes:
+        db.table("market_outcomes").update({
+            "quantity": round(float(item["quantity"]), 8),
+            "price": round(float(prices_after[item["id"]]), 8),
+        }).eq("id", item["id"]).eq("event_id", event["id"]).execute()
+
+    db.table("group_members").update({
+        "balance": round(balance + cash_delta, 2),
+    }).eq("group_id", event["group_id"]).eq("name", participant).execute()
+
+    existing_positions = (
+        db.table("event_positions")
+        .select("outcome_id, shares")
+        .eq("event_id", event["id"])
+        .eq("participant", participant)
+        .execute()
+        .data or []
+    )
+    position_lookup = {row["outcome_id"]: float(row.get("shares") or 0) for row in existing_positions}
+    for item in complement:
+        next_shares = round(position_lookup.get(item["id"], 0.0) + share_delta, 8)
+        if next_shares < -0.0001:
+            raise HTTPException(400, f"{participant} does not have enough NO shares to sell")
+        db.table("event_positions").upsert({
+            "event_id": event["id"],
+            "outcome_id": item["id"],
+            "participant": participant,
+            "shares": max(0.0, next_shares),
+            "updated_at": now,
+        }, on_conflict="event_id,outcome_id,participant").execute()
+
+    allocation_weights = [max(0.000001, float(prices_before.get(item["id"], 0))) for item in complement]
+    allocation_total = sum(allocation_weights) or len(complement)
+    trade_rows = []
+    remaining_cash = amount
+    for idx, item in enumerate(complement):
+        if idx == len(complement) - 1:
+            cash_amount = remaining_cash
+        else:
+            cash_amount = round(amount * allocation_weights[idx] / allocation_total, 4)
+            remaining_cash = round(remaining_cash - cash_amount, 4)
+        trade_rows.append({
+            "id": create_id(),
+            "event_id": event["id"],
+            "outcome_id": item["id"],
+            "participant": participant,
+            "action": payload.action,
+            "cash_amount": cash_amount,
+            "shares_delta": round(share_delta, 8),
+            "avg_price": round((amount / abs(shares)) if shares else 0, 8),
+            "prices_before": prices_before,
+            "prices_after": {key: round(value, 8) for key, value in prices_after.items()},
+            "created_at": now,
+        })
+    db.table("event_trades").insert(trade_rows).execute()
+    db.table("market_events").update({
+        "total_volume": round(float(event.get("total_volume") or 0) + amount, 4),
+    }).eq("id", event["id"]).execute()
+    return {
+        "basket": True,
+        "synthetic": "complement_no",
+        "selectedOutcomeId": excluded_outcome_id,
+        "shares": round(shares, 8),
+        "amount": amount,
+        "trades": trade_rows,
+    }
+
+
 @app.post("/api/groups/{group_id}/markets", status_code=201)
 def create_market(group_id: str, payload: MarketCreate) -> dict:
     db = get_db()
@@ -1633,6 +2069,7 @@ def create_market(group_id: str, payload: MarketCreate) -> dict:
         raise HTTPException(400, "Closes at must be in the future")
 
     event_id = create_id()
+    liquidity = max(float(payload.initialLiquidity or 0), default_event_liquidity(len(outcomes)))
     event_row = {
         "id": event_id,
         "group_id": group_id,
@@ -1644,7 +2081,7 @@ def create_market(group_id: str, payload: MarketCreate) -> dict:
         "verification_attempts": [],
         "mode": group["mode"],
         "oracle_type": payload.oracleType,
-        "liquidity_b": payload.initialLiquidity,
+        "liquidity_b": liquidity,
         "total_volume": 0.0,
         "closes_at": closes_at.isoformat(),
     }
@@ -1677,16 +2114,17 @@ def create_market(group_id: str, payload: MarketCreate) -> dict:
             if not removed:
                 raise
 
-    equal_price = 1.0 / len(outcomes)
+    initial_prices = initial_outcome_prices(outcomes, payload.initialProbabilities)
     outcome_rows = []
     for idx, outcome in enumerate(outcomes):
+        price = initial_prices[idx] if idx < len(initial_prices) else (1.0 / len(outcomes))
         outcome_rows.append({
             "id": create_id(),
             "event_id": event_id,
             "title": outcome,
             "sort_order": idx,
-            "quantity": round(payload.initialLiquidity * math.log(equal_price), 8),
-            "price": round(equal_price, 8),
+            "quantity": round(liquidity * math.log(price), 8),
+            "price": round(price, 8),
         })
 
     db.table("market_outcomes").insert(outcome_rows).execute()
@@ -2082,46 +2520,7 @@ def place_trade(market_id: str, payload: TradeCreate) -> dict:
 
     try:
         if len(outcomes) > 2 and payload.side == "no":
-            complement = [item for item in outcomes if item["id"] != outcome_id]
-            if not complement:
-                raise HTTPException(400, "No complement outcomes available")
-            if payload.action == "buy":
-                allocations = weighted_allocations(complement, float(payload.amount))
-            else:
-                position_rows = (
-                    db.table("event_positions")
-                    .select("outcome_id, shares")
-                    .eq("event_id", event["id"])
-                    .eq("participant", payload.participant.strip())
-                    .execute()
-                    .data or []
-                )
-                positions = {row["outcome_id"]: float(row.get("shares") or 0) for row in position_rows}
-                b = float(event.get("liquidity_b") or DEFAULT_FAKE_BALANCE)
-                max_by_outcome = {
-                    item["id"]: trade_net_cash(lmsr_sell_cash_for_shares(outcomes, b, item["id"], positions.get(item["id"], 0.0)))
-                    for item in complement
-                }
-                max_cash = sum(max_by_outcome.values())
-                if float(payload.amount) > max_cash + 0.0001:
-                    raise HTTPException(400, f"{payload.participant} can cash out up to ${round(max_cash, 2)} on this NO basket")
-                allocations = weighted_allocations(
-                    [{"id": oid, "price": cash} for oid, cash in max_by_outcome.items() if cash > 0],
-                    float(payload.amount),
-                )
-            trade_payloads = []
-            for target_id, cash in allocations.items():
-                if cash <= 0:
-                    continue
-                result = db.rpc("place_event_trade", {
-                    "p_event_id": event["id"],
-                    "p_outcome_id": target_id,
-                    "p_participant": payload.participant.strip(),
-                    "p_action": payload.action,
-                    "p_cash_amount": cash,
-                }).execute()
-                trade_payloads.append(result.data)
-            trade_result_data = {"basket": True, "trades": trade_payloads, "selectedOutcomeId": outcome_id}
+            trade_result_data = place_complement_event_trade(db, event, outcomes, outcome_id, payload)
         else:
             trade_result = db.rpc("place_event_trade", {
                 "p_event_id": event["id"],
