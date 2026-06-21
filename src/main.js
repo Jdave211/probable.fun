@@ -1246,14 +1246,36 @@ async function onGlobalClick(e) {
     if (eventCard) state.expandedEventKey = eventCard.dataset.eventKey;
     const inTradePanel = Boolean(buyBtn.closest(".trade-panel"));
     const inFocusedTrade = Boolean(buyBtn.closest(".focused-market-shell"));
+    if (state.sharedMarketId && !inTradePanel) {
+      state.sharedMarketId = mid;
+      state.trade = { marketId: mid, side, mode: state.trade.mode || "buy" };
+      state.mobileTradeOpen = true;
+      routeToMarket(mid);
+      if (!isLoggedIn()) {
+        storePendingSharedTrade(mid, side, state.trade.mode);
+        requireLogin("trade-shared-market");
+        render();
+        return;
+      }
+      const group = findGroupForMarket(mid);
+      if (group && !group.members?.includes(authDisplayName())) {
+        await joinSharedMarketAndOpen(mid, side, state.trade.mode);
+        return;
+      }
+    }
     if ((inTradePanel || inFocusedTrade) && state.trade.marketId === mid) {
       setTradeSide(mid, side);
+      if (inFocusedTrade) {
+        state.mobileTradeOpen = true;
+        render();
+      }
       return;
     }
     const nextTrade = state.trade.marketId === mid && state.trade.side === side
       ? ((inTradePanel || inFocusedTrade) ? state.trade : emptyTrade())
       : { marketId: mid, side, mode: state.trade.mode || "buy" };
     state.trade = nextTrade;
+    if (inFocusedTrade && state.trade.marketId) state.mobileTradeOpen = true;
     state.trade.marketId ? routeToMarket(state.trade.marketId) : routeToApp();
     render();
     requestAnimationFrame(() => window.scrollTo(0, 0));
@@ -1545,6 +1567,7 @@ async function onGlobalSubmit(e) {
     setButtonPending(submit, false);
     setGroups(data.groups);
     state.trade = { marketId: market.id, side, mode: action };
+    state.mobileTradeOpen = false;
     normalizeSelection();
     render();
     toast(`${state.activeMember} ${action === "sell" ? "sold" : "bought"} ${side.toUpperCase()}.`);
@@ -1613,6 +1636,10 @@ function runPendingAuthAction() {
   }
   if (action === "welcome-create-market") {
     createStoredWelcomeMarket().catch(err => toast(err.message || "Failed to create market."));
+    return;
+  }
+  if (action === "trade-shared-market") {
+    continueSharedMarketTrade().catch(err => toast(err.message || "Could not open that trade."));
   }
 }
 
@@ -2047,43 +2074,28 @@ function updateMarketReview(form = dom.marketForm) {
   const outcomes = parseOutcomeOptions(fd.get("outcomes")?.toString() ?? "");
   const oracle = fd.get("oracle")?.toString() || "ai";
   const closeLabel = closesAt && Number.isFinite(closesAt.getTime()) ? fmtDate(closesAt) : "Not set";
-  const slug = marketSlugFor(question);
   review.innerHTML = `
-    <div class="market-review-row">
-      <span>Question</span>
-      <strong>${escapeHtml(question)}</strong>
-    </div>
-    <div class="market-review-row">
-      <span>Link</span>
-      <strong class="market-review-slug">probable.fun/m/${escapeHtml(slug)}</strong>
-    </div>
-    <div class="market-review-row">
-      <span>Type</span>
-      <strong>${marketTypeLabel(outcomes)}</strong>
-    </div>
-    <div class="market-review-row">
-      <span>Predictions</span>
-      <strong>${outcomes.map(escapeHtml).join(" / ")}</strong>
-    </div>
-    <div class="market-review-row">
-      <span>Maturity</span>
-      <strong>${escapeHtml(closeLabel)}</strong>
-    </div>
-    <div class="market-review-row">
-      <span>Verification</span>
-      <strong>${marketOracleLabel(oracle)}</strong>
-    </div>
-    <div class="market-review-row">
-      <span>Starting bankroll</span>
-      <strong>${money(DEFAULT_BALANCE)} per member</strong>
-    </div>
-    <div class="market-review-row">
-      <span>Starting liquidity</span>
-      <strong>${money(DEFAULT_MARKET_LIQUIDITY)} virtual pool</strong>
-    </div>
-    <div class="market-review-row">
-      <span>Image</span>
-      <strong>${state.marketImageDataUrl ? `Custom upload${state.marketImageName ? `: ${escapeHtml(state.marketImageName)}` : ""}` : "Stock football image"}</strong>
+    <div class="market-review-summary">
+      <div>
+        <span>Question</span>
+        <strong>${escapeHtml(question)}</strong>
+      </div>
+      <div>
+        <span>Predictions</span>
+        <strong>${outcomes.map(escapeHtml).join(" / ")}</strong>
+      </div>
+      <div>
+        <span>Maturity</span>
+        <strong>${escapeHtml(closeLabel)}</strong>
+      </div>
+      <div>
+        <span>Verification</span>
+        <strong>${marketOracleLabel(oracle)}</strong>
+      </div>
+      <div>
+        <span>Image</span>
+        <strong>${state.marketImageDataUrl ? "Custom upload" : "Stock football image"}</strong>
+      </div>
     </div>
     <div class="market-review-description">
       <span>Description</span>
@@ -2832,6 +2844,59 @@ async function onCreateMarket(e) {
   }
 }
 
+function storePendingSharedTrade(marketId, side = "yes", mode = "buy") {
+  sessionStorage.setItem("probable_pending_shared_trade", JSON.stringify({ marketId, side, mode }));
+}
+
+function takePendingSharedTrade() {
+  try {
+    const raw = sessionStorage.getItem("probable_pending_shared_trade");
+    sessionStorage.removeItem("probable_pending_shared_trade");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    sessionStorage.removeItem("probable_pending_shared_trade");
+    return null;
+  }
+}
+
+async function continueSharedMarketTrade() {
+  const pending = takePendingSharedTrade();
+  if (!pending?.marketId) return;
+  await joinSharedMarketAndOpen(pending.marketId, pending.side || "yes", pending.mode || "buy");
+}
+
+async function joinSharedMarketAndOpen(marketId, side = "yes", mode = "buy") {
+  if (!state.loaded || !state.groups.length) {
+    const data = await api("/api/groups");
+    setGroups(data.groups);
+  }
+  let group = findGroupForMarket(marketId);
+  if (!group) throw new Error("That market link could not be found.");
+  const memberName = authDisplayName();
+  if (!memberName) throw new Error("Sign in to trade.");
+  if (!group.members?.includes(memberName)) {
+    const data = await api(`/api/groups/${group.id}/join`, {
+      method: "POST",
+      body: JSON.stringify({ name: memberName }),
+    });
+    setGroups(data.groups);
+    group = findGroupForMarket(marketId) || group;
+  }
+  state.currentGroupId = group.id;
+  state.activeMember = memberName;
+  state.shell = "app";
+  state.view = "dashboard";
+  state.sharedMarketId = marketId;
+  state.trade = { marketId, side, mode };
+  state.mobileTradeOpen = true;
+  localStorage.setItem("probable_user", memberName);
+  localStorage.setItem("probable_groupId", group.id);
+  localStorage.setItem(STORAGE_KEYS.shell, "app");
+  routeToMarket(marketId, { replace: true });
+  normalizeSelection();
+  render();
+}
+
 async function onResolve(market, outcome, options = {}) {
   if (state.pendingUi.resolveMarketId === market.id) return;
   const reasoning = String(options.reasoning || "").trim();
@@ -2971,7 +3036,7 @@ function renderNav() {
     ? `<button class="group-add-btn" type="button" data-group-id="__new" aria-label="Create group">+</button>` + navGroups.map(g => `<button class="group-tab ${g.id === getCurrentGroup()?.id && state.view === "dashboard" ? "active" : ""}" type="button" data-group-id="${g.id}">${esc(g.emoji)} ${esc(g.name)}</button>`).join("")
     : "";
 
-  const group = inApp ? getCurrentGroup() : null;
+  const group = inApp && isLoggedIn() ? getCurrentGroup() : null;
   const displayName = authDisplayName() || state.activeMember || "User";
   const balance = group?.balances?.[state.activeMember] ?? 0;
 
@@ -3116,13 +3181,14 @@ function renderDashboard() {
 function renderFocusedTradeView(group, market, event) {
   const eventTitle = event?.title || sampleEventTitle(market);
   const tradeMarket = market;
+  const sharedLanding = state.sharedMarketId === market.id && !isLoggedIn();
   const prob = Number(tradeMarket.probability ?? 0.5);
   const yesPrice = prob.toFixed(2);
   const noPrice = (1 - prob).toFixed(2);
   const sortedMarkets = event?.markets?.length ? event.markets : [market];
   const leadingMarkets = sortedMarkets.slice(0, 4);
   dom.mainContent.innerHTML = `
-    <section class="dashboard-shell focused-market-shell">
+    <section class="dashboard-shell focused-market-shell ${sharedLanding ? "shared-market-shell" : ""}">
       <div class="focused-market-nav motion-item">
         <button class="focused-back" type="button" data-close-trade>&larr; Back to markets</button>
         <div class="focused-market-nav-actions">
@@ -3163,9 +3229,16 @@ function renderFocusedTradeView(group, market, event) {
             ${sortedMarkets.map((item, index) => focusedOutcomeRow(item, tradeMarket.id, index, event)).join("")}
           </div>
 
-          ${marketHistoryPanel(tradeMarket, event)}
-          ${focusedRulesPanel(tradeMarket, event)}
-          ${marketParticipants(tradeMarket, event)}
+          ${sharedLanding ? `
+            <div class="shared-market-note">
+              <strong>Pick a side to trade.</strong>
+              <span>Sign in once, join ${esc(group.name)}, and the trade ticket opens automatically.</span>
+            </div>
+          ` : `
+            ${marketHistoryPanel(tradeMarket, event)}
+            ${focusedRulesPanel(tradeMarket, event)}
+            ${marketParticipants(tradeMarket, event)}
+          `}
         </section>
 
         ${tradeMarket.status === "open" ? `

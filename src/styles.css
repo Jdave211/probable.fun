@@ -4759,6 +4759,11 @@ button { color: inherit; }
   cursor: pointer;
 }
 #groupForm, #marketForm, #loginForm { display: flex; flex-direction: column; gap: 12px; }
+#marketForm {
+  max-height: min(650px, calc(100vh - 126px));
+  overflow-y: auto;
+  padding-right: 2px;
+}
 .field { display: flex; flex-direction: column; gap: 6px; flex: 1; }
 .field-label { color: var(--text-2); font-size: 0.82rem; font-weight: 700; }
 .field-help,
@@ -4838,13 +4843,25 @@ button { color: inherit; }
 }
 .market-review {
   display: grid;
-  gap: 7px;
-  padding: 12px;
+  gap: 10px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.025);
-  max-height: min(520px, calc(100vh - 210px));
+  max-height: min(390px, calc(100vh - 250px));
   overflow-y: auto;
+}
+.market-review-summary {
+  display: grid;
+  gap: 7px;
+}
+.market-review-summary div {
+  display: grid;
+  grid-template-columns: minmax(76px, 0.33fr) 1fr;
+  gap: 10px;
+  align-items: start;
+  padding-bottom: 7px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 .market-review-row {
   display: grid;
@@ -4859,6 +4876,7 @@ button { color: inherit; }
   padding-bottom: 0;
 }
 .market-review-row span,
+.market-review-summary span,
 .market-review-description span {
   color: var(--text-2);
   font-size: 0.74rem;
@@ -4867,6 +4885,14 @@ button { color: inherit; }
   letter-spacing: 0.04em;
 }
 .market-review-row strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.35;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.market-review-summary strong {
   min-width: 0;
   color: var(--text);
   font-size: 0.9rem;
@@ -4887,7 +4913,7 @@ button { color: inherit; }
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 .market-review-description-box {
-  max-height: 150px;
+  max-height: 112px;
   overflow-y: auto;
   border: 1px solid rgba(157, 171, 181, 0.16);
   border-radius: 12px;
@@ -4897,6 +4923,25 @@ button { color: inherit; }
   white-space: pre-wrap;
   font-size: 0.84rem;
   line-height: 1.42;
+}
+
+.shared-market-shell .focused-market-stage {
+  max-width: 980px;
+  margin-inline: auto;
+}
+
+.shared-market-note {
+  display: grid;
+  gap: 4px;
+  margin-top: 18px;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--line);
+  color: var(--text-2);
+}
+
+.shared-market-note strong {
+  color: var(--text);
+  font-size: 1rem;
 }
 .prediction-builder,
 .verification-outcomes {
@@ -5847,10 +5892,15 @@ html {
 }
 
 @media (max-width: 520px) {
+  .market-review {
+    max-height: min(340px, calc(100vh - 230px));
+  }
+  .market-review-summary div,
   .market-review-row {
     grid-template-columns: 1fr;
     gap: 4px;
   }
+  .market-review-summary strong,
   .market-review-row strong {
     text-align: left;
   }
