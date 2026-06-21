@@ -2533,7 +2533,7 @@ function renderMarketEmbedModal() {
           </div>
           <div class="share-action-grid">
             <button class="btn btn-primary" type="button" data-copy-market-link>Copy link</button>
-            ${navigator.share ? `<button class="btn btn-ghost" type="button" data-native-share-market>Share</button>` : ""}
+            <button class="btn btn-ghost" type="button" data-native-share-market>Share</button>
           </div>
         </div>
 
@@ -2543,7 +2543,11 @@ function renderMarketEmbedModal() {
 
 async function nativeShareMarket() {
   const market = findMarket(state.embedModal.marketId);
-  if (!market || !navigator.share) return;
+  if (!market) return;
+  if (!navigator.share) {
+    await copyMarketLink(market.id, { fallbackToast: "Share sheet unavailable. Market link copied." });
+    return;
+  }
   try {
     await navigator.share({
       title: sampleEventTitle(market),
@@ -2559,16 +2563,43 @@ function embedOptionHtml(key, label) {
   return `<label><input type="checkbox" data-embed-option="${key}" ${state.embedModal[key] ? "checked" : ""}/> <span>${label}</span></label>`;
 }
 
-async function copyMarketLink(marketId = state.embedModal.marketId) {
+async function writeClipboardText(text) {
+  if (!text) return false;
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to the textarea copy path for browsers that block clipboard writes.
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "-1000px";
+  textarea.style.left = "-1000px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  textarea.remove();
+  return copied;
+}
+
+async function copyMarketLink(marketId = state.embedModal.marketId, options = {}) {
   const market = findMarket(marketId);
   if (!market) return;
   const link = marketUrl(market.id);
-  try {
-    await navigator.clipboard.writeText(link);
-    toast("Market link copied.");
-  } catch {
-    toast(link);
-  }
+  const copied = await writeClipboardText(link);
+  toast(copied ? (options.fallbackToast || "Market link copied.") : link);
 }
 
 async function copyMarketEmbedCode() {
