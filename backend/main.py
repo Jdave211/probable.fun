@@ -1155,16 +1155,24 @@ def share_market_payload(market_id: str, request: Request | None = None) -> dict
     group, event, market = find_assembled_market(market_id)
     share_base = share_base_url(request)
     app_base = frontend_base_url(request)
-    yes_price, no_price = share_yes_no_prices(market)
     title = event["title"]
-    outcome = market.get("question") or "Yes"
+    if share_card_is_multi(event):
+        share_title = title
+        top_series = share_card_series(market, event, limit=3)
+        top_bits = [f"{item['label']} {item['pct']}%" for item in top_series]
+        share_description = f"{' · '.join(top_bits)} · {group['emoji']} {group['name']}"
+    else:
+        yes_price, no_price = share_yes_no_prices(market)
+        outcome = market.get("question") or "Yes"
+        share_title = f"{title}: {outcome}"
+        share_description = f"{round(yes_price * 100)}% Yes · {round(no_price * 100)}% No · {group['emoji']} {group['name']}"
     return {
         "market": market,
         "event": event,
         "group": {"id": group["id"], "name": group["name"], "emoji": group["emoji"]},
         "share": {
-            "title": f"{title}: {outcome}",
-            "description": f"{round(yes_price * 100)}% Yes · {round(no_price * 100)}% No · {group['emoji']} {group['name']}",
+            "title": share_title,
+            "description": share_description,
             "url": f"{share_base}/market/{market['id']}",
             "appUrl": f"{app_base}/market/{market['id']}",
             "embedUrl": f"{share_base}/embed/market/{market['id']}",
@@ -1333,6 +1341,74 @@ def compact_money_text(value: float | int | None) -> str:
 
 def rounded_rectangle(draw, xy: tuple[int, int, int, int], radius: int, fill: str, outline: str | None = None, width: int = 1) -> None:
     draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline, width=width)
+
+
+SHARE_CARD_OUTCOME_COLORS = ["#2d9cff", "#f23645", "#f2c414", "#ff861c", "#8bd450", "#b87cff", "#18c3b6", "#78b7ff"]
+
+PNG_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F1E6-\U0001F1FF"
+    "\U0001F300-\U0001FAFF"
+    "\U00002600-\U000027BF"
+    "\U0001F000-\U0001F0FF"
+    "\U0000FE0F"
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def png_safe_label(text: str) -> str:
+    """Pillow's bundled fonts can't render emoji (shows as a missing-glyph box),
+    so strip them for raster share cards; SVG/browser rendering doesn't need this."""
+    return PNG_EMOJI_PATTERN.sub("", text).strip() or text
+
+
+def darken_hex(hex_color: str, factor: float = 0.32) -> str:
+    raw = hex_color.lstrip("#")
+    r, g, b = (int(raw[i:i + 2], 16) for i in (0, 2, 4))
+    return f"#{int(r * factor):02x}{int(g * factor):02x}{int(b * factor):02x}"
+
+
+def share_card_series(market: dict, event: dict, *, limit: int = 5) -> list[dict]:
+    """Build the chart/legend series for a share card: Yes/No for binary markets,
+    or the top N outcomes by current price for multi-outcome events."""
+    event_markets = event.get("markets") or [market]
+    if len(event_markets) <= 2:
+        yes_price, no_price = share_yes_no_prices(market)
+        yes_values, no_values = share_card_yes_no_values(market)
+        return [
+            {"label": "Yes", "color": "#2d9cff", "values": yes_values, "pct": round(yes_price * 100)},
+            {"label": "No", "color": "#ff4d5a", "values": no_values, "pct": round(no_price * 100)},
+        ]
+    ranked = sorted(event_markets, key=lambda item: float(item.get("probability") or 0), reverse=True)[:limit]
+    series = []
+    for index, outcome in enumerate(ranked):
+        label = str(outcome.get("question") or outcome.get("title") or "Outcome")
+        series.append({
+            "label": label,
+            "color": SHARE_CARD_OUTCOME_COLORS[index % len(SHARE_CARD_OUTCOME_COLORS)],
+            "values": share_card_history_values(outcome),
+            "pct": round(float(outcome.get("probability") or 0) * 100),
+        })
+    return series
+
+
+def share_card_is_multi(event: dict) -> bool:
+    return len(event.get("markets") or []) > 2
+
+
+def share_card_date_labels(history_rows: list[dict], count: int = 3) -> list[str]:
+    dates = []
+    for row in history_rows:
+        dt = parse_iso_datetime(row.get("createdAt"))
+        if dt:
+            dates.append(dt)
+    if not dates:
+        return [""] * count
+    if len(dates) == 1:
+        dates = dates * count
+    picks = [dates[round(index * (len(dates) - 1) / max(1, count - 1))] for index in range(count)]
+    return [d.strftime("%b %-d") for d in picks]
 
 
 def require_group(group_id: str) -> dict:
@@ -2279,24 +2355,40 @@ def market_share_card_svg(market_id: str, request: Request) -> Response:
     market = payload["market"]
     event = payload["event"]
     group = payload["group"]
-    yes_price, no_price = share_yes_no_prices(market)
-    yes = round(yes_price * 100)
-    no = round(no_price * 100)
     volume = float(market.get("volume") or market.get("totalBet") or 0)
-    yes_values, no_values = share_card_yes_no_values(market)
-    low, high = share_card_chart_bounds(yes_values)
+    series = share_card_series(market, event, limit=5)
+    is_multi = share_card_is_multi(event)
+    all_values = [value for item in series for value in item["values"]]
+    low, high, _tick_step = share_card_chart_domain(all_values, min_range=8, pad=1.6)
     title = esc_html(event["title"])[:72]
-    outcome = esc_html(market.get("question") or "Yes")[:40]
+    subtitle = esc_html("Top outcomes" if is_multi else (market.get("question") or "Yes"))[:40]
     group_name = esc_html(f"{group['emoji']} {group['name']}")
     closes = esc_html(fmt_card_date(market.get("closesAt")))
-    yes_values, no_values = share_card_yes_no_values(market)
-    low, high = share_card_chart_bounds(yes_values)
     chart_left, chart_top, chart_width, chart_height = 120, 286, 760, 184
-    yes_points = share_card_svg_points(yes_values, chart_left, chart_top, chart_width, chart_height, low, high)
-    no_points = share_card_svg_points(no_values, chart_left, chart_top, chart_width, chart_height, low, high)
-    yes_dot = yes_points.split(" ")[-1]
-    no_dot = no_points.split(" ")[-1]
     grid = share_card_svg_grid_labels(low, high, chart_left, chart_top, chart_width, chart_height)
+
+    lines_svg = []
+    dots_svg = []
+    for item in reversed(series):
+        points = share_card_svg_points(item["values"], chart_left, chart_top, chart_width, chart_height, low, high)
+        lines_svg.append(f'<polyline points="{points}" fill="none" stroke="{item["color"]}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>')
+        dot = points.split(" ")[-1]
+        dots_svg.append(
+            f'<circle cx="{dot.split(",")[0]}" cy="{dot.split(",")[1]}" r="18" fill="{item["color"]}" opacity="0.2" filter="url(#glow)"/>'
+            f'<circle cx="{dot.split(",")[0]}" cy="{dot.split(",")[1]}" r="8" fill="{item["color"]}"/>'
+        )
+
+    stat_rows = []
+    row_h = 64 if len(series) <= 2 else 46
+    stat_y = 335
+    for item in series:
+        label = esc_html(item["label"])[:18]
+        stat_rows.append(
+            f'<text x="918" y="{stat_y}" font-family="Arial, sans-serif" font-size="{40 if len(series) <= 2 else 30}" font-weight="800" fill="{item["color"]}">{item["pct"]}%</text>'
+            f'<text x="918" y="{stat_y + 28 if len(series) <= 2 else stat_y + 20}" font-family="Arial, sans-serif" font-size="20" fill="#8fa0ad">{label}</text>'
+        )
+        stat_y += row_h
+
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#071018"/><stop offset="0.55" stop-color="#101920"/><stop offset="1" stop-color="#061f3b"/></linearGradient>
@@ -2308,18 +2400,11 @@ def market_share_card_svg(market_id: str, request: Request) -> Response:
   <text x="120" y="130" font-family="Arial, sans-serif" font-size="30" font-weight="700" fill="#f3f7fa">probable<tspan fill="#145ca8">.</tspan></text>
   <text x="120" y="178" font-family="Arial, sans-serif" font-size="23" fill="#8fa0ad">{group_name}</text>
   <text x="120" y="236" font-family="Arial, sans-serif" font-size="50" font-weight="800" fill="#f5f8fb">{title}</text>
-  <text x="120" y="270" font-family="Arial, sans-serif" font-size="28" font-weight="700" fill="#b7c3cc">{outcome}</text>
+  <text x="120" y="270" font-family="Arial, sans-serif" font-size="28" font-weight="700" fill="#b7c3cc">{subtitle}</text>
   {grid}
-  <polyline points="{no_points}" fill="none" stroke="#f23645" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <polyline points="{yes_points}" fill="none" stroke="#2d9cff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="{yes_dot.split(',')[0]}" cy="{yes_dot.split(',')[1]}" r="18" fill="#2d9cff" opacity="0.22" filter="url(#glow)"/>
-  <circle cx="{yes_dot.split(',')[0]}" cy="{yes_dot.split(',')[1]}" r="8" fill="#79bdff"/>
-  <circle cx="{no_dot.split(',')[0]}" cy="{no_dot.split(',')[1]}" r="18" fill="#f23645" opacity="0.18" filter="url(#glow)"/>
-  <circle cx="{no_dot.split(',')[0]}" cy="{no_dot.split(',')[1]}" r="8" fill="#ff6671"/>
-  <text x="918" y="335" font-family="Arial, sans-serif" font-size="54" font-weight="800" fill="#2d9cff">{yes}%</text>
-  <text x="918" y="374" font-family="Arial, sans-serif" font-size="22" fill="#8fa0ad">Yes</text>
-  <text x="918" y="438" font-family="Arial, sans-serif" font-size="54" font-weight="800" fill="#f23645">{no}%</text>
-  <text x="918" y="477" font-family="Arial, sans-serif" font-size="22" fill="#8fa0ad">No</text>
+  {"".join(lines_svg)}
+  {"".join(dots_svg)}
+  {"".join(stat_rows)}
   <text x="120" y="520" font-family="Arial, sans-serif" font-size="26" fill="#8fa0ad">${volume:,.0f} Vol. · Closes {closes}</text>
   <rect x="900" y="498" width="170" height="50" rx="15" fill="#145ca8"/>
   <text x="936" y="531" font-family="Arial, sans-serif" font-size="21" font-weight="800" fill="#fff">Trade now</text>
@@ -2343,12 +2428,13 @@ def market_share_card_png(market_id: str, request: Request) -> Response:
     market = payload["market"]
     event = payload["event"]
     group = payload["group"]
-    yes_price, no_price = share_yes_no_prices(market)
-    yes = round(yes_price * 100)
-    no = round(no_price * 100)
     volume = float(market.get("volume") or market.get("totalBet") or 0)
-    yes_values, no_values = share_card_yes_no_values(market)
-    low, high, tick_step = share_card_chart_domain(yes_values + no_values, min_range=8, pad=1.6)
+    series = share_card_series(market, event, limit=5)
+    is_multi = share_card_is_multi(event)
+    history_source = sorted(event.get("markets") or [market], key=lambda item: float(item.get("probability") or 0), reverse=True)[0] if is_multi else market
+    date_labels = share_card_date_labels(history_source.get("probabilityHistory") or [])
+    all_values = [value for item in series for value in item["values"]]
+    low, high, tick_step = share_card_chart_domain(all_values, min_range=8, pad=1.6)
 
     def font(size: int, bold: bool = False):
         candidates = [
@@ -2473,38 +2559,52 @@ def market_share_card_png(market_id: str, request: Request) -> Response:
     for index, line in enumerate(title_lines):
         draw.text((head_x, thumb_y + 30 + index * 31), line, fill="#f3f7fa", font=title_font)
     outcome_y = thumb_y + 30 + len(title_lines) * 31 + 2
-    draw.text((head_x, outcome_y), truncate(draw, market.get("question") or "Yes", right - head_x, font(20, False)), fill="#8fa0ad", font=font(20, False))
+    subtitle = "Top outcomes" if is_multi else (market.get("question") or "Yes")
+    draw.text((head_x, outcome_y), truncate(draw, subtitle, right - head_x, font(20, False)), fill="#8fa0ad", font=font(20, False))
 
-    prob_y = max(card_y + 200, outcome_y + 34)
-    draw.text((left, prob_y), f"Yes {yes}%", fill="#2d9cff", font=font(23, True))
-    draw.text((left + 110, prob_y), f"No {no}%", fill="#ff4d5a", font=font(23, True))
+    prob_y = max(card_y + (190 if is_multi else 200), outcome_y + 34)
+    prob_x = left
+    for item in series[:2]:
+        label = png_safe_label(item["label"])
+        text = f"{truncate(draw, label, 150, font(23, True))} {item['pct']}%"
+        draw.text((prob_x, prob_y), text, fill=item["color"], font=font(23, True))
+        prob_x += draw.textlength(text, font=font(23, True)) + 22
 
-    chart_left, chart_top, chart_width, chart_height = left + 30, prob_y + 52, 430, 145
+    chart_height = 92 if is_multi else 145
+    chart_left, chart_top, chart_width = left + 30, prob_y + (42 if is_multi else 52), (400 if is_multi else 430)
     denom = max(0.001, high - low)
-    for value in reversed(share_card_tick_values(low, high, tick_step)):
+    grid_ticks = (low, (low + high) / 2, high) if is_multi else reversed(share_card_tick_values(low, high, tick_step))
+    label_gap = 22 if is_multi else 8
+    for value in grid_ticks:
         row_y = chart_top + ((high - value) / denom * chart_height)
         draw.line((chart_left, row_y, chart_left + chart_width, row_y), fill="#26343d", width=1)
-        draw.text((chart_left + chart_width + 8, row_y - 9), share_card_axis_label(value), fill="#748593", font=font(16, False))
-    draw.text((chart_left - 24, chart_top + chart_height + 16), "Jun 20", fill="#526472", font=font(16, False))
-    draw.text((chart_left + 96, chart_top + chart_height + 16), "Jun 20", fill="#526472", font=font(16, False))
-    draw.text((chart_left + 216, chart_top + chart_height + 16), "Jun 20", fill="#526472", font=font(16, False))
+        draw.text((chart_left + chart_width + label_gap, row_y - 9), share_card_axis_label(value), fill="#748593", font=font(16, False))
+    if not is_multi:
+        for index, label in enumerate(date_labels):
+            if label:
+                draw.text((chart_left - 24 + index * 120, chart_top + chart_height + 16), label, fill="#526472", font=font(16, False))
 
-    yes_points = chart_points(yes_values, chart_left, chart_top, chart_width, chart_height)
-    no_points = chart_points(no_values, chart_left, chart_top, chart_width, chart_height)
-    draw_line(no_points, "#ff4d5a", width=4)
-    draw_line(yes_points, "#2d9cff", width=4)
-    for points, outer, inner in ((yes_points, "#174268", "#2d9cff"), (no_points, "#4a1e28", "#ff4d5a")):
+    dot_outer, dot_inner = (10, 5) if is_multi else (15, 6)
+    for item in reversed(series):
+        points = chart_points(item["values"], chart_left, chart_top, chart_width, chart_height)
+        draw_line(points, item["color"], width=4)
+    for item in series:
+        points = chart_points(item["values"], chart_left, chart_top, chart_width, chart_height)
         x, y = points[-1]
-        draw.ellipse((x - 15, y - 15, x + 15, y + 15), fill=outer)
-        draw.ellipse((x - 6, y - 6, x + 6, y + 6), fill=inner)
+        draw.ellipse((x - dot_outer, y - dot_outer, x + dot_outer, y + dot_outer), fill=darken_hex(item["color"]))
+        draw.ellipse((x - dot_inner, y - dot_inner, x + dot_inner, y + dot_inner), fill=item["color"])
 
-    row_y = chart_top + chart_height + 30
-    for label, color, pct in (("Yes", "#2d9cff", yes), ("No", "#ff4d5a", no)):
-        draw.ellipse((left, row_y + 8, left + 10, row_y + 18), fill=color)
-        draw.text((left + 22, row_y), label, fill="#9fb0bd", font=font(23, False))
-        pct_text = f"{pct}%"
-        draw.text((right - draw.textlength(pct_text, font=font(25, True)), row_y - 1), pct_text, fill="#f4f7fa", font=font(25, True))
-        row_y += 38
+    row_step = 38 if len(series) <= 2 else 24
+    label_font = font(23 if len(series) <= 2 else 18, False)
+    pct_font = font(25 if len(series) <= 2 else 20, True)
+    row_y = chart_top + chart_height + (30 if len(series) <= 2 else 16)
+    for item in series:
+        draw.ellipse((left, row_y + 7, left + 10, row_y + 17), fill=item["color"])
+        label_text = truncate(draw, png_safe_label(item["label"]), (right - left) - 110, label_font)
+        draw.text((left + 22, row_y), label_text, fill="#9fb0bd", font=label_font)
+        pct_text = f"{item['pct']}%"
+        draw.text((right - draw.textlength(pct_text, font=pct_font), row_y - 2), pct_text, fill="#f4f7fa", font=pct_font)
+        row_y += row_step
 
     button_y, button_h, gap = card_y + card_h - 54, 44, 12
     line_y = button_y - 36
@@ -2514,13 +2614,18 @@ def market_share_card_png(market_id: str, request: Request) -> Response:
     close_text = f"Closes {fmt_card_date(market.get('closesAt'))}"
     draw.text((right - draw.textlength(close_text, font=font(20, False)), foot_y), close_text, fill="#8fa0ad", font=font(20, False))
 
-    button_w = (card_w - pad * 2 - gap) // 2
-    draw.rounded_rectangle((left, button_y, left + button_w, button_y + button_h), radius=12, fill="#0b2942")
-    draw.rounded_rectangle((left + button_w + gap, button_y, right, button_y + button_h), radius=12, fill="#321c24")
-    yes_btn = f"Yes {yes}¢"
-    no_btn = f"No {no}¢"
-    draw.text((left + button_w / 2 - draw.textlength(yes_btn, font=font(20, True)) / 2, button_y + 12), yes_btn, fill="#145ca8", font=font(20, True))
-    draw.text((left + button_w + gap + button_w / 2 - draw.textlength(no_btn, font=font(20, True)) / 2, button_y + 12), no_btn, fill="#ff4d5a", font=font(20, True))
+    if len(series) <= 2:
+        button_w = (card_w - pad * 2 - gap) // 2
+        draw.rounded_rectangle((left, button_y, left + button_w, button_y + button_h), radius=12, fill="#0b2942")
+        draw.rounded_rectangle((left + button_w + gap, button_y, right, button_y + button_h), radius=12, fill="#321c24")
+        yes_btn = f"Yes {series[0]['pct']}¢"
+        no_btn = f"No {series[1]['pct']}¢"
+        draw.text((left + button_w / 2 - draw.textlength(yes_btn, font=font(20, True)) / 2, button_y + 12), yes_btn, fill="#145ca8", font=font(20, True))
+        draw.text((left + button_w + gap + button_w / 2 - draw.textlength(no_btn, font=font(20, True)) / 2, button_y + 12), no_btn, fill="#ff4d5a", font=font(20, True))
+    else:
+        draw.rounded_rectangle((left, button_y, right, button_y + button_h), radius=12, fill="#145ca8")
+        cta = "Trade on probable.fun"
+        draw.text((left + (right - left) / 2 - draw.textlength(cta, font=font(20, True)) / 2, button_y + 12), cta, fill="#fff", font=font(20, True))
 
     output = io.BytesIO()
     image.save(output, format="PNG")
