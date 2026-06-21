@@ -1254,7 +1254,7 @@ async function onGlobalClick(e) {
         return;
       }
       const group = findGroupForMarket(mid);
-      if (group && !group.members?.includes(authDisplayName())) {
+      if (group && !groupHasCurrentMember(group)) {
         await joinSharedMarketAndOpen(mid, side, state.trade.mode);
         return;
       }
@@ -2654,6 +2654,25 @@ async function joinCurrentInvite() {
     toast("Sign in to join this group.");
     return;
   }
+  const previewGroupId = state.invitePreview?.groupId || state.invitePreview?.group_id;
+  const existingGroup = previewGroupId ? state.groups.find(group => group.id === previewGroupId) : null;
+  const existingMember = existingGroup ? memberAliasForGroup(existingGroup) : null;
+  if (existingGroup && existingMember) {
+    state.currentGroupId = existingGroup.id;
+    state.activeMember = existingMember;
+    state.shell = "app";
+    state.view = "dashboard";
+    state.inviteToken = null;
+    state.invitePreview = null;
+    state.inviteError = "";
+    localStorage.setItem("probable_user", state.activeMember);
+    localStorage.setItem("probable_groupId", state.currentGroupId || "");
+    routeToApp({ replace: true });
+    normalizeSelection();
+    render();
+    toast("Opened group.");
+    return;
+  }
   try {
     const data = await api(`/api/invites/${encodeURIComponent(token)}/join`, {
       method: "POST",
@@ -2661,7 +2680,7 @@ async function joinCurrentInvite() {
     });
     setGroups(data.groups);
     state.currentGroupId = data.groupId;
-    state.activeMember = data.memberName || name;
+    state.activeMember = memberAliasForGroup(getCurrentGroup()) || data.memberName || name;
     state.shell = "app";
     state.view = "dashboard";
     state.inviteToken = null;
@@ -2784,12 +2803,13 @@ async function createMarketForGroup(group, payload) {
 
 async function joinGroup(groupId, myName) {
   const existing = state.groups.find(g => g.id === groupId);
-  if (existing?.members.includes(myName)) {
+  const existingMember = existing ? memberAliasForGroup(existing) : null;
+  if (existingMember) {
     state.currentGroupId = groupId;
-    state.activeMember = myName;
+    state.activeMember = existingMember;
     state.shell = "app";
     state.view = "dashboard";
-    localStorage.setItem("probable_user", myName);
+    localStorage.setItem("probable_user", state.activeMember);
     localStorage.setItem("probable_groupId", groupId);
     routeToApp({ replace: true });
     normalizeSelection();
@@ -2803,10 +2823,10 @@ async function joinGroup(groupId, myName) {
     });
     setGroups(data.groups);
     state.currentGroupId = groupId;
-    state.activeMember = myName;
+    state.activeMember = memberAliasForGroup(getCurrentGroup()) || data.memberName || myName;
     state.shell = "app";
     state.view = "dashboard";
-    localStorage.setItem("probable_user", myName);
+    localStorage.setItem("probable_user", state.activeMember);
     localStorage.setItem("probable_groupId", groupId);
     routeToApp({ replace: true });
     normalizeSelection();
@@ -2892,22 +2912,24 @@ async function joinSharedMarketAndOpen(marketId, side = "yes", mode = "buy") {
   if (!group) throw new Error("That market link could not be found.");
   const memberName = authDisplayName();
   if (!memberName) throw new Error("Sign in to trade.");
-  if (!group.members?.includes(memberName)) {
+  let resolvedMember = memberAliasForGroup(group);
+  if (!resolvedMember) {
     const data = await api(`/api/groups/${group.id}/join`, {
       method: "POST",
       body: JSON.stringify({ name: memberName }),
     });
     setGroups(data.groups);
     group = findGroupForMarket(marketId) || group;
+    resolvedMember = memberAliasForGroup(group) || memberName;
   }
   state.currentGroupId = group.id;
-  state.activeMember = memberName;
+  state.activeMember = resolvedMember;
   state.shell = "app";
   state.view = "dashboard";
   state.sharedMarketId = marketId;
   state.trade = { marketId, side, mode };
   state.mobileTradeOpen = true;
-  localStorage.setItem("probable_user", memberName);
+  localStorage.setItem("probable_user", state.activeMember);
   localStorage.setItem("probable_groupId", group.id);
   localStorage.setItem(STORAGE_KEYS.shell, "app");
   routeToMarket(marketId, { replace: true });
@@ -5844,16 +5866,7 @@ function legacyPositionRows(group, market, participant, status) {
 }
 
 function positionOwnerForGroup(group) {
-  const candidates = [
-    state.activeMember,
-    authDisplayName(),
-    state.authUser?.email,
-    localStorage.getItem(STORAGE_KEYS.user),
-  ].filter(Boolean).map(value => String(value).trim());
-  const exact = candidates.find(candidate => group.members?.includes(candidate));
-  if (exact) return exact;
-  const lowerCandidates = new Set(candidates.map(value => value.toLowerCase()));
-  return (group.members ?? []).find(member => lowerCandidates.has(String(member).toLowerCase())) || "";
+  return memberAliasForGroup(group) || "";
 }
 
 function formatShares(value) {
@@ -7000,8 +7013,13 @@ function normalizeSelection() {
     state.currentGroupId = null;
   }
   const group = getCurrentGroup();
-  if (group && (!state.activeMember || !group.members.includes(state.activeMember))) {
-    state.activeMember = memberAliasForGroup(group) ?? (!isLoggedIn() ? group.members[0] ?? null : null);
+  if (group) {
+    const resolved = memberAliasForGroup(group);
+    if (resolved && resolved !== state.activeMember) {
+      state.activeMember = resolved;
+    } else if (!state.activeMember || !group.members.includes(state.activeMember)) {
+      state.activeMember = resolved ?? (!isLoggedIn() ? group.members[0] ?? null : null);
+    }
   }
   if (!group && !isLoggedIn()) {
     state.activeMember = null;
@@ -7009,20 +7027,54 @@ function normalizeSelection() {
 }
 
 function currentMemberAliases() {
-  return [
-    state.activeMember,
-    authDisplayName(),
+  const aliases = [
     state.authUser?.email,
     state.authUser?.phone,
+    authDisplayName(),
     localStorage.getItem("probable_display_name"),
-  ]
+    localStorage.getItem(STORAGE_KEYS.user),
+    state.activeMember,
+  ];
+  const seen = new Set();
+  return aliases
     .map(value => String(value || "").trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter(value => {
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function memberHistoryScore(group, memberName) {
+  const member = String(memberName || "").trim();
+  if (!group || !member) return -1;
+  let score = 0;
+  const balance = Number(group.balances?.[member]);
+  if (Number.isFinite(balance) && Math.abs(balance - DEFAULT_BALANCE) > 0.009) score += 1000 + Math.min(500, Math.abs(balance - DEFAULT_BALANCE) / 100);
+  for (const market of group.markets ?? []) {
+    for (const trade of market.eventTrades ?? []) {
+      if (trade.participant === member) score += 80 + Math.min(40, tradeCashAmount(trade) / 1000);
+    }
+    for (const trade of market.trades ?? []) {
+      if (trade.participant === member) score += 80 + Math.min(40, tradeCashAmount(trade) / 1000);
+    }
+    const positions = market.positions?.[member] ?? {};
+    for (const shares of Object.values(positions)) {
+      if (Number(shares || 0) > 0.000001) score += 60;
+    }
+  }
+  return score;
 }
 
 function memberAliasForGroup(group) {
   const members = new Set((group?.members ?? []).map(member => String(member || "").trim()));
-  return currentMemberAliases().find(alias => members.has(alias)) || null;
+  const matches = currentMemberAliases().filter(alias => members.has(alias));
+  if (!matches.length) return null;
+  return matches
+    .map((alias, index) => ({ alias, index, score: memberHistoryScore(group, alias) }))
+    .sort((a, b) => (b.score - a.score) || (a.index - b.index))[0].alias;
 }
 
 function groupHasCurrentMember(group) {
