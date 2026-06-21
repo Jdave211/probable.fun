@@ -1169,16 +1169,12 @@ async function onGlobalClick(e) {
   const marketShareBtn = e.target.closest("[data-share-market]");
   if (marketShareBtn) {
     openMarketEmbedModal(marketShareBtn.dataset.shareMarket);
+    await copyMarketLink(marketShareBtn.dataset.shareMarket);
     return;
   }
 
   if (e.target.closest("[data-copy-market-link]")) {
     await copyMarketLink();
-    return;
-  }
-
-  if (e.target.closest("[data-whatsapp-market]")) {
-    openWhatsAppShare();
     return;
   }
 
@@ -2530,16 +2526,14 @@ function renderMarketEmbedModal() {
       <div class="embed-share-controls">
         <div class="share-section">
           <p class="eyebrow">Share link</p>
-          <h3>Market link with chart preview</h3>
-          <p class="muted">Best for WhatsApp, iMessage, X, and anywhere that unfurls Open Graph cards.</p>
+          <h3>Share this market</h3>
           <div class="invite-link-box">
             <span>${esc(link)}</span>
             <button type="button" data-copy-market-link>Copy</button>
           </div>
           <div class="share-action-grid">
-            ${navigator.share ? `<button class="btn btn-primary" type="button" data-native-share-market>Share link</button>` : ""}
-            <button class="btn btn-ghost" type="button" data-copy-market-link>Copy link</button>
-            <button class="btn btn-ghost" type="button" data-whatsapp-market>WhatsApp</button>
+            <button class="btn btn-primary" type="button" data-copy-market-link>Copy link</button>
+            ${navigator.share ? `<button class="btn btn-ghost" type="button" data-native-share-market>Share</button>` : ""}
           </div>
         </div>
 
@@ -2565,8 +2559,8 @@ function embedOptionHtml(key, label) {
   return `<label><input type="checkbox" data-embed-option="${key}" ${state.embedModal[key] ? "checked" : ""}/> <span>${label}</span></label>`;
 }
 
-async function copyMarketLink() {
-  const market = findMarket(state.embedModal.marketId);
+async function copyMarketLink(marketId = state.embedModal.marketId) {
+  const market = findMarket(marketId);
   if (!market) return;
   const link = marketUrl(market.id);
   try {
@@ -2575,13 +2569,6 @@ async function copyMarketLink() {
   } catch {
     toast(link);
   }
-}
-
-function openWhatsAppShare() {
-  const market = findMarket(state.embedModal.marketId);
-  if (!market) return;
-  const text = `${marketShareText(market)} ${marketUrl(market.id)}`;
-  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
 }
 
 async function copyMarketEmbedCode() {
