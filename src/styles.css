@@ -5214,6 +5214,23 @@ html {
 @media (max-width: 900px) {
   .topnav { align-items: flex-start; flex-wrap: wrap; }
   .nav-right { width: 100%; justify-content: flex-start; overflow-x: auto; }
+  .account-popover {
+    position: fixed;
+    top: 96px;
+    right: 16px;
+    z-index: 120;
+    width: min(230px, calc(100vw - 24px));
+    border-radius: 14px;
+    box-shadow: 0 18px 54px rgba(0, 0, 0, 0.62);
+  }
+  .account-popover button {
+    min-height: 46px;
+    height: auto;
+    font-size: 0.92rem;
+  }
+  .account-popover-name {
+    min-height: 48px;
+  }
   .dashboard-layout, .quick-panels { grid-template-columns: 1fr; }
   .side-panel { position: static; }
   .focused-market-stage {
@@ -5470,21 +5487,9 @@ html {
     height: 32px;
   }
   .account-popover {
-    position: fixed;
     top: 54px;
     right: 10px;
-    z-index: 120;
     width: min(230px, calc(100vw - 20px));
-    border-radius: 14px;
-    box-shadow: 0 18px 54px rgba(0, 0, 0, 0.62);
-  }
-  .account-popover button {
-    min-height: 46px;
-    height: auto;
-    font-size: 0.92rem;
-  }
-  .account-popover-name {
-    min-height: 48px;
   }
   .leader-profile-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
