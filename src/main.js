@@ -3781,6 +3781,7 @@ function eventCard(event) {
     : event.markets.some(m => m.status === "open")
       ? "open"
       : "closed";
+  const resolvedOutcome = status === "resolved" ? eventResolvedOutcome(event) : null;
   const visibleMarkets = expanded ? event.markets : event.markets.slice(0, 2);
   const hiddenCount = Math.max(0, event.markets.length - visibleMarkets.length);
   const rows = visibleMarkets.map(market => eventOutcomeRow(market, event)).join("");
@@ -3808,7 +3809,7 @@ function eventCard(event) {
         ) : ""}
         ${expanded ? eventDetailStrip(event, status) : ""}
         <div class="event-card-foot">
-          <span>${compactMoney(event.volume)} Vol.</span>
+          <span>${resolvedOutcome ? `Winner: ${esc(resolvedOutcome.label)}` : `${compactMoney(event.volume)} Vol.`}</span>
           <span class="event-card-creator">by ${esc(eventCreatorLabel(event))}</span>
         </div>
       </div>
@@ -3818,6 +3819,17 @@ function eventCard(event) {
 
 function eventCreatorLabel(event) {
   return event?.creator || getCurrentGroup()?.members?.[0] || "unknown";
+}
+
+function eventResolvedOutcome(event) {
+  const market = event?.markets?.[0];
+  const outcome = event?.outcome || market?.outcome || "";
+  if (!market || !outcome) return null;
+  return {
+    id: outcome,
+    label: resolutionOutcomeLabel(market, outcome),
+    cls: resolutionOutcomeClass(market, outcome),
+  };
 }
 
 function eventDetailStrip(event, status) {
@@ -3850,8 +3862,14 @@ function eventOutcomeRow(market, event) {
   const noButtonPct = binary
     ? Math.round(displayedEventProbability(noButtonMarket || market, event))
     : 100 - yesButtonPct;
+  const resolvedOutcome = eventResolvedOutcome(event);
+  const rowOutcomeId = market.outcomeId || binaryOutcomeForSide(market, "yes")?.id || market.id;
+  const rowIsWinner = Boolean(resolvedOutcome) && (
+    resolvedOutcome.id === rowOutcomeId
+    || resolvedOutcome.label.toLowerCase() === option.toLowerCase()
+  );
   return `
-    <div class="event-outcome-row" data-market-id="${tradeTarget.marketId}">
+    <div class="event-outcome-row ${market.status === "resolved" ? (rowIsWinner ? "is-winner" : "is-loser") : ""}" data-market-id="${tradeTarget.marketId}">
       <div class="event-outcome-main">
         <span class="event-outcome-name">${esc(option)}</span>
         <strong>${yesPct}%</strong>
@@ -3860,7 +3878,9 @@ function eventOutcomeRow(market, event) {
         <div class="event-trade-actions">
           <button class="event-side yes" type="button" data-buy="yes" aria-label="Buy YES on ${option} at ${yesButtonPct} cents"><span>Yes</span><em>${yesButtonPct}¢</em></button>
           <button class="event-side no" type="button" data-buy="no" aria-label="Buy NO on ${option} at ${noButtonPct} cents"><span>No</span><em>${noButtonPct}¢</em></button>
-        </div>` : statusBadge(market)}
+        </div>` : market.status === "resolved"
+          ? `<span class="event-result-pill ${rowIsWinner ? "winner" : "lost"}">${rowIsWinner ? "Winner" : "Lost"}</span>`
+          : statusBadge(market)}
     </div>`;
 }
 

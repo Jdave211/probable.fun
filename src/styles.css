@@ -2191,6 +2191,13 @@ button { color: inherit; }
   gap: 9px;
   align-items: center;
 }
+.event-outcome-row.is-winner {
+  border-radius: 7px;
+  background: rgba(20, 92, 168, 0.12);
+}
+.event-outcome-row.is-loser {
+  opacity: 0.72;
+}
 .event-outcome-main {
   min-width: 0;
   display: grid;
@@ -2256,6 +2263,24 @@ button { color: inherit; }
 .event-side.no {
   background: rgba(239, 68, 68, 0.17);
   color: #ff4e57;
+}
+.event-result-pill {
+  justify-self: end;
+  border-radius: 5px;
+  padding: 5px 7px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.62rem;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.event-result-pill.winner {
+  background: rgba(20, 92, 168, 0.26);
+  color: #58aefc;
+}
+.event-result-pill.lost {
+  background: rgba(157, 171, 181, 0.11);
+  color: var(--text-3);
 }
 .event-more-row {
   height: 28px;
