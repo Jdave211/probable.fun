@@ -63,7 +63,7 @@ button { color: inherit; }
   align-items: center;
   gap: 14px;
   padding: 10px 20px;
-  overflow: hidden;
+  overflow: visible;
   background: rgba(16, 20, 23, 0.94);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(14px);
@@ -5468,6 +5468,23 @@ html {
   .account-avatar {
     width: 32px;
     height: 32px;
+  }
+  .account-popover {
+    position: fixed;
+    top: 54px;
+    right: 10px;
+    z-index: 120;
+    width: min(230px, calc(100vw - 20px));
+    border-radius: 14px;
+    box-shadow: 0 18px 54px rgba(0, 0, 0, 0.62);
+  }
+  .account-popover button {
+    min-height: 46px;
+    height: auto;
+    font-size: 0.92rem;
+  }
+  .account-popover-name {
+    min-height: 48px;
   }
   .leader-profile-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
