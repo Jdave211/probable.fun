@@ -5019,7 +5019,7 @@ function renderPositions() {
     <section class="positions-page probable-portfolio-page">
       <div class="portfolio-topbar motion-item">
         <div>
-          <p class="eyebrow">My Portfolio</p>
+          <p class="eyebrow">${snapshot.scopeEmoji ? `${esc(snapshot.scopeEmoji)} ` : ""}${esc(snapshot.scopeName)} Portfolio</p>
           <h1>${money(snapshot.portfolioMark)}</h1>
           <span class="portfolio-delta ${deltaClass}">${deltaLabel} all time</span>
         </div>
@@ -5042,7 +5042,9 @@ function renderPositions() {
 }
 
 function portfolioSnapshot() {
-  const groups = state.groups
+  const currentGroup = getCurrentGroup();
+  const sourceGroups = currentGroup ? [currentGroup] : state.groups;
+  const groups = sourceGroups
     .map(group => {
       const owner = positionOwnerForGroup(group);
       const open = positionRowsForGroup(group, "open", owner);
@@ -5073,6 +5075,8 @@ function portfolioSnapshot() {
 
   return {
     groups,
+    scopeName: currentGroup?.name || "All groups",
+    scopeEmoji: currentGroup?.emoji || "",
     cash,
     openCashOutValue,
     openMarkValue,
@@ -5153,6 +5157,7 @@ function portfolioActivityForGroup(group, participant) {
           groupName: group.name,
           groupEmoji: group.emoji,
           title: sampleEventTitle(market),
+          imageUrl: market.imageUrl || "",
           outcomeTitle: trade.outcomeTitle || marketOptionTitleForOutcome(market, trade.outcomeId),
           action: trade.action || "buy",
           amount: Number(trade.amount || trade.cashAmount || 0),
@@ -5166,6 +5171,7 @@ function portfolioActivityForGroup(group, participant) {
           groupName: group.name,
           groupEmoji: group.emoji,
           title: sampleEventTitle(market),
+          imageUrl: market.imageUrl || "",
           outcomeTitle: winner,
           action: "resolved",
           amount: 0,
@@ -5181,6 +5187,7 @@ function portfolioActivityForGroup(group, participant) {
         groupName: group.name,
         groupEmoji: group.emoji,
         title: sampleEventTitle(market),
+        imageUrl: market.imageUrl || "",
         outcomeTitle: String(trade.side || "yes").toUpperCase(),
         action: trade.action || "buy",
         amount: Number(trade.amount || 0),
@@ -5210,11 +5217,14 @@ function portfolioHistoryHtml(activity = []) {
             const cls = item.action === "sell" ? "sell" : item.action === "resolved" ? "resolved" : "buy";
             return `
               <button class="portfolio-history-item ${cls}" type="button" data-buy="yes" data-market-id="${esc(item.marketId)}">
-                <span class="portfolio-history-action">${esc(action)}</span>
-                <span class="portfolio-history-main">${esc(item.outcomeTitle || "position")}</span>
-                <span class="portfolio-history-meta">${esc(item.groupEmoji || "")} ${esc(item.title || item.groupName || "Market")}</span>
+                <span class="portfolio-history-thumb ${eventThumbClass(item.title || item.groupName || "Market", item.imageUrl)}" aria-hidden="true">${eventThumb(item.title || item.groupName || "Market", item.imageUrl)}</span>
+                <span class="portfolio-history-kicker">
+                  <em class="portfolio-history-action">${esc(action)}</em>
+                  <time>${esc(fmtShortDate(item.createdAt))}</time>
+                </span>
+                <span class="portfolio-history-main">${esc(item.title || item.groupName || "Market")}</span>
+                <span class="portfolio-history-meta">${esc(item.outcomeTitle || "position")}</span>
                 <strong>${item.action === "resolved" ? "settled" : money(item.amount)}</strong>
-                <time>${esc(fmtShortDate(item.createdAt))}</time>
               </button>`;
           }).join("")}
         </div>

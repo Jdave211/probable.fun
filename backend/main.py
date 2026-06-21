@@ -702,9 +702,20 @@ def assemble_group(g: dict) -> dict:
     members_raw = sorted(g.pop("group_members", []), key=lambda x: x.get("joined_at") or "")
     events_raw = sorted(g.pop("market_events", []), key=lambda x: x.get("created_at") or "", reverse=True)
     markets_raw = sorted(g.pop("markets", []), key=lambda x: x.get("created_at") or "", reverse=True)
+    migrated_legacy_ids = {
+        outcome.get("legacy_market_id")
+        for event in events_raw
+        for outcome in event.get("market_outcomes", [])
+        if outcome.get("legacy_market_id")
+    }
     event_markets = []
     for event in events_raw:
         event_markets.extend(assemble_event_markets(event))
+    legacy_markets = [
+        assemble_market(market)
+        for market in markets_raw
+        if market.get("id") not in migrated_legacy_ids
+    ]
     return {
         "id":        g["id"],
         "name":      g["name"],
@@ -713,7 +724,7 @@ def assemble_group(g: dict) -> dict:
         "createdAt": g["created_at"],
         "members":   [m["name"] for m in members_raw],
         "balances":  {m["name"]: m["balance"] for m in members_raw},
-        "markets":   event_markets or [assemble_market(m) for m in markets_raw],
+        "markets":   [*event_markets, *legacy_markets],
     }
 
 
