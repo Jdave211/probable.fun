@@ -164,8 +164,6 @@ def normalize_outcomes(values: list[str] | None) -> list[str]:
         cleaned = ["Yes", "No"]
     if len(cleaned) < 2:
         raise HTTPException(400, "Add at least two predictions")
-    if len(cleaned) > 8:
-        raise HTTPException(400, "Use 8 predictions or fewer")
     weak = {"option", "prediction", "outcome", "team", "player", "tbd", "n/a", "na"}
     if any(label.lower() in weak for label in cleaned):
         raise HTTPException(400, "Use specific prediction labels")

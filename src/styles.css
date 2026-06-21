@@ -4966,6 +4966,21 @@ button { color: inherit; }
   text-align: right;
   overflow-wrap: anywhere;
 }
+.market-review-outcomes {
+  min-width: 0;
+  display: grid;
+  justify-items: end;
+  gap: 7px;
+}
+.market-review-outcomes strong {
+  text-align: right;
+}
+.market-review-outcome-list {
+  justify-content: flex-end;
+  max-height: 118px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
 .market-review-slug {
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.78rem;
@@ -5991,6 +6006,15 @@ html {
   .market-review-summary strong,
   .market-review-row strong {
     text-align: left;
+  }
+  .market-review-outcomes {
+    justify-items: start;
+  }
+  .market-review-outcomes strong {
+    text-align: left;
+  }
+  .market-review-outcome-list {
+    justify-content: flex-start;
   }
   .prediction-builder-head {
     grid-template-columns: 1fr;

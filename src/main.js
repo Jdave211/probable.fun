@@ -2052,6 +2052,17 @@ function outcomePreviewHtml(outcomes) {
   return list.map(outcome => `<span>${escapeHtml(outcome)}</span>`).join("");
 }
 
+function outcomeReviewHtml(outcomes) {
+  const list = outcomes.length ? outcomes : ["Yes", "No"];
+  return `
+    <div class="market-review-outcomes">
+      <strong>${list.length} outcome${list.length === 1 ? "" : "s"}</strong>
+      <div class="prediction-chip-preview market-review-outcome-list">
+        ${outcomePreviewHtml(list)}
+      </div>
+    </div>`;
+}
+
 function updateOutcomePreviews(form = dom.marketForm) {
   const outcomes = parseOutcomeOptions(form.querySelector("[name=outcomes]")?.value ?? "");
   form.querySelectorAll("[data-outcome-preview]").forEach(target => {
@@ -2078,7 +2089,7 @@ function updateMarketReview(form = dom.marketForm) {
       </div>
       <div>
         <span>Predictions</span>
-        <strong>${outcomes.map(escapeHtml).join(" / ")}</strong>
+        ${outcomeReviewHtml(outcomes)}
       </div>
       <div>
         <span>Maturity</span>
@@ -2171,8 +2182,7 @@ function parseOutcomeOptions(value) {
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
-    })
-    .slice(0, 8);
+    });
 }
 
 function storePendingWelcomeMarket(payload) {
