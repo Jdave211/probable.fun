@@ -416,8 +416,8 @@ BEGIN
     RAISE EXCEPTION 'Already resolved';
   END IF;
 
-  IF v_event.status <> 'closed' THEN
-    RAISE EXCEPTION 'Market must be closed before resolution';
+  IF v_event.status NOT IN ('open', 'closed') THEN
+    RAISE EXCEPTION 'Market must be open or closed before resolution';
   END IF;
 
   SELECT * INTO v_outcome

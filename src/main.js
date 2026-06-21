@@ -5082,8 +5082,8 @@ function renderAdminVerification() {
       <div class="admin-head motion-item">
         <div>
           <p class="eyebrow">Manual verification</p>
-          <h1>Resolve closed markets</h1>
-          <p>Use this when you want to manually settle markets at close. Pick the winning outcome, optionally add reasoning, and payouts run immediately.</p>
+          <h1>Resolve markets</h1>
+          <p>Settle a market as soon as the outcome is known. Live overrides close trading immediately, lock the winner, and pay out in one step.</p>
         </div>
         <div class="admin-actions">
           <span class="admin-count">${total} pending</span>
@@ -5115,8 +5115,13 @@ function adminVerificationQueue() {
   return state.groups
     .map(group => {
       const events = marketEvents(group.markets ?? [])
-        .filter(event => eventStatus(event) === "closed")
-        .sort((a, b) => eventTime(a.closesAt) - eventTime(b.closesAt));
+        .filter(event => eventStatus(event) !== "resolved")
+        .sort((a, b) => {
+          const aStatus = eventStatus(a);
+          const bStatus = eventStatus(b);
+          if (aStatus !== bStatus) return aStatus === "closed" ? -1 : 1;
+          return eventTime(a.closesAt) - eventTime(b.closesAt);
+        });
       return { group, events };
     })
     .filter(item => item.events.length);
@@ -5152,16 +5157,20 @@ function adminEventCard(group, event) {
   const edgeCases = market.edgeCases || event.edgeCases || "";
   const rules = market.description || event.description || "No resolution rules saved.";
   const pending = state.pendingUi.resolveMarketId === market.id;
+  const status = eventStatus(event);
+  const isLive = status === "open";
+  const closeLabel = isLive ? `Live override · closes ${fmtDate(event.closesAt)}` : fmtClose({ closesAt: event.closesAt, status: "closed" });
   return `
     <article class="admin-resolve-card" data-market-id="${esc(market.id)}">
       <div class="admin-card-main">
         <div class="admin-card-title-row">
           <div class="event-thumb ${eventThumbClass(event.title, event.imageUrl)} admin-card-thumb" aria-hidden="true">${eventThumb(event.title, event.imageUrl)}</div>
           <div>
-            <p class="admin-card-kicker">${esc(group.name)} · ${fmtClose({ closesAt: event.closesAt, status: "closed" })}</p>
+            <p class="admin-card-kicker ${isLive ? "is-live" : ""}">${esc(group.name)} · ${esc(closeLabel)}</p>
             <h3>${esc(event.title)}</h3>
           </div>
         </div>
+        ${isLive ? `<div class="admin-live-note">Resolve now only if the result is already knowable. This closes trading immediately.</div>` : ""}
         <div class="admin-rules">
           ${richRulesHtml({ rules, source, edgeCases, compact: true })}
         </div>
@@ -5185,8 +5194,8 @@ function adminEmptyHtml() {
   return `
     <div class="admin-empty motion-item">
       <p class="eyebrow">All clear</p>
-      <h2>No closed markets need verification.</h2>
-      <p>When a market closes, it will appear here until you pick the winning outcome.</p>
+      <h2>No markets need verification.</h2>
+      <p>Open and closed markets appear here until you pick the winning outcome.</p>
       <button class="btn btn-primary btn-sm" type="button" data-go-dashboard>Back to markets</button>
     </div>`;
 }

@@ -2150,8 +2150,6 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
         event, route_outcome = require_event_or_outcome(market_id)
         if event["status"] == "resolved":
             raise HTTPException(400, "Already resolved")
-        if event["status"] != "closed":
-            raise HTTPException(400, "Market must be closed before resolution")
 
         outcomes = db.table("market_outcomes").select("*").eq("event_id", event["id"]).execute().data or []
         wanted = payload.outcome.strip().lower()
@@ -2169,6 +2167,10 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
         note = (payload.reasoning or "").strip()
         if not note:
             note = f"Manually resolved to {outcome['title']}."
+        if event["status"] == "open":
+            # Manual admin override: if an outcome is already knowable before
+            # maturity, close trading immediately and let the settlement RPC pay.
+            db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
         settlement = resolve_event_market_rpc(
             db,
             event["id"],
@@ -2185,8 +2187,6 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
 
     if market["status"] == "resolved":
         raise HTTPException(400, "Already resolved")
-    if market["status"] != "closed":
-        raise HTTPException(400, "Market must be closed before resolution")
 
     legacy_resolver = (payload.resolvedBy or "manual").strip()[:80] or "manual"
     legacy_notes = (payload.reasoning or "").strip()[:1200] or None
