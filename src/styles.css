@@ -1705,6 +1705,64 @@ button { color: inherit; }
   font-size: 0.82rem;
 }
 
+.focused-rules-panel {
+  margin-top: 22px;
+  border-top: 1px solid rgba(157, 171, 181, 0.14);
+  padding-top: 18px;
+}
+
+.focused-rules-panel .resolution-rules {
+  gap: 11px;
+}
+
+.focused-rules-panel .rules-title-row {
+  align-items: end;
+}
+
+.focused-rules-panel .rules-title-row h4 {
+  font-size: 1.02rem;
+}
+
+.focused-rules-panel .rules-title-row span {
+  color: var(--text-3);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+}
+
+.focused-rules-panel .rules-grid {
+  gap: 0;
+  border-top: 1px solid rgba(157, 171, 181, 0.1);
+}
+
+.focused-rules-panel .rules-card {
+  gap: 7px;
+  border: 0;
+  border-bottom: 1px solid rgba(157, 171, 181, 0.1);
+  border-radius: 0;
+  background: transparent;
+  padding: 12px 0;
+}
+
+.focused-rules-panel .rules-card-label {
+  color: var(--text-3);
+  font-size: 0.66rem;
+}
+
+.focused-rules-panel .rules-card li {
+  color: var(--text-2);
+  font-size: 0.86rem;
+  line-height: 1.45;
+  padding-left: 14px;
+}
+
+.focused-rules-panel .rules-card li::before {
+  top: 0.67em;
+  width: 4px;
+  height: 4px;
+  background: rgba(45, 156, 255, 0.82);
+  box-shadow: none;
+}
+
 .resolution-rules {
   display: grid;
   gap: 12px;
@@ -5376,6 +5434,13 @@ button { color: inherit; }
   }
   .market-history-line {
     flex-wrap: wrap;
+  }
+  .focused-rules-panel .rules-grid {
+    grid-template-columns: 1fr;
+  }
+  .focused-rules-panel .rules-card-main,
+  .focused-rules-panel .rules-card-resolved {
+    grid-column: auto;
   }
   .focused-market-stage .trade-panel {
     border-radius: 12px;

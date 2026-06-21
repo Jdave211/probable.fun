@@ -3256,6 +3256,7 @@ function renderFocusedTradeView(group, market, event) {
           </div>
 
           ${marketHistoryPanel(tradeMarket, event)}
+          ${focusedRulesPanel(tradeMarket, event)}
           ${marketParticipants(tradeMarket, event)}
         </section>
 
@@ -4209,6 +4210,25 @@ function marketHistoryRow(trade, market, eventMeta) {
       </div>
       <time>${esc(fmtDate(trade.createdAt))}</time>
     </div>`;
+}
+
+function focusedRulesPanel(market, event) {
+  const source = market.resolutionSource || event?.resolutionSource || "";
+  const edgeCases = market.edgeCases || event?.edgeCases || "";
+  const rules = market.description || event?.description || "Resolution rules were not provided.";
+  const winner = market.status === "resolved" ? resolutionOutcomeLabel(market, market.outcome) : "";
+  return `
+    <section class="focused-rules-panel" data-market-id="${esc(market.id)}">
+      ${richRulesHtml({
+        rules,
+        source,
+        edgeCases,
+        winner,
+        resolvedBy: market.resolvedBy,
+        notes: market.resolutionNotes,
+        resolved: market.status === "resolved",
+      })}
+    </section>`;
 }
 
 function splitRuleSentences(text) {
