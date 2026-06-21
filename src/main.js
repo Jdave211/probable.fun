@@ -5026,8 +5026,11 @@ function renderPositions() {
         <button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back</button>
       </div>
 
-      <div class="portfolio-chart-shell motion-item">
-        ${portfolioChartCardHtml(snapshot)}
+      <div class="portfolio-overview-shell motion-item">
+        <div class="portfolio-chart-shell">
+          ${portfolioChartCardHtml(snapshot)}
+        </div>
+        ${portfolioHistoryHtml(snapshot.activity)}
       </div>
 
       ${visibleGroups.length ? `
@@ -5134,6 +5137,41 @@ function portfolioActivityForGroup(group, participant) {
     }
   }
   return items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+function portfolioHistoryHtml(activity = []) {
+  const visible = activity.slice(0, 8);
+  return `
+    <aside class="portfolio-history-panel" aria-label="Portfolio history">
+      <div class="portfolio-history-head">
+        <div>
+          <p class="eyebrow">History</p>
+          <h2>Recent moves</h2>
+        </div>
+        <span>${activity.length ? `${activity.length} total` : "No trades"}</span>
+      </div>
+      ${visible.length ? `
+        <div class="portfolio-history-list">
+          ${visible.map(item => {
+            const action = item.action === "sell" ? "Sold" : item.action === "resolved" ? "Resolved" : "Bought";
+            const cls = item.action === "sell" ? "sell" : item.action === "resolved" ? "resolved" : "buy";
+            return `
+              <button class="portfolio-history-item ${cls}" type="button" data-buy="yes" data-market-id="${esc(item.marketId)}">
+                <span class="portfolio-history-action">${esc(action)}</span>
+                <span class="portfolio-history-main">${esc(item.outcomeTitle || "position")}</span>
+                <span class="portfolio-history-meta">${esc(item.groupEmoji || "")} ${esc(item.title || item.groupName || "Market")}</span>
+                <strong>${item.action === "resolved" ? "settled" : money(item.amount)}</strong>
+                <time>${esc(fmtShortDate(item.createdAt))}</time>
+              </button>`;
+          }).join("")}
+        </div>
+      ` : `
+        <div class="portfolio-history-empty">
+          <strong>No history yet</strong>
+          <span>Your buys, sells, and settlements will show here.</span>
+        </div>
+      `}
+    </aside>`;
 }
 
 function portfolioChartCardHtml(snapshot = portfolioSnapshot()) {
