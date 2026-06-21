@@ -1406,6 +1406,21 @@ function onGlobalChange(e) {
     handleMarketImageInput(e.target);
     return;
   }
+  const portfolioGroupSelect = e.target.closest("[data-portfolio-group-select]");
+  if (portfolioGroupSelect) {
+    const gid = portfolioGroupSelect.value;
+    if (!gid || !state.groups.some(group => group.id === gid)) return;
+    state.currentGroupId = gid;
+    state.shell = "app";
+    state.view = "positions";
+    state.trade = emptyTrade();
+    state.sharedMarketId = null;
+    localStorage.setItem("probable_groupId", gid);
+    routeToPositions({ replace: true });
+    normalizeSelection();
+    render();
+    return;
+  }
   const sortControl = e.target.closest("[data-market-sort]");
   if (!sortControl) return;
   state.marketSort = sortControl.value || "trending";
@@ -5023,7 +5038,10 @@ function renderPositions() {
           <h1>${money(snapshot.portfolioMark)}</h1>
           <span class="portfolio-delta ${deltaClass}">${deltaLabel} all time</span>
         </div>
-        <button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back</button>
+        <div class="portfolio-topbar-actions">
+          ${portfolioGroupSwitcherHtml(snapshot)}
+          <button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back</button>
+        </div>
       </div>
 
       <div class="portfolio-overview-shell motion-item">
@@ -5039,6 +5057,22 @@ function renderPositions() {
         </div>
       ` : positionsEmptyHtml(status)}
     </section>`;
+}
+
+function portfolioGroupSwitcherHtml(snapshot = portfolioSnapshot()) {
+  const groups = visibleNavGroups();
+  if (!groups.length) return "";
+  if (groups.length === 1) {
+    return `<span class="portfolio-group-static">${esc(groups[0].emoji || "")} ${esc(groups[0].name || snapshot.scopeName || "Group")}</span>`;
+  }
+  const activeId = getCurrentGroup()?.id || groups[0].id;
+  return `
+    <label class="portfolio-group-switcher">
+      <span>Viewing</span>
+      <select data-portfolio-group-select aria-label="Portfolio group">
+        ${groups.map(group => `<option value="${esc(group.id)}" ${group.id === activeId ? "selected" : ""}>${esc(`${group.emoji ? `${group.emoji} ` : ""}${group.name}`)}</option>`).join("")}
+      </select>
+    </label>`;
 }
 
 function portfolioSnapshot() {

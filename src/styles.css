@@ -363,6 +363,62 @@ button { color: inherit; }
   gap: 18px;
 }
 
+.portfolio-topbar-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.portfolio-group-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  color: var(--text-3);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.portfolio-group-switcher select {
+  appearance: none;
+  min-width: 156px;
+  max-width: 230px;
+  height: 36px;
+  border: 1px solid rgba(157, 171, 181, 0.18);
+  border-radius: 999px;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--text-2) 50%) calc(100% - 15px) 52% / 5px 5px no-repeat,
+    linear-gradient(135deg, var(--text-2) 50%, transparent 50%) calc(100% - 10px) 52% / 5px 5px no-repeat,
+    rgba(17, 24, 28, 0.82);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: 0;
+  outline: none;
+  padding: 0 28px 0 12px;
+  text-transform: none;
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.portfolio-group-switcher select:hover,
+.portfolio-group-switcher select:focus-visible {
+  border-color: rgba(45, 156, 255, 0.48);
+  box-shadow: 0 0 0 3px rgba(45, 156, 255, 0.12);
+}
+
+.portfolio-group-static {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  color: var(--text-2);
+  font-size: 0.84rem;
+  font-weight: 850;
+}
+
 .portfolio-topbar h1 {
   color: var(--text);
   font-size: clamp(2.35rem, 7vw, 4.6rem);
@@ -5358,6 +5414,9 @@ button { color: inherit; }
     align-items: stretch;
     flex-direction: column;
   }
+  .portfolio-topbar-actions {
+    justify-content: space-between;
+  }
   .portfolio-overview-shell {
     grid-template-columns: 1fr;
     gap: 14px;
@@ -5381,6 +5440,20 @@ button { color: inherit; }
   }
   .portfolio-topbar h1 {
     font-size: clamp(2.55rem, 18vw, 4rem);
+  }
+  .portfolio-topbar-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .portfolio-group-switcher {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+  }
+  .portfolio-group-switcher select,
+  .portfolio-topbar-actions .btn {
+    width: 100%;
   }
   .portfolio-chart-card {
     border-radius: 26px;
