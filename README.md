@@ -28,11 +28,14 @@ Copy `.env.example` to `.env.local` for local development. The backend should us
 ```bash
 VITE_SUPABASE_URL=...
 VITE_SUPABASE_PUBLISHABLE_KEY=...
+VITE_API_BASE_URL=https://your-render-service.onrender.com
+VITE_PUBLIC_APP_BASE_URL=https://your-domain.com
+VITE_PUBLIC_SHARE_BASE_URL=https://your-render-service.onrender.com
 SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
 ALLOWED_ORIGINS=https://your-domain.com
 FRONTEND_BASE_URL=https://your-domain.com
-PUBLIC_SHARE_BASE_URL=https://api.your-domain.com
+PUBLIC_SHARE_BASE_URL=https://your-render-service.onrender.com
 ```
 
 Auth uses Supabase Auth on the frontend. Enable the Google provider for Google sign-in and add your local and deployed app URLs to the Supabase Auth redirect URL allow list.
@@ -49,6 +52,16 @@ AI oracle resolution uses `ANTHROPIC_API_KEY`. `BRAVE_SEARCH_API_KEY` is optiona
 - Set `FRONTEND_BASE_URL` to the public app URL.
 - Set `PUBLIC_SHARE_BASE_URL` to the public backend URL so Open Graph images resolve on WhatsApp/iMessage.
 - Before public launch, do not leave Supabase tables open to the anon role. Once the backend has `SUPABASE_SERVICE_ROLE_KEY`, run `backend/schema_public_lockdown.sql` in Supabase SQL editor so browser clients cannot write directly to tables/RPCs.
+
+## Vercel Frontend Notes
+
+- Link the GitHub repo to Vercel with framework preset `Vite`.
+- Build command: `npm run build`.
+- Output directory: `dist`.
+- Set `VITE_API_BASE_URL` to the Render backend URL. Do not leave it blank in production.
+- Set `VITE_PUBLIC_APP_BASE_URL` to the frontend URL, for example `https://probable.live`.
+- Set `VITE_PUBLIC_SHARE_BASE_URL` to the Render backend URL so shared market links and preview images resolve.
+- `vercel.json` rewrites all routes to `index.html` so refreshes on `/market/...`, `/portfolio`, and invite links work.
 
 ## Local Dev
 

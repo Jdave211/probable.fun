@@ -297,6 +297,7 @@ function roundRect(ctx, x, y, width, height, radius) {
 Chart.register(CategoryScale, LinearScale, LineController, LineElement, PointElement, Filler, Tooltip, probableCursorShadePlugin, probableChartActiveDotsPlugin, portfolioEndMarkerPlugin);
 
 const API = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+const API_CONFIG_ERROR = "Production API is not configured. Set VITE_API_BASE_URL in Vercel to your Render backend URL.";
 const DEFAULT_BALANCE = 100000;
 const DEFAULT_MARKET_LIQUIDITY = 20000;
 const MARKET_FEE_RATE = 0.015;
@@ -7322,6 +7323,9 @@ function toastSettlement(settlement, fallback = "Market resolved.") {
 }
 
 async function api(path, opts = {}) {
+  if (!API && import.meta.env.PROD && !isLocalHost()) {
+    throw new Error(API_CONFIG_ERROR);
+  }
   const res = await fetch(`${API}${path}`, {
     headers: { "Content-Type": "application/json", ...(opts.headers ?? {}) },
     ...opts,
@@ -7332,6 +7336,10 @@ async function api(path, opts = {}) {
     throw new Error(msg);
   }
   return res.json();
+}
+
+function isLocalHost() {
+  return ["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(location.hostname) || location.hostname.endsWith(".local");
 }
 
 function esc(v) {
