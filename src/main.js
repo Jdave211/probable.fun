@@ -3192,9 +3192,9 @@ function renderFocusedTradeView(group, market, event) {
       <div class="focused-market-nav motion-item">
         <button class="focused-back" type="button" data-close-trade>&larr; Back to markets</button>
         <div class="focused-market-nav-actions">
-          <p>${esc(group.emoji)} ${esc(group.name)}</p>
-          <button class="icon-btn market-page-share" type="button" data-share-market="${esc(market.id)}" aria-label="Share market">
-            ${shareIconSvg()}
+          <button class="market-page-share" type="button" data-share-market="${esc(market.id)}" aria-label="Share market">
+            ${shareArrowIconSvg()}
+            <span>Share</span>
           </button>
         </div>
       </div>
