@@ -346,6 +346,7 @@ const state = {
   expandedParticipants: new Set(),
   marketSort: "trending",
   marketStatus: "open",
+  mobileTradeOpen: false,
   marketFormStep: 1,
   marketImageDataUrl: "",
   marketImageName: "",
@@ -581,7 +582,6 @@ document.querySelector("#app").innerHTML = `
   </div>
 
   <div class="toast hidden" id="toast"></div>
-  <div class="price-tick-layer" id="priceTickLayer" aria-hidden="true"></div>
 `;
 
 const dom = {
@@ -946,12 +946,6 @@ async function onGlobalClick(e) {
   const accountWasOpen = state.accountMenuOpen;
   if (!e.target.closest("[data-account-menu]")) state.accountMenuOpen = false;
 
-  const simulateBtn = e.target.closest("[data-simulate-market]");
-  if (simulateBtn) {
-    const market = findMarket(simulateBtn.dataset.simulateMarket);
-    if (market) await simulateMarketActivity(market);
-    return;
-  }
 
   const leaderboardModeBtn = e.target.closest("[data-leaderboard-mode]");
   if (leaderboardModeBtn) {
@@ -1284,7 +1278,20 @@ async function onGlobalClick(e) {
     state.trade = emptyTrade();
     state.sharedMarketId = null;
     state.expandedEventKey = null;
+    state.mobileTradeOpen = false;
     routeToApp();
+    render();
+    return;
+  }
+
+  if (e.target.closest("[data-mobile-trade-toggle]")) {
+    state.mobileTradeOpen = true;
+    render();
+    return;
+  }
+
+  if (e.target.closest("[data-mobile-trade-close]")) {
+    state.mobileTradeOpen = false;
     render();
     return;
   }
@@ -1547,147 +1554,6 @@ async function onGlobalSubmit(e) {
     if (state.pendingUi.tradeMarketId === market.id) state.pendingUi.tradeMarketId = null;
     setButtonPending(submit, false);
   }
-}
-
-const SIM_PERSONAS = [
-  { tag: "yolo", pctRange: [0.25, 0.45], bias: "momentum", skipChance: 0 },
-  { tag: "momentum", pctRange: [0.12, 0.22], bias: "momentum", skipChance: 0.1 },
-  { tag: "contrarian", pctRange: [0.1, 0.2], bias: "contrarian", skipChance: 0.1 },
-  { tag: "optimist", pctRange: [0.1, 0.2], bias: "favorite", skipChance: 0.15 },
-  { tag: "pessimist", pctRange: [0.04, 0.1], bias: "underdog", skipChance: 0.35 },
-  { tag: "cautious", pctRange: [0.02, 0.07], bias: "coinflip", skipChance: 0.2 },
-];
-
-const SIM_NAMES = ["Avery", "Jordan", "Casey", "Quinn", "Riley", "Sage", "Drew", "Nico", "Wren", "Hale"];
-
-async function simulateMarketActivity(market) {
-  if (!import.meta.env.DEV) return;
-  if (isSampleMarket(market)) {
-    toast("Sample market only. Create a real market to simulate.");
-    return;
-  }
-  let group = getCurrentGroup();
-  if (!group) {
-    toast("Open a group first.");
-    return;
-  }
-  const button = document.querySelector(`[data-simulate-market="${market.id}"]`);
-  setButtonPending(button, true, "Simulating");
-  try {
-    const shuffledPersonas = [...SIM_PERSONAS].sort(() => Math.random() - 0.5);
-    const botCount = 4 + Math.floor(Math.random() * 3);
-    const bots = shuffledPersonas.slice(0, botCount).map((persona, index) => ({
-      name: `Sim_${randomItem(SIM_NAMES)}${index}`,
-      persona,
-    }));
-
-    for (const bot of bots) {
-      if (group.members.includes(bot.name)) continue;
-      const joined = await api(`/api/groups/${group.id}/join`, {
-        method: "POST",
-        body: JSON.stringify({ name: bot.name }),
-      });
-      setGroups(joined.groups);
-      group = getCurrentGroup();
-    }
-
-    let count = 0;
-    const rounds = 220 + Math.floor(Math.random() * 160);
-    for (let index = 0; index < rounds; index += 1) {
-      group = getCurrentGroup();
-      const liveMarket = findMarket(market.id);
-      if (!group || !liveMarket || liveMarket.status !== "open") break;
-      const liveEvent = findEventForMarket(group, liveMarket);
-      const outcomeMarkets = liveEvent?.markets?.length ? liveEvent.markets : [liveMarket];
-      const leader = outcomeMarkets[0];
-
-      const bot = randomItem(bots);
-      const balance = Number(group?.balances?.[bot.name] ?? 0);
-      if (balance < 50 || Math.random() < bot.persona.skipChance) continue;
-
-      const target = pickSimOutcome(outcomeMarkets, bot.persona.bias);
-      if (!target) continue;
-
-      const [minPct, maxPct] = bot.persona.pctRange;
-      const amount = Math.max(25, Math.min(balance, Math.round(balance * randomBetween(minPct, maxPct))));
-
-      try {
-        const data = await api(`/api/markets/${target.id}/trade`, {
-          method: "POST",
-          body: JSON.stringify({
-            participant: bot.name,
-            side: "yes",
-            amount,
-            action: "buy",
-            outcomeId: target.outcomeId || target.id,
-          }),
-        });
-        setGroups(data.groups);
-        count += 1;
-        spawnPriceTick(amount, !leader || target.id === leader.id);
-      } catch {
-        // A single bot's trade can fail (e.g. per-trade cap); keep the walk going.
-      }
-      if (count > 0 && count % 10 === 0) {
-        render();
-        setButtonPending(document.querySelector(`[data-simulate-market="${market.id}"]`), true, "Simulating");
-      }
-    }
-
-    state.currentGroupId = group.id;
-    normalizeSelection();
-    render();
-    toast(count ? `Simulated ${count} trades across ${bots.length} traders.` : "Could not simulate — market may be closed.");
-  } catch (err) {
-    toast(err.message || "Simulation failed.");
-  } finally {
-    setButtonPending(button, false);
-  }
-}
-
-function pickSimOutcome(outcomeMarkets, bias) {
-  const openOnly = outcomeMarkets.filter(item => item.status === "open");
-  const pool = openOnly.length ? openOnly : outcomeMarkets;
-  if (!pool.length) return null;
-  if (bias === "coinflip") return randomItem(pool);
-  const scored = pool.map(item => {
-    const history = normalizedMarketHistory(item);
-    const last = history.at(-1)?.value ?? Number(item.probability || 0.5) * 100;
-    const prev = history[Math.max(0, history.length - 4)]?.value ?? last;
-    return { market: item, probability: Number(item.probability || 0.5), movement: last - prev };
-  });
-  if (bias === "momentum") {
-    return weightedRandom(scored, item => Math.max(1, item.movement + 5))?.market || randomItem(pool);
-  }
-  if (bias === "favorite") {
-    return weightedRandom(scored, item => Math.max(1, item.probability * 100))?.market || randomItem(pool);
-  }
-  if (bias === "underdog" || bias === "contrarian") {
-    return weightedRandom(scored, item => Math.max(1, (1 - item.probability) * 100))?.market || randomItem(pool);
-  }
-  return randomItem(pool);
-}
-
-function randomBetween(min, max) {
-  return min + Math.random() * (max - min);
-}
-
-function randomItem(items) {
-  if (!items?.length) return null;
-  return items[Math.floor(Math.random() * items.length)];
-}
-
-function weightedRandom(items, weightFn) {
-  if (!items?.length) return null;
-  const weights = items.map(item => Math.max(0, Number(weightFn(item) || 0)));
-  const total = weights.reduce((sum, value) => sum + value, 0);
-  if (total <= 0) return randomItem(items);
-  let cursor = Math.random() * total;
-  for (let index = 0; index < items.length; index += 1) {
-    cursor -= weights[index];
-    if (cursor <= 0) return items[index];
-  }
-  return items.at(-1);
 }
 
 function isLoggedIn() {
@@ -2545,6 +2411,14 @@ function imageUploadIconSvg() {
     </svg>`;
 }
 
+function tradeFabIconSvg() {
+  return `
+    <svg viewBox="0 0 20 20" focusable="false" aria-hidden="true">
+      <path d="M3 13.5 7.8 8.2l3.4 3 5.4-6" />
+      <path d="M12.8 4.6h3.8v3.8" />
+    </svg>`;
+}
+
 function shareIconSvg() {
   return `
     <svg viewBox="0 0 20 20" focusable="false" aria-hidden="true">
@@ -3253,7 +3127,6 @@ function renderFocusedTradeView(group, market, event) {
         <button class="focused-back" type="button" data-close-trade>&larr; Back to markets</button>
         <div class="focused-market-nav-actions">
           <p>${esc(group.emoji)} ${esc(group.name)}</p>
-          ${import.meta.env.DEV && market.status === "open" && !isSampleMarket(market) ? `<button class="btn btn-ghost btn-sm dev-risky-btn" type="button" data-simulate-market="${esc(market.id)}">Simulate traders</button>` : ""}
           <button class="icon-btn market-page-share" type="button" data-share-market="${esc(market.id)}" aria-label="Share market">
             ${shareIconSvg()}
           </button>
@@ -3277,6 +3150,7 @@ function renderFocusedTradeView(group, market, event) {
           <span class="focused-chart-watermark">probable</span>
           <div class="focused-chart-shell">
             <canvas data-event-chart-canvas="${esc(event.key)}" aria-label="${esc(eventTitle)} probability history"></canvas>
+            ${tradeMarket.status === "open" ? `<button class="mobile-trade-fab" type="button" data-mobile-trade-toggle>${tradeFabIconSvg()}<span>Trade</span></button>` : ""}
           </div>
 
           <div class="focused-chart-meta">
@@ -3294,7 +3168,15 @@ function renderFocusedTradeView(group, market, event) {
           ${marketParticipants(tradeMarket, event)}
         </section>
 
-        ${tradeMarket.status === "open" ? tradePanel(tradeMarket, yesPrice, noPrice, event) : `
+        ${tradeMarket.status === "open" ? `
+          <div class="mobile-trade-sheet ${state.mobileTradeOpen ? "open" : ""}">
+            <div class="mobile-trade-sheet-backdrop" data-mobile-trade-close></div>
+            <div class="mobile-trade-sheet-panel">
+              <button class="mobile-trade-sheet-close" type="button" data-mobile-trade-close aria-label="Close">×</button>
+              ${tradePanel(tradeMarket, yesPrice, noPrice, event)}
+            </div>
+          </div>
+        ` : `
           <aside class="trade-panel closed-trade-note">
             <strong>${tradeMarket.status === "resolved" ? "Resolved market" : "Market closed"}</strong>
             <p>Trading is closed for this market.</p>
@@ -5899,22 +5781,6 @@ function tradeInputAmount(input) {
   if (!input) return NaN;
   if (input.dataset.rawAmount) return parseFloat(input.dataset.rawAmount);
   return parseFloat(input.value);
-}
-
-function spawnPriceTick(amount, positive) {
-  const layer = document.querySelector("#priceTickLayer");
-  const chartShell = document.querySelector(".focused-chart-shell");
-  if (!layer || !chartShell) return;
-  const rect = chartShell.getBoundingClientRect();
-  if (!rect.width || !rect.height) return;
-  const el = document.createElement("span");
-  el.className = `price-tick ${positive ? "price-tick-up" : "price-tick-down"}`;
-  el.textContent = `${positive ? "+" : "-"}$${Math.max(1, Math.round(amount))}`;
-  el.style.left = `${rect.left + rect.width * (0.06 + Math.random() * 0.1)}px`;
-  el.style.top = `${rect.bottom - 28}px`;
-  el.style.setProperty("--tick-x", `${20 + Math.random() * 24}px`);
-  layer.appendChild(el);
-  setTimeout(() => el.remove(), 1700);
 }
 
 function slugify(text) {
