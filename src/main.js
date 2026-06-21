@@ -1533,6 +1533,11 @@ async function onGlobalSubmit(e) {
     toast(`${state.activeMember} has ${money(balance)}.`);
     return;
   }
+  if (action === "buy" && amount > maxSingleBuyAmount(market) + 0.000001) {
+    toast(`Max single trade is ${money(maxSingleBuyAmount(market))}. Split it into smaller trades.`);
+    renderTradePreview(market, amount);
+    return;
+  }
   if (action === "sell") {
     const outcomeId = tradeOutcomeId(market, state.trade.side);
     const sellState = sellPreviewForShares(market, outcomeId, rawAmount, state.trade.side);
@@ -4074,7 +4079,8 @@ function tradePanel(market, yesPrice, noPrice, event = null) {
   const activeSellDisabled = mode === "sell" && !sellState.canSellSelected;
   const showMissingSideCopy = mode === "sell" && sellState.anyHeld && sellState.shares <= 0.000001;
   const sellMode = mode === "sell";
-  const max = Math.max(0, sellMode ? sellState.shares : Math.floor(balance || DEFAULT_BALANCE));
+  const buyCap = maxSingleBuyAmount(market);
+  const max = Math.max(0, sellMode ? sellState.shares : Math.floor(Math.min(balance || DEFAULT_BALANCE, buyCap)));
   const inputDisabled = activeSellDisabled || tradePending ? "disabled" : "";
   const submitDisabled = activeSellDisabled || tradePending ? "disabled" : "";
   const yesSellDisabled = tradePending || (mode === "sell" && !tradeSellState(market, "yes").canSellSelected);
@@ -4875,6 +4881,7 @@ function updateTradeSubmitState(market, preview, amount) {
   const input = panel.querySelector(".trade-input");
   const mode = state.trade.mode || "buy";
   const balance = getCurrentGroup()?.balances?.[state.activeMember] ?? 0;
+  const buyCap = maxSingleBuyAmount(market);
   if (state.pendingUi.tradeMarketId === market.id) {
     if (submit) {
       submit.disabled = true;
@@ -4883,16 +4890,23 @@ function updateTradeSubmitState(market, preview, amount) {
     return;
   }
   const insufficientBalance = mode === "buy" && Number(amount || 0) > balance;
-  const shouldDisable = insufficientBalance || (mode === "sell" && (!preview.held || preview.held <= 0 || preview.oversell || !amount || amount > preview.held + 0.000001));
+  const exceedsBuyCap = mode === "buy" && Number(amount || 0) > buyCap + 0.000001;
+  const shouldDisable = insufficientBalance || exceedsBuyCap || (mode === "sell" && (!preview.held || preview.held <= 0 || preview.oversell || !amount || amount > preview.held + 0.000001));
   if (submit) {
     submit.disabled = shouldDisable;
     submit.classList.toggle("disabled", shouldDisable);
+    if (exceedsBuyCap) {
+      submit.textContent = `Max ${money(buyCap)}`;
+    } else if (!state.pendingUi.tradeMarketId) {
+      submit.textContent = `${mode === "sell" ? "Sell" : "Buy"} ${(state.trade.side || "yes").toUpperCase()}`;
+    }
   }
   if (input && mode === "sell" && preview.held > 0) input.dataset.rawMax = formatShareInput(preview.held);
 }
 
 function liquidityGuidance(market, amount, spotPrice, avgPrice, preview = {}) {
   const liquidity = Number(market.liquidity ?? 0);
+  const buyCap = maxSingleBuyAmount(market);
   const balanceLimitPct = amount / DEFAULT_BALANCE;
   const liquidityUse = liquidity > 0 ? amount / liquidity : 1;
   const priceImpact = spotPrice > 0 ? Math.abs(avgPrice - spotPrice) / spotPrice : 0;
@@ -4903,6 +4917,9 @@ function liquidityGuidance(market, amount, spotPrice, avgPrice, preview = {}) {
   if (amount > DEFAULT_BALANCE) {
     return { level: "warn", text: `Above the ${money(DEFAULT_BALANCE)} allowance.` };
   }
+  if ((state.trade.mode || "buy") === "buy" && amount > buyCap + 0.000001) {
+    return { level: "warn", text: `Max single trade is ${money(buyCap)}. Split the order into smaller trades.` };
+  }
   if (priceImpact > 0.35 || liquidityUse > 0.85) {
     return { level: "warn", text: `Thin liquidity: ${(priceImpact * 100).toFixed(1)}% price impact. Max comfortable ${money(maxComfort)}.` };
   }
@@ -4910,6 +4927,11 @@ function liquidityGuidance(market, amount, spotPrice, avgPrice, preview = {}) {
     return { level: "caution", text: `Large fake-money order: ${(priceImpact * 100).toFixed(1)}% price impact.` };
   }
   return { level: "ok", text: `Healthy size: ${(priceImpact * 100).toFixed(1)}% price impact.` };
+}
+
+function maxSingleBuyAmount(market) {
+  const liquidity = Number(market.initialLiquidity || market.liquidity || DEFAULT_MARKET_LIQUIDITY);
+  return Math.max(1, liquidity / 2);
 }
 
 function setTradeSide(marketId, side) {
@@ -5006,7 +5028,7 @@ function updateRenderedTradeSellControls(market) {
   const limitCopy = panel.querySelector("[data-trade-limit-copy]");
   const chipRow = panel.querySelector(".trade-chip-row");
   const balance = getCurrentGroup()?.balances?.[state.activeMember] ?? DEFAULT_BALANCE;
-  const max = Math.max(0, mode === "sell" ? sellState.shares : Math.floor(balance));
+  const max = Math.max(0, mode === "sell" ? sellState.shares : Math.floor(Math.min(balance, maxSingleBuyAmount(market))));
   if (inputLabel) inputLabel.textContent = mode === "sell" ? "Shares" : "Amount";
   if (limitCopy) limitCopy.textContent = mode === "sell" ? sellLimitCopy(sellState) : `${money(getCurrentGroup()?.balances?.[state.activeMember] ?? 0)} cash`;
   if (inputRow) {
