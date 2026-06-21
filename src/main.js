@@ -3426,8 +3426,8 @@ function focusedOutcomeRow(market, activeMarketId, index, event) {
       <strong>${yesPct}%</strong>
       ${market.status === "open" ? `
         <div class="event-trade-actions">
-          <button class="event-side yes" type="button" data-buy="yes" aria-label="Buy ${option} Yes at ${yesButtonPct} cents"><span>Yes</span><em>${yesButtonPct}¢</em></button>
-          <button class="event-side no" type="button" data-buy="no" aria-label="Buy ${option} No at ${noButtonPct} cents"><span>No</span><em>${noButtonPct}¢</em></button>
+          <button class="event-side yes" type="button" data-buy="yes" aria-label="Buy YES on ${option} at ${yesButtonPct} cents"><span>Yes</span><em>${yesButtonPct}¢</em></button>
+          <button class="event-side no" type="button" data-buy="no" aria-label="Buy NO on ${option} at ${noButtonPct} cents"><span>No</span><em>${noButtonPct}¢</em></button>
         </div>` : statusBadge(market)}
     </div>`;
 }
@@ -3862,8 +3862,8 @@ function eventOutcomeRow(market, event) {
       </div>
       ${market.status === "open" ? `
         <div class="event-trade-actions">
-          <button class="event-side yes" type="button" data-buy="yes" aria-label="Buy ${option} Yes at ${yesButtonPct} cents"><span>Yes</span><em>${yesButtonPct}¢</em></button>
-          <button class="event-side no" type="button" data-buy="no" aria-label="Buy ${option} No at ${noButtonPct} cents"><span>No</span><em>${noButtonPct}¢</em></button>
+          <button class="event-side yes" type="button" data-buy="yes" aria-label="Buy YES on ${option} at ${yesButtonPct} cents"><span>Yes</span><em>${yesButtonPct}¢</em></button>
+          <button class="event-side no" type="button" data-buy="no" aria-label="Buy NO on ${option} at ${noButtonPct} cents"><span>No</span><em>${noButtonPct}¢</em></button>
         </div>` : statusBadge(market)}
     </div>`;
 }
