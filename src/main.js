@@ -235,6 +235,54 @@ function chartFollowPointBorderWidth(ctx) {
   return ctx.dataIndex === chartActivePointIndex(ctx) ? 2 : 0;
 }
 
+const portfolioEndMarkerPlugin = {
+  id: "portfolioEndMarker",
+  afterDatasetsDraw(chart, _args, options = {}) {
+    if (!options.enabled) return;
+    const meta = chart.getDatasetMeta(0);
+    const points = meta?.data || [];
+    const point = points[points.length - 1];
+    if (!point) return;
+    const x = Number(point.x);
+    const y = Number(point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const { ctx, chartArea } = chart;
+    const value = chart.data.datasets?.[0]?.data?.at(-1);
+    const label = money(value);
+    ctx.save();
+    ctx.shadowColor = "rgba(216, 163, 62, 0.38)";
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = "rgba(216, 163, 62, 0.18)";
+    ctx.beginPath();
+    ctx.arc(x, y, 12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = options.color || "#d8a33e";
+    ctx.strokeStyle = "rgba(255,255,255,0.94)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.font = "800 11px IBM Plex Mono, monospace";
+    const textWidth = ctx.measureText(label).width;
+    const width = textWidth + 18;
+    const height = 24;
+    const labelX = Math.min(chartArea.right - width, Math.max(chartArea.left, x - width - 10));
+    const labelY = Math.max(chartArea.top + 2, y - height - 12);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.86)";
+    ctx.strokeStyle = "rgba(216, 163, 62, 0.26)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, labelX, labelY, width, height, 12);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "rgba(32,35,39,0.74)";
+    ctx.fillText(label, labelX + 9, labelY + 16);
+    ctx.restore();
+  },
+};
+
 function roundRect(ctx, x, y, width, height, radius) {
   const r = Math.min(radius, width / 2, height / 2);
   ctx.beginPath();
@@ -246,7 +294,7 @@ function roundRect(ctx, x, y, width, height, radius) {
   ctx.closePath();
 }
 
-Chart.register(CategoryScale, LinearScale, LineController, LineElement, PointElement, Filler, Tooltip, probableCursorShadePlugin, probableChartActiveDotsPlugin);
+Chart.register(CategoryScale, LinearScale, LineController, LineElement, PointElement, Filler, Tooltip, probableCursorShadePlugin, probableChartActiveDotsPlugin, portfolioEndMarkerPlugin);
 
 const API = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 const DEFAULT_BALANCE = 100000;
@@ -5165,30 +5213,36 @@ function portfolioChartConfig() {
   const snapshot = portfolioSnapshot();
   const sorted = [...snapshot.activity].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   const now = Date.now();
+  const baseline = snapshot.startingValue || snapshot.portfolioMark || DEFAULT_BALANCE;
+  const finalValue = Math.round(snapshot.portfolioMark || baseline);
   const startTime = sorted[0]?.createdAt ? new Date(sorted[0].createdAt).getTime() : now - 7 * 24 * 60 * 60 * 1000;
   const labels = [fmtShortDate(startTime)];
-  const baseline = snapshot.startingValue || snapshot.portfolioMark || DEFAULT_BALANCE;
   const data = [Math.round(baseline)];
-  const finalValue = Math.round(snapshot.portfolioMark || baseline);
+
   if (sorted.length) {
     sorted.forEach((item, index) => {
-      const progress = (index + 1) / Math.max(1, sorted.length);
-      const direction = item.action === "sell" ? 0.35 : item.action === "resolved" ? 0.75 : -0.2;
-      const tradeImpulse = Math.min(Math.abs(Number(item.amount || 0)) * 0.12, baseline * 0.018) * direction;
-      const value = baseline + (finalValue - baseline) * progress + tradeImpulse;
+      const progress = (index + 1) / Math.max(1, sorted.length + 1);
       labels.push(fmtShortDate(item.createdAt));
-      data.push(Math.round(Math.max(0, value)));
+      data.push(Math.round(baseline + (finalValue - baseline) * progress));
     });
+  } else {
+    labels.push("Now");
+    data.push(Math.round(baseline));
   }
+
   labels.push("Today");
   data.push(finalValue);
-  if (data.length === 2 && data[0] === data[1]) {
-    data.splice(1, 0, data[0]);
+
+  // Add one midpoint so a flat/no-activity account still looks intentional instead of broken.
+  if (data.length === 2) {
+    data.splice(1, 0, Math.round((data[0] + data[1]) / 2));
     labels.splice(1, 0, "Now");
   }
+
   const min = Math.min(...data);
   const max = Math.max(...data);
-  const pad = Math.max(1000, (max - min) * 0.2);
+  const range = Math.max(1, max - min);
+  const pad = Math.max(baseline * 0.015, range * 0.28);
   return { labels, data, minY: Math.max(0, min - pad), maxY: max + pad };
 }
 
@@ -5863,10 +5917,11 @@ function renderCharts() {
   document.querySelectorAll("[data-portfolio-chart]").forEach(canvas => {
     const { labels, data, minY, maxY } = portfolioChartConfig();
     const ctx = canvas.getContext("2d");
-    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height || 260);
-    gradient.addColorStop(0, "rgba(221, 169, 69, 0.72)");
-    gradient.addColorStop(0.62, "rgba(221, 169, 69, 0.18)");
-    gradient.addColorStop(1, "rgba(221, 169, 69, 0.02)");
+    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height || 300);
+    gradient.addColorStop(0, "rgba(224, 171, 69, 0.82)");
+    gradient.addColorStop(0.42, "rgba(224, 171, 69, 0.42)");
+    gradient.addColorStop(0.78, "rgba(224, 171, 69, 0.12)");
+    gradient.addColorStop(1, "rgba(224, 171, 69, 0.00)");
     const chart = new Chart(canvas, {
       type: "line",
       data: {
@@ -5877,13 +5932,16 @@ function renderCharts() {
           borderColor: "#d8a33e",
           backgroundColor: gradient,
           pointBackgroundColor: "#d8a33e",
-          pointBorderColor: "rgba(255,255,255,0.75)",
-          pointBorderWidth: 1.5,
-          pointRadius: ctx => ctx.dataIndex === data.length - 1 ? 3.5 : 0,
-          pointHoverRadius: 4,
-          borderWidth: 2.5,
-          tension: 0.32,
-          fill: true,
+          pointBorderColor: "rgba(255,255,255,0.92)",
+          pointBorderWidth: ctx => ctx.dataIndex === data.length - 1 ? 2 : 0,
+          pointRadius: ctx => ctx.dataIndex === data.length - 1 ? 4 : 0,
+          pointHoverRadius: 5,
+          borderWidth: window.innerWidth < 620 ? 2.2 : 3,
+          borderCapStyle: "round",
+          borderJoinStyle: "round",
+          cubicInterpolationMode: "monotone",
+          tension: 0.42,
+          fill: "origin",
         }],
       },
       options: {
@@ -5891,11 +5949,18 @@ function renderCharts() {
         maintainAspectRatio: false,
         animation: { duration: 540 },
         interaction: { mode: "index", intersect: false },
-        layout: { padding: { top: 10, right: 6, bottom: 0, left: 0 } },
+        layout: { padding: { top: 18, right: 62, bottom: 4, left: 2 } },
         plugins: {
           legend: { display: false },
+          portfolioEndMarker: { enabled: true, color: "#d8a33e" },
           tooltip: {
             displayColors: false,
+            backgroundColor: "rgba(255,255,255,0.92)",
+            titleColor: "rgba(32,35,39,0.68)",
+            bodyColor: "#202327",
+            borderColor: "rgba(216,163,62,0.26)",
+            borderWidth: 1,
+            padding: 10,
             callbacks: {
               label: context => `Value ${money(context.parsed.y)}`,
             },
@@ -5906,8 +5971,8 @@ function renderCharts() {
             grid: { display: false },
             border: { display: false },
             ticks: {
-              color: "rgba(65, 73, 84, 0.72)",
-              maxTicksLimit: window.innerWidth < 620 ? 3 : 5,
+              color: "rgba(65, 73, 84, 0.46)",
+              maxTicksLimit: window.innerWidth < 620 ? 2 : 4,
               maxRotation: 0,
               font: { size: 10, family: "IBM Plex Mono" },
             },
@@ -5918,12 +5983,12 @@ function renderCharts() {
             position: "right",
             border: { display: false },
             ticks: {
-              color: "rgba(65, 73, 84, 0.66)",
-              maxTicksLimit: 4,
+              color: "rgba(65, 73, 84, 0.44)",
+              maxTicksLimit: 3,
               callback: value => compactMoney(value),
               font: { size: 10, family: "IBM Plex Mono" },
             },
-            grid: { color: "rgba(185, 151, 88, 0.18)", tickLength: 0 },
+            grid: { color: "rgba(185, 151, 88, 0.12)", tickLength: 0, drawTicks: false },
           },
         },
       },

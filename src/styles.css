@@ -468,8 +468,12 @@ button { color: inherit; }
 }
 
 .portfolio-chart-card {
+  position: relative;
+  overflow: hidden;
   border-radius: 20px;
-  background: var(--portfolio-paper);
+  background:
+    radial-gradient(circle at 78% 8%, rgba(216, 163, 62, 0.14), transparent 28%),
+    linear-gradient(180deg, #fffdf7 0%, #fbf8ee 100%);
   border: 1px solid rgba(35, 35, 35, 0.07);
   padding: 18px;
   box-shadow: 0 18px 44px rgba(59, 54, 37, 0.08);
@@ -478,7 +482,20 @@ button { color: inherit; }
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+.portfolio-chart-card::after {
+  content: "";
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 24px;
+  height: 42%;
+  background: linear-gradient(180deg, transparent, rgba(250, 243, 223, 0.72));
+  pointer-events: none;
+}
+
 .portfolio-chart-head {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -504,8 +521,10 @@ button { color: inherit; }
 }
 
 .portfolio-chart-wrap {
-  min-height: 270px;
-  margin-top: 8px;
+  position: relative;
+  z-index: 1;
+  min-height: 300px;
+  margin-top: 4px;
 }
 
 .portfolio-chart-wrap canvas {
@@ -5419,7 +5438,7 @@ button { color: inherit; }
     font-size: 1.55rem;
   }
   .portfolio-chart-wrap {
-    min-height: 210px;
+    min-height: 236px;
   }
   .portfolio-activity-card {
     border-radius: 18px;
@@ -5477,6 +5496,6 @@ button { color: inherit; }
     grid-column: auto;
   }
   .portfolio-chart-wrap {
-    min-height: 190px;
+    min-height: 210px;
   }
 }
