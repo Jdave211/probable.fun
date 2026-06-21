@@ -4950,90 +4950,301 @@ function adminResolvedRow({ group, event }) {
 
 function renderPositions() {
   const status = state.positionsStatus === "closed" ? "closed" : "open";
-  const grouped = state.groups
-    .map(group => ({
-      group,
-      open: positionRowsForGroup(group, "open"),
-      closed: positionRowsForGroup(group, "closed"),
-    }))
-    .filter(item => item.open.length || item.closed.length);
-  const openCount = grouped.reduce((sum, item) => sum + item.open.length, 0);
-  const closedCount = grouped.reduce((sum, item) => sum + item.closed.length, 0);
-  const visibleGroups = grouped
-    .map(item => ({ group: item.group, rows: status === "closed" ? item.closed : item.open }))
+  const snapshot = portfolioSnapshot();
+  const visibleGroups = snapshot.groups
+    .map(item => ({ ...item, rows: status === "closed" ? item.closed : item.open }))
     .filter(item => item.rows.length);
+  const deltaClass = snapshot.pnl >= 0 ? "gain" : "loss";
+  const deltaLabel = `${snapshot.pnl >= 0 ? "+" : ""}${money(snapshot.pnl)} (${snapshot.pnlPct >= 0 ? "+" : ""}${snapshot.pnlPct.toFixed(1)}%)`;
 
   dom.mainContent.innerHTML = `
-    <section class="positions-page">
-      <div class="positions-head motion-item">
+    <section class="positions-page probable-portfolio-page">
+      <div class="portfolio-topbar motion-item">
         <div>
-          <p class="eyebrow">Account</p>
-          <h1>My Portfolio</h1>
-          <p>Your open exposure, cash-out value, and settled history, grouped by group.</p>
+          <p class="eyebrow">My Portfolio</p>
+          <h1>${money(snapshot.portfolioMark)}</h1>
+          <span class="portfolio-delta ${deltaClass}">${deltaLabel} all time</span>
         </div>
-        <div class="positions-actions">
-          <div class="group-counts">
-            <button class="group-count group-count-open ${status === "open" ? "active" : ""}" type="button" data-position-status-filter="open">${openCount} open</button>
-            <button class="group-count group-count-closed ${status === "closed" ? "active" : ""}" type="button" data-position-status-filter="closed">${closedCount} closed</button>
+        <div class="positions-actions portfolio-actions">
+          <div class="group-counts portfolio-tabs" role="tablist" aria-label="Portfolio status">
+            <button class="group-count group-count-open ${status === "open" ? "active" : ""}" type="button" data-position-status-filter="open">${snapshot.openCount} open</button>
+            <button class="group-count group-count-closed ${status === "closed" ? "active" : ""}" type="button" data-position-status-filter="closed">${snapshot.closedCount} closed</button>
           </div>
           <button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back</button>
         </div>
       </div>
+
+      <div class="portfolio-hero motion-item">
+        <div class="portfolio-device-card">
+          <div class="portfolio-device-top">
+            <div>
+              <p class="eyebrow">Account value</p>
+              <strong>${money(snapshot.portfolioMark)}</strong>
+            </div>
+            <div>
+              <p class="eyebrow">Cash-out</p>
+              <strong>${money(snapshot.cashOutPortfolio)}</strong>
+            </div>
+            <div>
+              <p class="eyebrow">Earnings</p>
+              <strong class="${deltaClass}">${signedMoney(snapshot.pnl)}</strong>
+            </div>
+          </div>
+          <div class="portfolio-chart-card">
+            <div class="portfolio-chart-head">
+              <div>
+                <span>Earnings</span>
+                <strong>${signedMoney(snapshot.pnl)}</strong>
+              </div>
+              <small>All time</small>
+            </div>
+            <div class="portfolio-chart-wrap">
+              <canvas data-portfolio-chart aria-label="Portfolio value history"></canvas>
+            </div>
+          </div>
+        </div>
+        <aside class="portfolio-activity-card">
+          <div class="portfolio-activity-head">
+            <span>Activity</span>
+            <small>${snapshot.activity.length ? `${snapshot.activity.length} recent` : "No trades yet"}</small>
+          </div>
+          ${portfolioActivityListHtml(snapshot.activity)}
+        </aside>
+      </div>
+
+      <div class="portfolio-metrics motion-item">
+        ${portfolioMetricHtml("Cash", snapshot.cash, "Available across groups")}
+        ${portfolioMetricHtml("Open cash-out", snapshot.openCashOutValue, "Conservative exit value")}
+        ${portfolioMetricHtml("Mark value", snapshot.openMarkValue, "Visible-price value")}
+        ${portfolioMetricHtml("Volume", snapshot.volume, `${snapshot.tradeCount} trades`)}
+      </div>
+
       ${visibleGroups.length ? `
-        <div class="positions-groups">
-          ${visibleGroups.map(({ group, rows }) => positionGroupHtml(group, rows, status)).join("")}
+        <div class="positions-groups portfolio-groups">
+          ${visibleGroups.map(item => positionGroupHtml(item.group, item.rows, status, item)).join("")}
         </div>
       ` : positionsEmptyHtml(status)}
     </section>`;
 }
 
-function positionGroupHtml(group, rows, status) {
-  const totalValue = rows.reduce((sum, row) => sum + row.value, 0);
+function portfolioSnapshot() {
+  const groups = state.groups
+    .map(group => {
+      const owner = positionOwnerForGroup(group);
+      const open = positionRowsForGroup(group, "open", owner);
+      const closed = positionRowsForGroup(group, "closed", owner);
+      const cash = owner ? Number(group.balances?.[owner] ?? DEFAULT_BALANCE) : 0;
+      const markValue = owner ? currentMarkValue(group, owner) : 0;
+      const cashOutValue = owner ? currentPositionValue(group, owner) : 0;
+      const activity = owner ? portfolioActivityForGroup(group, owner) : [];
+      return { group, owner, open, closed, cash, markValue, cashOutValue, activity };
+    })
+    .filter(item => item.owner || item.open.length || item.closed.length || item.activity.length);
+
+  const cash = groups.reduce((sum, item) => sum + item.cash, 0);
+  const openCashOutValue = groups.reduce((sum, item) => sum + item.cashOutValue, 0);
+  const openMarkValue = groups.reduce((sum, item) => sum + item.markValue, 0);
+  const portfolioMark = cash + openMarkValue;
+  const cashOutPortfolio = cash + openCashOutValue;
+  const openCount = groups.reduce((sum, item) => sum + item.open.length, 0);
+  const closedCount = groups.reduce((sum, item) => sum + item.closed.length, 0);
+  const activity = groups.flatMap(item => item.activity).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const tradeCount = activity.length;
+  const volume = activity.reduce((sum, item) => sum + Math.abs(Number(item.amount || 0)), 0);
+  const startingValue = groups.length * DEFAULT_BALANCE;
+  const pnl = groups.length ? portfolioMark - startingValue : 0;
+  const pnlPct = startingValue > 0 ? (pnl / startingValue) * 100 : 0;
+
+  return {
+    groups,
+    cash,
+    openCashOutValue,
+    openMarkValue,
+    portfolioMark,
+    cashOutPortfolio,
+    openCount,
+    closedCount,
+    activity,
+    tradeCount,
+    volume,
+    startingValue,
+    pnl,
+    pnlPct,
+  };
+}
+
+function portfolioActivityForGroup(group, participant) {
+  const items = [];
+  const seenEvents = new Set();
+  for (const market of group.markets ?? []) {
+    if (market.eventId && Array.isArray(market.outcomes)) {
+      if (seenEvents.has(market.eventId)) continue;
+      seenEvents.add(market.eventId);
+      for (const trade of market.eventTrades ?? []) {
+        if (trade.participant !== participant) continue;
+        items.push({
+          groupName: group.name,
+          groupEmoji: group.emoji,
+          title: sampleEventTitle(market),
+          outcomeTitle: trade.outcomeTitle || marketOptionTitleForOutcome(market, trade.outcomeId),
+          action: trade.action || "buy",
+          amount: Number(trade.amount || trade.cashAmount || 0),
+          createdAt: trade.createdAt || market.createdAt,
+          marketId: trade.outcomeId || market.id,
+        });
+      }
+      if (market.status === "resolved" && market.resolvedAt) {
+        const winner = resolutionOutcomeLabel(market, market.outcome);
+        items.push({
+          groupName: group.name,
+          groupEmoji: group.emoji,
+          title: sampleEventTitle(market),
+          outcomeTitle: winner,
+          action: "resolved",
+          amount: 0,
+          createdAt: market.resolvedAt,
+          marketId: market.outcome || market.id,
+        });
+      }
+      continue;
+    }
+    for (const trade of market.trades ?? []) {
+      if (trade.participant !== participant) continue;
+      items.push({
+        groupName: group.name,
+        groupEmoji: group.emoji,
+        title: sampleEventTitle(market),
+        outcomeTitle: String(trade.side || "yes").toUpperCase(),
+        action: trade.action || "buy",
+        amount: Number(trade.amount || 0),
+        createdAt: trade.createdAt || market.createdAt,
+        marketId: market.id,
+      });
+    }
+  }
+  return items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+function portfolioMetricHtml(label, value, helper) {
   return `
-    <section class="position-group-card motion-item">
-      <div class="position-group-head">
+    <div class="portfolio-metric-card">
+      <span>${esc(label)}</span>
+      <strong>${money(value)}</strong>
+      <em>${esc(helper)}</em>
+    </div>`;
+}
+
+function portfolioActivityListHtml(activity) {
+  const visible = activity.slice(0, 5);
+  if (!visible.length) {
+    return `
+      <div class="portfolio-activity-empty">
+        <strong>No activity yet</strong>
+        <span>Your buys, sells, and resolutions will appear here.</span>
+      </div>`;
+  }
+  return `
+    <div class="portfolio-activity-list">
+      ${visible.map(item => {
+        const action = item.action === "sell" ? "Sold" : item.action === "resolved" ? "Resolved" : "Bought";
+        const cls = item.action === "sell" ? "sell" : item.action === "resolved" ? "resolved" : "buy";
+        return `
+          <button class="portfolio-activity-item" type="button" data-buy="yes" data-market-id="${esc(item.marketId)}">
+            <span class="portfolio-activity-icon ${cls}">${item.action === "sell" ? "↗" : item.action === "resolved" ? "✓" : "+"}</span>
+            <div>
+              <strong>${esc(action)} ${esc(item.outcomeTitle || "position")}</strong>
+              <em>${esc(item.groupEmoji || "")}${esc(item.groupName || "")} · ${esc(fmtShortDate(item.createdAt))}</em>
+            </div>
+            <small>${item.action === "resolved" ? "settled" : money(item.amount)}</small>
+          </button>`;
+      }).join("")}
+    </div>`;
+}
+
+function portfolioChartConfig() {
+  const snapshot = portfolioSnapshot();
+  const sorted = [...snapshot.activity].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const now = Date.now();
+  const startTime = sorted[0]?.createdAt ? new Date(sorted[0].createdAt).getTime() : now - 7 * 24 * 60 * 60 * 1000;
+  const labels = [fmtShortDate(startTime)];
+  const baseline = snapshot.startingValue || snapshot.portfolioMark || DEFAULT_BALANCE;
+  const data = [Math.round(baseline)];
+  const finalValue = Math.round(snapshot.portfolioMark || baseline);
+  if (sorted.length) {
+    sorted.forEach((item, index) => {
+      const progress = (index + 1) / Math.max(1, sorted.length);
+      const direction = item.action === "sell" ? 0.35 : item.action === "resolved" ? 0.75 : -0.2;
+      const tradeImpulse = Math.min(Math.abs(Number(item.amount || 0)) * 0.12, baseline * 0.018) * direction;
+      const value = baseline + (finalValue - baseline) * progress + tradeImpulse;
+      labels.push(fmtShortDate(item.createdAt));
+      data.push(Math.round(Math.max(0, value)));
+    });
+  }
+  labels.push("Today");
+  data.push(finalValue);
+  if (data.length === 2 && data[0] === data[1]) {
+    data.splice(1, 0, data[0]);
+    labels.splice(1, 0, "Now");
+  }
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const pad = Math.max(1000, (max - min) * 0.2);
+  return { labels, data, minY: Math.max(0, min - pad), maxY: max + pad };
+}
+
+function positionGroupHtml(group, rows, status, groupData = {}) {
+  const totalValue = rows.reduce((sum, row) => sum + row.value, 0);
+  const markValue = groupData.markValue ?? rows.reduce((sum, row) => sum + row.shares * row.price, 0);
+  return `
+    <section class="position-group-card portfolio-position-card motion-item">
+      <div class="position-group-head portfolio-group-head">
         <div>
-          <p class="eyebrow">${esc(group.emoji)} ${status === "closed" ? "Closed" : "Open"} portfolio</p>
+          <p class="eyebrow">${esc(group.emoji)} ${status === "closed" ? "Closed" : "Open"} positions</p>
           <h2>${esc(group.name)}</h2>
         </div>
-        <strong>${money(totalValue)}</strong>
+        <div class="portfolio-group-values">
+          <span>${status === "open" ? "Cash-out" : "Settled"}</span>
+          <strong>${money(totalValue)}</strong>
+          ${status === "open" ? `<em>${money(markValue)} mark</em>` : ""}
+        </div>
       </div>
-      <div class="position-list">
+      <div class="position-list portfolio-position-list">
         ${rows.map(positionRowHtml).join("")}
       </div>
     </section>`;
 }
 
 function positionRowHtml(row) {
+  const valueLabel = row.status === "open" ? "cash out" : row.statusLabel === "Resolved" ? (row.isWinner ? "paid out" : "lost") : "marked";
   return `
-    <button class="position-row" type="button" data-buy="yes" data-market-id="${esc(row.marketId)}">
-      <div class="position-market">
+    <button class="position-row portfolio-position-row" type="button" data-buy="yes" data-market-id="${esc(row.marketId)}">
+      <div class="position-market portfolio-position-market">
         <span class="position-status ${row.status === "open" ? "open" : "closed"}">${esc(row.statusLabel)}</span>
         <strong>${esc(row.title)}</strong>
         <em>${esc(row.closeLabel)}</em>
         ${row.statusLabel === "Resolved" ? `<small class="position-settlement-note">Winner: ${esc(row.winnerTitle || "Unknown")}${row.resolvedBy ? ` · ${esc(row.resolvedBy)}` : ""}${row.resolutionNotes ? ` · ${esc(row.resolutionNotes)}` : ""}</small>` : ""}
       </div>
-      <div class="position-outcome">
+      <div class="position-outcome portfolio-position-outcome">
         <span>${esc(row.outcomeTitle)}</span>
         <em>${formatShares(row.shares)} shares</em>
       </div>
-      <div class="position-price">
+      <div class="position-price portfolio-position-price">
         <span>${Math.round(row.price * 100)}¢</span>
-        <em>${row.status === "open" ? "price" : "final/marked"}</em>
+        <em>${row.status === "open" ? "price" : "final"}</em>
       </div>
-      <div class="position-value">
+      <div class="position-value portfolio-position-value">
         <strong>${money(row.value)}</strong>
-        <em>${row.status === "open" ? "cash out" : row.statusLabel === "Resolved" ? (row.isWinner ? "paid out" : "lost") : "marked"}</em>
+        <em>${valueLabel}</em>
       </div>
     </button>`;
 }
 
 function positionsEmptyHtml(status) {
   return `
-    <div class="positions-empty motion-item">
+    <div class="positions-empty portfolio-empty motion-item">
       <p class="eyebrow">${status === "closed" ? "Closed portfolio" : "Open portfolio"}</p>
-      <h2>${status === "closed" ? "No closed portfolio history yet." : "No open portfolio positions yet."}</h2>
-      <p>${status === "closed" ? "Settled or closed markets you held will appear here." : "Buy a contract in any group and it will show up here."}</p>
+      <h2>${status === "closed" ? "No settled positions yet." : "No open positions yet."}</h2>
+      <p>${status === "closed" ? "Resolved markets you traded will appear here with payout notes." : "Buy a contract in any group and it will show up here."}</p>
       <button class="btn btn-primary btn-sm" type="button" data-go-dashboard>Back to markets</button>
     </div>`;
 }
@@ -5649,6 +5860,77 @@ function leaderRow(entry, index = 0) {
 }
 
 function renderCharts() {
+  document.querySelectorAll("[data-portfolio-chart]").forEach(canvas => {
+    const { labels, data, minY, maxY } = portfolioChartConfig();
+    const ctx = canvas.getContext("2d");
+    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height || 260);
+    gradient.addColorStop(0, "rgba(221, 169, 69, 0.72)");
+    gradient.addColorStop(0.62, "rgba(221, 169, 69, 0.18)");
+    gradient.addColorStop(1, "rgba(221, 169, 69, 0.02)");
+    const chart = new Chart(canvas, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          label: "Portfolio",
+          data,
+          borderColor: "#d8a33e",
+          backgroundColor: gradient,
+          pointBackgroundColor: "#d8a33e",
+          pointBorderColor: "rgba(255,255,255,0.75)",
+          pointBorderWidth: 1.5,
+          pointRadius: ctx => ctx.dataIndex === data.length - 1 ? 3.5 : 0,
+          pointHoverRadius: 4,
+          borderWidth: 2.5,
+          tension: 0.32,
+          fill: true,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 540 },
+        interaction: { mode: "index", intersect: false },
+        layout: { padding: { top: 10, right: 6, bottom: 0, left: 0 } },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            displayColors: false,
+            callbacks: {
+              label: context => `Value ${money(context.parsed.y)}`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            grid: { display: false },
+            border: { display: false },
+            ticks: {
+              color: "rgba(65, 73, 84, 0.72)",
+              maxTicksLimit: window.innerWidth < 620 ? 3 : 5,
+              maxRotation: 0,
+              font: { size: 10, family: "IBM Plex Mono" },
+            },
+          },
+          y: {
+            min: minY,
+            max: maxY,
+            position: "right",
+            border: { display: false },
+            ticks: {
+              color: "rgba(65, 73, 84, 0.66)",
+              maxTicksLimit: 4,
+              callback: value => compactMoney(value),
+              font: { size: 10, family: "IBM Plex Mono" },
+            },
+            grid: { color: "rgba(185, 151, 88, 0.18)", tickLength: 0 },
+          },
+        },
+      },
+    });
+    charts.set("portfolio", chart);
+  });
+
   document.querySelectorAll("[data-event-chart-canvas]").forEach(canvas => {
     const key = canvas.dataset.eventChartCanvas;
     const event = findCurrentEventByKey(key);
