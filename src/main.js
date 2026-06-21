@@ -328,6 +328,7 @@ const state = {
   inviteLoading: false,
   inviteModal: { groupId: null, invite: null, loading: false, error: "", confirmRegenerate: false },
   embedModal: { marketId: null, chart: true, buttons: true, dark: true, border: true },
+  tradeHistoryModal: { marketId: null, sort: "recent" },
   embedRoute: null,
   sharedMarketId: null,
   trade: { marketId: null, side: null, mode: "buy" },
@@ -447,6 +448,16 @@ document.querySelector("#app").innerHTML = `
         <button class="modal-x" type="button" id="closeLeaderProfileModal" aria-label="Close">x</button>
       </div>
       <div id="leaderProfileModalBody" class="leader-profile-body"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="tradeHistoryModalOverlay">
+    <div class="modal trade-history-modal">
+      <div class="modal-header">
+        <span class="modal-title">Market trades</span>
+        <button class="modal-x" type="button" id="closeTradeHistoryModal" aria-label="Close">x</button>
+      </div>
+      <div id="tradeHistoryModalBody" class="trade-history-modal-body"></div>
     </div>
   </div>
 
@@ -585,6 +596,8 @@ const dom = {
   embedModalBody: document.querySelector("#embedModalBody"),
   leaderProfileModalOverlay: document.querySelector("#leaderProfileModalOverlay"),
   leaderProfileModalBody: document.querySelector("#leaderProfileModalBody"),
+  tradeHistoryModalOverlay: document.querySelector("#tradeHistoryModalOverlay"),
+  tradeHistoryModalBody: document.querySelector("#tradeHistoryModalBody"),
   loginModalOverlay: document.querySelector("#loginModalOverlay"),
   marketModalOverlay: document.querySelector("#marketModalOverlay"),
   groupForm: document.querySelector("#groupForm"),
@@ -613,6 +626,7 @@ document.querySelector("#cancelJoinModal").addEventListener("click", () => close
 document.querySelector("#closeInviteModal").addEventListener("click", () => closeModal("invite"));
 document.querySelector("#closeEmbedModal").addEventListener("click", () => closeModal("embed"));
 document.querySelector("#closeLeaderProfileModal").addEventListener("click", () => closeModal("leaderProfile"));
+document.querySelector("#closeTradeHistoryModal").addEventListener("click", () => closeModal("tradeHistory"));
 document.querySelector("#closeLoginModal").addEventListener("click", () => closeModal("login"));
 document.querySelector("#closeMarketModal").addEventListener("click", () => closeModal("market"));
 dom.groupModalOverlay.addEventListener("click", e => { if (e.target === dom.groupModalOverlay) closeModal("group"); });
@@ -620,6 +634,7 @@ dom.joinModalOverlay.addEventListener("click", e => { if (e.target === dom.joinM
 dom.inviteModalOverlay.addEventListener("click", e => { if (e.target === dom.inviteModalOverlay) closeModal("invite"); });
 dom.embedModalOverlay.addEventListener("click", e => { if (e.target === dom.embedModalOverlay) closeModal("embed"); });
 dom.leaderProfileModalOverlay.addEventListener("click", e => { if (e.target === dom.leaderProfileModalOverlay) closeModal("leaderProfile"); });
+dom.tradeHistoryModalOverlay.addEventListener("click", e => { if (e.target === dom.tradeHistoryModalOverlay) closeModal("tradeHistory"); });
 dom.loginModalOverlay.addEventListener("click", e => { if (e.target === dom.loginModalOverlay) closeModal("login"); });
 dom.marketModalOverlay.addEventListener("click", e => { if (e.target === dom.marketModalOverlay) closeModal("market"); });
 dom.groupForm.addEventListener("submit", onCreateGroup);
@@ -641,6 +656,7 @@ document.addEventListener("keydown", e => {
     closeModal("invite");
     closeModal("embed");
     closeModal("leaderProfile");
+    closeModal("tradeHistory");
     closeModal("login");
     closeModal("market");
   }
@@ -980,6 +996,21 @@ async function onGlobalClick(e) {
     e.preventDefault();
     e.stopPropagation();
     openLeaderProfile(leaderProfileBtn.dataset.leaderProfile || "");
+    return;
+  }
+
+  const viewAllTradesBtn = e.target.closest("[data-view-all-trades]");
+  if (viewAllTradesBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    openTradeHistoryModal(viewAllTradesBtn.dataset.viewAllTrades || "");
+    return;
+  }
+
+  const tradeHistorySortBtn = e.target.closest("[data-trade-history-sort]");
+  if (tradeHistorySortBtn) {
+    state.tradeHistoryModal.sort = tradeHistorySortBtn.dataset.tradeHistorySort === "largest" ? "largest" : "recent";
+    renderTradeHistoryModal();
     return;
   }
 
@@ -4144,7 +4175,10 @@ function marketHistoryPanel(market, event) {
           <span class="market-history-kicker">Market history</span>
           <h3>${trades.length ? "Recent activity" : "No trades yet"}</h3>
         </div>
-        <span>${total} ${total === 1 ? "trade" : "trades"}</span>
+        <div class="market-history-actions">
+          <span>${total} ${total === 1 ? "trade" : "trades"}</span>
+          ${total ? `<button type="button" data-view-all-trades="${esc(market.id)}">View all</button>` : ""}
+        </div>
       </div>
       ${trades.length ? `
         <div class="market-history-list">
@@ -4210,6 +4244,52 @@ function marketHistoryRow(trade, market, eventMeta) {
       </div>
       <time>${esc(fmtDate(trade.createdAt))}</time>
     </div>`;
+}
+
+function openTradeHistoryModal(marketId) {
+  const market = findMarket(marketId);
+  if (!market) {
+    toast("Could not find market trades.");
+    return;
+  }
+  state.tradeHistoryModal = { marketId, sort: state.tradeHistoryModal.sort || "recent" };
+  renderTradeHistoryModal();
+  openModal("tradeHistory");
+}
+
+function renderTradeHistoryModal() {
+  const market = findMarket(state.tradeHistoryModal.marketId);
+  if (!market) {
+    dom.tradeHistoryModalBody.innerHTML = `<p class="muted">Trade history unavailable.</p>`;
+    return;
+  }
+  const group = findGroupForMarket(market.id) || getCurrentGroup();
+  const event = group ? findEventForMarket(group, market) : null;
+  const eventTitle = event?.title || sampleEventTitle(market);
+  const imageUrl = event?.imageUrl || market.imageUrl || "";
+  const sort = state.tradeHistoryModal.sort === "largest" ? "largest" : "recent";
+  const trades = marketHistoryTrades(market, event).sort((a, b) => {
+    if (sort === "largest") return Number(b.amount ?? b.cashAmount ?? 0) - Number(a.amount ?? a.cashAmount ?? 0);
+    return timeValue(b.createdAt) - timeValue(a.createdAt);
+  });
+  dom.tradeHistoryModalBody.innerHTML = `
+    <div class="trade-history-modal-head">
+      <span class="market-history-thumb ${eventThumbClass(eventTitle, imageUrl)}" aria-hidden="true">${eventThumb(eventTitle, imageUrl)}</span>
+      <div>
+        <p class="eyebrow">${esc(group?.emoji || "")} ${esc(group?.name || "Market")}</p>
+        <h2>${esc(eventTitle)}</h2>
+        <span>${trades.length} ${trades.length === 1 ? "trade" : "trades"}</span>
+      </div>
+    </div>
+    <div class="trade-history-sort" aria-label="Sort trades">
+      <button class="${sort === "recent" ? "active" : ""}" type="button" data-trade-history-sort="recent">Most recent</button>
+      <button class="${sort === "largest" ? "active" : ""}" type="button" data-trade-history-sort="largest">Largest</button>
+    </div>
+    ${trades.length ? `
+      <div class="trade-history-full-list">
+        ${trades.map(trade => marketHistoryRow(trade, market, { title: eventTitle, imageUrl })).join("")}
+      </div>
+    ` : `<p class="leader-profile-empty">No trades yet.</p>`}`;
 }
 
 function focusedRulesPanel(market, event) {
@@ -7145,7 +7225,12 @@ function findMarket(mid) {
 
 function findGroupForMarket(mid) {
   if (!mid) return null;
-  return state.groups.find(group => (group.markets ?? []).some(market => market.id === mid)) ?? null;
+  return state.groups.find(group => (group.markets ?? []).some(market => (
+    market.id === mid ||
+    market.eventId === mid ||
+    market.outcomeId === mid ||
+    (market.outcomes ?? []).some(outcome => outcome.id === mid)
+  ))) ?? null;
 }
 
 function openModal(type) {
