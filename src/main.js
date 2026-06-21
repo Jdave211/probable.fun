@@ -351,6 +351,7 @@ const state = {
   portfolioChartRange: "all",
   positionsStatus: "open",
   expandedParticipants: new Set(),
+  expandedOutcomeEvents: new Set(),
   marketSort: "trending",
   marketStatus: "open",
   mobileTradeOpen: false,
@@ -1044,6 +1045,18 @@ async function onGlobalClick(e) {
       state.expandedParticipants.delete(key);
     } else {
       state.expandedParticipants.add(key);
+    }
+    render();
+    return;
+  }
+
+  const expandOutcomesBtn = e.target.closest("[data-toggle-focused-outcomes]");
+  if (expandOutcomesBtn) {
+    const key = expandOutcomesBtn.dataset.toggleFocusedOutcomes;
+    if (state.expandedOutcomeEvents.has(key)) {
+      state.expandedOutcomeEvents.delete(key);
+    } else {
+      state.expandedOutcomeEvents.add(key);
     }
     render();
     return;
@@ -3464,7 +3477,11 @@ function renderFocusedTradeView(group, market, event) {
   const prob = Number(tradeMarket.probability ?? 0.5);
   const yesPrice = prob.toFixed(2);
   const noPrice = (1 - prob).toFixed(2);
-  const sortedMarkets = event?.markets?.length ? event.markets : [market];
+  const allOutcomeMarkets = event?.markets?.length ? event.markets : [market];
+  const sortedMarkets = focusedOutcomeMarkets(allOutcomeMarkets, event);
+  const outcomeToggleKey = event?.key || market.eventId || market.id;
+  const outcomesExpanded = state.expandedOutcomeEvents.has(outcomeToggleKey);
+  const visibleOutcomeMarkets = focusedVisibleOutcomeMarkets(sortedMarkets, tradeMarket.id, outcomesExpanded);
   const leadingMarkets = chartMarketsForEvent(event || { markets: sortedMarkets });
   dom.mainContent.innerHTML = `
     <section class="dashboard-shell focused-market-shell ${sharedLanding ? "shared-market-shell" : ""}">
@@ -3505,7 +3522,8 @@ function renderFocusedTradeView(group, market, event) {
           </div>
 
           <div class="focused-outcome-table">
-            ${sortedMarkets.map((item, index) => focusedOutcomeRow(item, tradeMarket.id, index, event)).join("")}
+            ${visibleOutcomeMarkets.map((item, index) => focusedOutcomeRow(item, tradeMarket.id, sortedMarkets.indexOf(item), event)).join("")}
+            ${focusedOutcomeToggle(sortedMarkets, visibleOutcomeMarkets, outcomeToggleKey, outcomesExpanded)}
           </div>
 
           ${sharedLanding ? `
@@ -3638,6 +3656,33 @@ function focusedLegendItem(market, index, event) {
       <i style="--series-color:${chartColorForMarket(market, index, event)}"></i>
       ${outcomeTitleHtml(marketOptionTitle(market))} <strong>${pct}%</strong>
     </span>`;
+}
+
+function focusedOutcomeMarkets(markets, event) {
+  return (markets || [])
+    .map((market, index) => ({ market, index, probability: displayedEventProbability(market, event) }))
+    .sort((a, b) => (b.probability - a.probability) || (a.index - b.index))
+    .map(item => item.market);
+}
+
+function focusedVisibleOutcomeMarkets(sortedMarkets, activeMarketId, expanded) {
+  if (expanded || sortedMarkets.length <= 10) return sortedMarkets;
+  const top = sortedMarkets.slice(0, 10);
+  if (top.some(item => item.id === activeMarketId)) return top;
+  const active = sortedMarkets.find(item => item.id === activeMarketId);
+  return active ? [...top.slice(0, 9), active] : top;
+}
+
+function focusedOutcomeToggle(sortedMarkets, visibleMarkets, key, expanded) {
+  const hidden = Math.max(0, sortedMarkets.length - visibleMarkets.length);
+  if (sortedMarkets.length <= 10) return "";
+  return `
+    <button class="focused-outcome-toggle" type="button" data-toggle-focused-outcomes="${esc(key)}" aria-expanded="${expanded}">
+      <span>${expanded ? "Show top 10" : `Show ${hidden} more`}</span>
+      <svg class="${expanded ? "up" : ""}" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+        <path d="M3 5.25 7 9.25l4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>`;
 }
 
 function focusedOutcomeRow(market, activeMarketId, index, event) {

@@ -1560,6 +1560,34 @@ button { color: inherit; }
   line-height: 1;
   letter-spacing: -0.04em;
 }
+.focused-outcome-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: fit-content;
+  margin: 14px auto 0;
+  border: 1px solid rgba(157, 171, 181, 0.18);
+  border-radius: 999px;
+  background: rgba(25, 35, 41, 0.76);
+  color: var(--text-2);
+  padding: 9px 14px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.focused-outcome-toggle:hover,
+.focused-outcome-toggle:focus-visible {
+  border-color: rgba(45, 156, 255, 0.36);
+  color: var(--text);
+}
+.focused-outcome-toggle svg {
+  transition: transform 160ms ease;
+}
+.focused-outcome-toggle svg.up {
+  transform: rotate(180deg);
+}
 .verification-panel {
   margin-top: 18px;
   border-top: 1px solid rgba(157, 171, 181, 0.14);
