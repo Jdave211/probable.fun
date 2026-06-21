@@ -2978,7 +2978,7 @@ function renderNav() {
   dom.navRight.innerHTML = group ? `
     <div class="member-pill" title="${esc(displayName)}">
       <span class="member-name">${esc(displayName)}</span>
-      <span class="member-balance">${money(balance)}</span>
+      <span class="member-balance">${topbarMoney(balance)}</span>
     </div>
     ${accountIndicatorHtml()}
   ` : `
@@ -3793,6 +3793,12 @@ function compactMoney(value) {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
   if (n >= 1_000) return `$${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}K`;
   return money(n);
+}
+
+function topbarMoney(value) {
+  return `$${new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 0,
+  }).format(Number(value || 0))}`;
 }
 
 function money(value) {

@@ -5127,9 +5127,15 @@ button { color: inherit; }
 }
 .toast.hidden { opacity: 0; transform: translateX(-50%) translateY(8px); pointer-events: none; }
 
-::-webkit-scrollbar { width: 6px; height: 6px; }
+html {
+  scrollbar-color: rgba(149, 162, 173, 0.26) transparent;
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 999px; }
+::-webkit-scrollbar-thumb { background: rgba(149, 162, 173, 0.26); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(149, 162, 173, 0.42); }
 
 @media (max-width: 900px) {
   .topnav { align-items: flex-start; flex-wrap: wrap; }
