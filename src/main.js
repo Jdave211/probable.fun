@@ -250,14 +250,14 @@ const portfolioEndMarkerPlugin = {
     const value = chart.data.datasets?.[0]?.data?.at(-1);
     const label = money(value);
     ctx.save();
-    ctx.shadowColor = "rgba(216, 163, 62, 0.38)";
+    ctx.shadowColor = "rgba(45, 156, 255, 0.34)";
     ctx.shadowBlur = 18;
-    ctx.fillStyle = "rgba(216, 163, 62, 0.18)";
+    ctx.fillStyle = "rgba(45, 156, 255, 0.16)";
     ctx.beginPath();
     ctx.arc(x, y, 12, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.fillStyle = options.color || "#d8a33e";
+    ctx.fillStyle = options.color || "#2d9cff";
     ctx.strokeStyle = "rgba(255,255,255,0.94)";
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -272,7 +272,7 @@ const portfolioEndMarkerPlugin = {
     const labelX = Math.min(chartArea.right - width, Math.max(chartArea.left, x - width - 10));
     const labelY = Math.max(chartArea.top + 2, y - height - 12);
     ctx.fillStyle = options.labelBg || "rgba(15, 22, 26, 0.92)";
-    ctx.strokeStyle = options.labelBorder || "rgba(216, 163, 62, 0.28)";
+    ctx.strokeStyle = options.labelBorder || "rgba(45, 156, 255, 0.28)";
     ctx.lineWidth = 1;
     roundRect(ctx, labelX, labelY, width, height, 12);
     ctx.fill();
@@ -972,13 +972,6 @@ async function onGlobalClick(e) {
     state.expandedEventKey = null;
     routeToApp();
     render();
-    return;
-  }
-
-  const positionStatusBtn = e.target.closest("[data-position-status-filter]");
-  if (positionStatusBtn) {
-    state.positionsStatus = positionStatusBtn.dataset.positionStatusFilter === "closed" ? "closed" : "open";
-    renderPositions();
     return;
   }
 
@@ -5013,10 +5006,11 @@ function adminResolvedRow({ group, event }) {
 }
 
 function renderPositions() {
-  const status = state.positionsStatus === "closed" ? "closed" : "open";
+  const status = "open";
+  state.positionsStatus = "open";
   const snapshot = portfolioSnapshot();
   const visibleGroups = snapshot.groups
-    .map(item => ({ ...item, rows: status === "closed" ? item.closed : item.open }))
+    .map(item => ({ ...item, rows: item.open }))
     .filter(item => item.rows.length);
   const deltaClass = snapshot.pnl >= 0 ? "gain" : "loss";
   const deltaLabel = `${snapshot.pnl >= 0 ? "+" : ""}${money(snapshot.pnl)} (${snapshot.pnlPct >= 0 ? "+" : ""}${snapshot.pnlPct.toFixed(1)}%)`;
@@ -5029,47 +5023,11 @@ function renderPositions() {
           <h1>${money(snapshot.portfolioMark)}</h1>
           <span class="portfolio-delta ${deltaClass}">${deltaLabel} all time</span>
         </div>
-        <div class="positions-actions portfolio-actions">
-          <div class="group-counts portfolio-tabs" role="tablist" aria-label="Portfolio status">
-            <button class="group-count group-count-open ${status === "open" ? "active" : ""}" type="button" data-position-status-filter="open">${snapshot.openCount} open</button>
-            <button class="group-count group-count-closed ${status === "closed" ? "active" : ""}" type="button" data-position-status-filter="closed">${snapshot.closedCount} closed</button>
-          </div>
-          <button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back</button>
-        </div>
+        <button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back</button>
       </div>
 
-      <div class="portfolio-hero motion-item">
-        <div class="portfolio-device-card">
-          <div class="portfolio-device-top">
-            <div>
-              <p class="eyebrow">Account value</p>
-              <strong>${money(snapshot.portfolioMark)}</strong>
-            </div>
-            <div>
-              <p class="eyebrow">Cash-out</p>
-              <strong>${money(snapshot.cashOutPortfolio)}</strong>
-            </div>
-            <div>
-              <p class="eyebrow">Earnings</p>
-              <strong class="${deltaClass}">${signedMoney(snapshot.pnl)}</strong>
-            </div>
-          </div>
-          ${portfolioChartCardHtml(snapshot)}
-        </div>
-        <aside class="portfolio-activity-card">
-          <div class="portfolio-activity-head">
-            <span>Activity</span>
-            <small>${snapshot.activity.length ? `${snapshot.activity.length} recent` : "No trades yet"}</small>
-          </div>
-          ${portfolioActivityListHtml(snapshot.activity)}
-        </aside>
-      </div>
-
-      <div class="portfolio-metrics motion-item">
-        ${portfolioMetricHtml("Cash", snapshot.cash, "Available across groups")}
-        ${portfolioMetricHtml("Open cash-out", snapshot.openCashOutValue, "Conservative exit value")}
-        ${portfolioMetricHtml("Mark value", snapshot.openMarkValue, "Visible-price value")}
-        ${portfolioMetricHtml("Volume", snapshot.volume, `${snapshot.tradeCount} trades`)}
+      <div class="portfolio-chart-shell motion-item">
+        ${portfolioChartCardHtml(snapshot)}
       </div>
 
       ${visibleGroups.length ? `
@@ -5178,42 +5136,6 @@ function portfolioActivityForGroup(group, participant) {
   return items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
-function portfolioMetricHtml(label, value, helper) {
-  return `
-    <div class="portfolio-metric-card">
-      <span>${esc(label)}</span>
-      <strong>${money(value)}</strong>
-      <em>${esc(helper)}</em>
-    </div>`;
-}
-
-function portfolioActivityListHtml(activity) {
-  const visible = activity.slice(0, 5);
-  if (!visible.length) {
-    return `
-      <div class="portfolio-activity-empty">
-        <strong>No activity yet</strong>
-        <span>Your buys, sells, and resolutions will appear here.</span>
-      </div>`;
-  }
-  return `
-    <div class="portfolio-activity-list">
-      ${visible.map(item => {
-        const action = item.action === "sell" ? "Sold" : item.action === "resolved" ? "Resolved" : "Bought";
-        const cls = item.action === "sell" ? "sell" : item.action === "resolved" ? "resolved" : "buy";
-        return `
-          <button class="portfolio-activity-item" type="button" data-buy="yes" data-market-id="${esc(item.marketId)}">
-            <span class="portfolio-activity-icon ${cls}">${item.action === "sell" ? "↗" : item.action === "resolved" ? "✓" : "+"}</span>
-            <div>
-              <strong>${esc(action)} ${esc(item.outcomeTitle || "position")}</strong>
-              <em>${esc(item.groupEmoji || "")}${esc(item.groupName || "")} · ${esc(fmtShortDate(item.createdAt))}</em>
-            </div>
-            <small>${item.action === "resolved" ? "settled" : money(item.amount)}</small>
-          </button>`;
-      }).join("")}
-    </div>`;
-}
-
 function portfolioChartCardHtml(snapshot = portfolioSnapshot()) {
   const config = portfolioChartConfig(snapshot);
   return `
@@ -5317,13 +5239,13 @@ function positionGroupHtml(group, rows, status, groupData = {}) {
     <section class="position-group-card portfolio-position-card motion-item">
       <div class="position-group-head portfolio-group-head">
         <div>
-          <p class="eyebrow">${esc(group.emoji)} ${status === "closed" ? "Closed" : "Open"} positions</p>
+          <p class="eyebrow">${esc(group.emoji)} Positions</p>
           <h2>${esc(group.name)}</h2>
         </div>
         <div class="portfolio-group-values">
-          <span>${status === "open" ? "Cash-out" : "Settled"}</span>
+          <span>Cash-out</span>
           <strong>${money(totalValue)}</strong>
-          ${status === "open" ? `<em>${money(markValue)} mark</em>` : ""}
+          <em>${money(markValue)} mark</em>
         </div>
       </div>
       <div class="position-list portfolio-position-list">
@@ -5337,7 +5259,6 @@ function positionRowHtml(row) {
   return `
     <button class="position-row portfolio-position-row" type="button" data-buy="yes" data-market-id="${esc(row.marketId)}">
       <div class="position-market portfolio-position-market">
-        <span class="position-status ${row.status === "open" ? "open" : "closed"}">${esc(row.statusLabel)}</span>
         <strong>${esc(row.title)}</strong>
         <em>${esc(row.closeLabel)}</em>
         ${row.statusLabel === "Resolved" ? `<small class="position-settlement-note">Winner: ${esc(row.winnerTitle || "Unknown")}${row.resolvedBy ? ` · ${esc(row.resolvedBy)}` : ""}${row.resolutionNotes ? ` · ${esc(row.resolutionNotes)}` : ""}</small>` : ""}
@@ -5360,9 +5281,9 @@ function positionRowHtml(row) {
 function positionsEmptyHtml(status) {
   return `
     <div class="positions-empty portfolio-empty motion-item">
-      <p class="eyebrow">${status === "closed" ? "Closed portfolio" : "Open portfolio"}</p>
-      <h2>${status === "closed" ? "No settled positions yet." : "No open positions yet."}</h2>
-      <p>${status === "closed" ? "Resolved markets you traded will appear here with payout notes." : "Buy a contract in any group and it will show up here."}</p>
+      <p class="eyebrow">Portfolio</p>
+      <h2>No positions yet.</h2>
+      <p>Buy a contract in any group and it will show up here.</p>
       <button class="btn btn-primary btn-sm" type="button" data-go-dashboard>Back to markets</button>
     </div>`;
 }
@@ -5982,10 +5903,10 @@ function renderPortfolioCharts() {
     const { labels, data, minY, maxY } = portfolioChartConfig();
     const ctx = canvas.getContext("2d");
     const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height || 300);
-    gradient.addColorStop(0, "rgba(224, 171, 69, 0.58)");
-    gradient.addColorStop(0.42, "rgba(224, 171, 69, 0.27)");
-    gradient.addColorStop(0.78, "rgba(224, 171, 69, 0.08)");
-    gradient.addColorStop(1, "rgba(224, 171, 69, 0.00)");
+    gradient.addColorStop(0, "rgba(45, 156, 255, 0.42)");
+    gradient.addColorStop(0.42, "rgba(18, 79, 143, 0.24)");
+    gradient.addColorStop(0.78, "rgba(18, 79, 143, 0.08)");
+    gradient.addColorStop(1, "rgba(18, 79, 143, 0.00)");
     const chart = new Chart(canvas, {
       type: "line",
       data: {
@@ -5993,9 +5914,9 @@ function renderPortfolioCharts() {
         datasets: [{
           label: "Portfolio",
           data,
-          borderColor: "#d8a33e",
+          borderColor: "#2d9cff",
           backgroundColor: gradient,
-          pointBackgroundColor: "#d8a33e",
+          pointBackgroundColor: "#2d9cff",
           pointBorderColor: "rgba(255,255,255,0.92)",
           pointBorderWidth: ctx => ctx.dataIndex === data.length - 1 ? 2 : 0,
           pointRadius: ctx => ctx.dataIndex === data.length - 1 ? 4 : 0,
@@ -6016,13 +5937,13 @@ function renderPortfolioCharts() {
         layout: { padding: { top: 18, right: 62, bottom: 4, left: 2 } },
         plugins: {
           legend: { display: false },
-          portfolioEndMarker: { enabled: true, color: "#d8a33e", labelBg: "rgba(15, 22, 26, 0.94)", labelColor: "rgba(244,247,249,0.86)", labelBorder: "rgba(216,163,62,0.3)" },
+          portfolioEndMarker: { enabled: true, color: "#2d9cff", labelBg: "rgba(15, 22, 26, 0.94)", labelColor: "rgba(244,247,249,0.86)", labelBorder: "rgba(45,156,255,0.3)" },
           tooltip: {
             displayColors: false,
             backgroundColor: "rgba(15,22,26,0.94)",
             titleColor: "rgba(174,188,198,0.78)",
             bodyColor: "#f4f7f9",
-            borderColor: "rgba(216,163,62,0.28)",
+            borderColor: "rgba(45,156,255,0.28)",
             borderWidth: 1,
             padding: 10,
             callbacks: {
