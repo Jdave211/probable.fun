@@ -2825,7 +2825,7 @@ async function ensureMarketGroup() {
   const reusableGroup = pickReusableGroup();
   if (reusableGroup) {
     state.currentGroupId = reusableGroup.id;
-    state.activeMember = reusableGroup.members?.includes(member) ? member : reusableGroup.members?.[0] ?? member;
+    state.activeMember = memberAliasForGroup(reusableGroup) ?? member;
     state.shell = "app";
     localStorage.setItem("probable_user", state.activeMember);
     localStorage.setItem("probable_groupId", state.currentGroupId);
@@ -2858,9 +2858,11 @@ function pickReusableGroup() {
   const savedGroupId = localStorage.getItem("probable_groupId");
   if (savedGroupId) {
     const saved = state.groups.find(group => group.id === savedGroupId);
-    if (saved) return saved;
+    if (saved && groupHasCurrentMember(saved)) return saved;
   }
-  return state.groups.find(isPbMyMarketsGroup) ?? state.groups[0] ?? null;
+  return state.groups.find(group => isPbMyMarketsGroup(group) && groupHasCurrentMember(group))
+    ?? state.groups.find(groupHasCurrentMember)
+    ?? null;
 }
 
 async function createMarketForGroup(group, payload) {
@@ -3114,7 +3116,7 @@ function visibleNavGroups() {
   if (state.shell !== "app" || !isLoggedIn()) return [];
   const activeId = state.currentGroupId;
   const byLabel = new Map();
-  state.groups.forEach(group => {
+  state.groups.filter(groupHasCurrentMember).forEach(group => {
     const key = `${String(group.emoji || "").trim().toLowerCase()}::${String(group.name || "").trim().toLowerCase()}`;
     const current = byLabel.get(key);
     if (!current || group.id === activeId) byLabel.set(key, group);
@@ -7008,11 +7010,7 @@ function ammPreview(poolYes, poolNo, side, amount) {
 }
 
 function setGroups(groups) {
-  state.groups = withSampleDashboard(groups ?? []);
-}
-
-function withSampleDashboard(groups) {
-  return groups.map(group => isPbMyMarketsGroup(group) ? hydrateSampleGroup(group) : group);
+  state.groups = groups ?? [];
 }
 
 function isPbMyMarketsGroup(group) {
@@ -7021,130 +7019,8 @@ function isPbMyMarketsGroup(group) {
   return name.includes("my markets") && emoji === "pb";
 }
 
-function hydrateSampleGroup(group) {
-  const existingMarkets = group.markets ?? [];
-  if (existingMarkets.some(market => isSampleMarket(market))) return group;
-  const demoMarkets = sampleMarkets();
-  const demoEvents = new Set(demoMarkets.map(market => String(market.category).toLowerCase()));
-  const nonConflictingMarkets = existingMarkets.filter(market => !demoEvents.has(sampleEventTitle(market).toLowerCase()));
-
-  const currentName = authDisplayName() || state.activeMember || "You";
-  const sampleMembers = [currentName, "Maya", "Leo", "Tomi", "Alex", "Priya", "Noah", "Zara", "Sam", "Ife"].filter(Boolean);
-  const members = [...new Set([...(group.members ?? []), ...sampleMembers])];
-  const sampleBalances = {
-    [currentName]: 11280,
-    Maya: 10890,
-    Leo: 10640,
-    Tomi: 10225,
-    Alex: 10085,
-    Priya: 9860,
-    Noah: 9635,
-    Zara: 9480,
-    Sam: 9210,
-    Ife: 9045,
-  };
-  const balances = { ...(group.balances ?? {}) };
-  members.forEach(member => {
-    if (balances[member] == null) balances[member] = sampleBalances[member] ?? DEFAULT_BALANCE;
-  });
-
-  return {
-    ...group,
-    members,
-    balances,
-    markets: [...demoMarkets, ...nonConflictingMarkets],
-  };
-}
-
-function sampleMarkets() {
-  const defs = [
-    ["Who will win the World Cup?", "England", 27, 18420, "open", 32],
-    ["Who will win the World Cup?", "France", 21, 16780, "open", 32],
-    ["Who will win the World Cup?", "Portugal", 16, 14240, "open", 32],
-    ["Who will win the World Cup?", "Brazil", 14, 13050, "open", 32],
-    ["Who will win the World Cup?", "Argentina", 11, 9820, "open", 32],
-    ["Golden Boot winner", "Kylian Mbappe", 24, 11680, "open", 28],
-    ["Golden Boot winner", "Erling Haaland", 20, 10410, "open", 28],
-    ["Golden Boot winner", "Harry Kane", 18, 9050, "open", 28],
-    ["Golden Boot winner", "Vinicius Jr.", 11, 5480, "open", 28],
-    ["Will England win their opener?", "Yes", 62, 7420, "open", 6],
-    ["Will England win their opener?", "No", 38, 7420, "open", 6],
-    ["Will Portugal reach the final?", "Yes", 33, 6120, "open", 24],
-    ["Will Portugal reach the final?", "No", 67, 6120, "open", 24],
-    ["Will Brazil top Group C?", "Yes", 71, 4380, "closed", -1],
-    ["Will Brazil top Group C?", "No", 29, 4380, "closed", -1],
-  ];
-  return defs.map((def, index) => sampleMarket(def, index));
-}
-
 function sampleEventTitle(market) {
   return market.category && market.category !== "General" ? market.category : market.question;
-}
-
-function sampleMarket([event, option, pct, volume, status, closeInDays], index) {
-  const probability = pct / 100;
-  const createdAt = new Date(Date.now() - (330 - (index % 4) * 4) * 24 * 60 * 60 * 1000);
-  const closesAt = new Date(Date.now() + closeInDays * 24 * 60 * 60 * 1000);
-  const poolSize = 8000 + index * 260;
-  const pool_no = Math.max(8, probability * poolSize);
-  const pool_yes = Math.max(8, (1 - probability) * poolSize);
-  return {
-    id: `sample-${slug(event)}-${slug(option)}`,
-    question: option,
-    category: event,
-    status,
-    oracleType: "ai",
-    probability,
-    pool_yes,
-    pool_no,
-    k: pool_yes * pool_no,
-    initialLiquidity: DEFAULT_MARKET_LIQUIDITY,
-    totalBet: volume,
-    volume,
-    liquidity: pool_yes + pool_no,
-    yesSharesOutstanding: Math.round(volume * probability * 0.75),
-    noSharesOutstanding: Math.round(volume * (1 - probability) * 0.75),
-    createdAt: createdAt.toISOString(),
-    closesAt: closesAt.toISOString(),
-    outcome: status === "resolved" ? "yes" : null,
-    resolvedAt: null,
-    oracleProposal: null,
-    trades: sampleTrades(index, probability),
-    probabilityHistory: sampleProbabilityHistory(createdAt, probability, index),
-    volumeHistory: [],
-  };
-}
-
-function sampleTrades(index, probability) {
-  const names = ["Maya", "Leo", "Tomi", "Alex", "Priya", "Noah", "Zara", "Sam", "Ife"];
-  return [0, 1, 2].map(offset => {
-    const amount = 24 + ((index + offset) % 6) * 18;
-    const side = (index + offset) % 3 === 0 ? "no" : "yes";
-    return {
-      participant: names[(index + offset) % names.length],
-      side,
-      amount,
-      shares: amount * (1 + probability),
-      probBefore: Math.max(0.04, Math.min(0.96, probability - 0.05 + offset * 0.025)),
-      probAfter: Math.max(0.04, Math.min(0.96, probability - 0.025 + offset * 0.025)),
-      createdAt: new Date(Date.now() - (offset + 1) * 6 * 60 * 60 * 1000).toISOString(),
-    };
-  });
-}
-
-function sampleProbabilityHistory(createdAt, probability, index) {
-  return Array.from({ length: 132 }, (_, point) => {
-    const progress = point / 131;
-    const early = probability * (0.55 + (index % 4) * 0.08);
-    const longWave = Math.sin((point + index * 5) * 0.09) * 0.035;
-    const shortWave = Math.sin((point + index) * 0.41) * 0.012;
-    const lateBreak = point > 120 ? (point - 120) * 0.006 * (index % 2 === 0 ? 1 : -1) : 0;
-    const value = Math.max(0.03, Math.min(0.96, early + (probability - early) * progress + longWave + shortWave + lateBreak));
-    return {
-      createdAt: new Date(createdAt.getTime() + point * 2.5 * 24 * 60 * 60 * 1000).toISOString(),
-      probability: value,
-    };
-  });
 }
 
 function isSampleMarket(market) {
@@ -7161,11 +7037,32 @@ function normalizeSelection() {
   }
   const group = getCurrentGroup();
   if (group && (!state.activeMember || !group.members.includes(state.activeMember))) {
-    state.activeMember = group.members[0] ?? null;
+    state.activeMember = memberAliasForGroup(group) ?? (!isLoggedIn() ? group.members[0] ?? null : null);
   }
   if (!group && !isLoggedIn()) {
     state.activeMember = null;
   }
+}
+
+function currentMemberAliases() {
+  return [
+    state.activeMember,
+    authDisplayName(),
+    state.authUser?.email,
+    state.authUser?.phone,
+    localStorage.getItem("probable_display_name"),
+  ]
+    .map(value => String(value || "").trim())
+    .filter(Boolean);
+}
+
+function memberAliasForGroup(group) {
+  const members = new Set((group?.members ?? []).map(member => String(member || "").trim()));
+  return currentMemberAliases().find(alias => members.has(alias)) || null;
+}
+
+function groupHasCurrentMember(group) {
+  return Boolean(memberAliasForGroup(group));
 }
 
 function renderMarketLinkLoading() {
@@ -7206,8 +7103,9 @@ function persistNavigationState() {
   if (state.currentGroupId) localStorage.setItem(STORAGE_KEYS.groupId, state.currentGroupId);
   if (state.activeMember) localStorage.setItem(STORAGE_KEYS.user, state.activeMember);
   if (import.meta.env.DEV && state.activeMember) {
+    const displayName = authDisplayName() || state.activeMember;
     localStorage.setItem(STORAGE_KEYS.devAuth, JSON.stringify({
-      displayName: state.activeMember,
+      displayName,
       email: state.authUser?.email || "dev@probable.local",
     }));
   }
