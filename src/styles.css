@@ -1,6 +1,7 @@
 @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap");
 @import "tailwindcss";
 
+/* Frontend deploy touchpoint: keeps Vercel previews easy to verify from GitHub commits. */
 :root {
   --bg: #101417;
   --surface: #151a1e;
