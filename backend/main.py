@@ -721,24 +721,113 @@ def assemble_event_trade(t: dict, outcome_lookup: dict[str, dict]) -> dict:
     outcome = outcome_lookup.get(t["outcome_id"], {})
     prices_before = t.get("prices_before") or {}
     prices_after = t.get("prices_after") or {}
-    before = float(prices_before.get(t["outcome_id"], outcome.get("price") or 0))
-    after = float(prices_after.get(t["outcome_id"], outcome.get("price") or 0))
+    display_outcome_id = t.get("display_outcome_id") or t["outcome_id"]
+    display_side = (t.get("display_side") or "yes").lower()
+    display_outcome = outcome_lookup.get(display_outcome_id, outcome)
+    before_key = display_outcome_id if display_side == "no" else t["outcome_id"]
+    before_raw = float(prices_before.get(before_key, display_outcome.get("price") or outcome.get("price") or 0))
+    after_raw = float(prices_after.get(before_key, display_outcome.get("price") or outcome.get("price") or 0))
+    before = 1.0 - before_raw if display_side == "no" else before_raw
+    after = 1.0 - after_raw if display_side == "no" else after_raw
     return {
         "id": t["id"],
         "participant": t["participant"],
-        "side": "yes",
+        "side": display_side,
         "action": t["action"],
-        "outcomeId": t["outcome_id"],
-        "outcomeTitle": outcome.get("title"),
+        "outcomeId": display_outcome_id,
+        "outcomeTitle": display_outcome.get("title"),
         "amount": t["cash_amount"],
-        "shares": t["shares_delta"],
+        "shares": t.get("display_shares") if t.get("display_shares") is not None else t["shares_delta"],
         "avgPrice": t["avg_price"],
         "probBefore": before,
         "probAfter": after,
         "pricesBefore": prices_before,
         "pricesAfter": prices_after,
         "createdAt": t["created_at"],
+        "displayGroupId": t.get("display_group_id"),
+        "components": t.get("components") or [],
     }
+
+
+def display_event_trades(trades_raw: list[dict], outcomes: list[dict], outcome_lookup: dict[str, dict]) -> list[dict]:
+    outcome_ids = {item["id"] for item in outcomes}
+    grouped: dict[tuple, list[dict]] = {}
+    consumed: set[str] = set()
+    display_trades: list[dict] = []
+
+    for row in trades_raw:
+        group_id = row.get("display_group_id")
+        if group_id:
+            grouped.setdefault(("display", group_id), []).append(row)
+
+    for row in trades_raw:
+        if row.get("display_group_id"):
+            continue
+        if len(outcomes) <= 2:
+            continue
+        key = (
+            "infer",
+            row.get("event_id"),
+            row.get("participant"),
+            row.get("action"),
+            row.get("created_at"),
+            round(float(row.get("avg_price") or 0), 8),
+            round(float(row.get("shares_delta") or 0), 8),
+            tuple(sorted((row.get("prices_after") or {}).items())),
+        )
+        grouped.setdefault(key, []).append(row)
+
+    for rows in grouped.values():
+        row_ids = {row["id"] for row in rows}
+        if row_ids & consumed:
+            continue
+        component_ids = {row["outcome_id"] for row in rows}
+        display_outcome_id = rows[0].get("display_outcome_id")
+        if not display_outcome_id:
+            missing = list(outcome_ids - component_ids)
+            if len(rows) != max(1, len(outcomes) - 1) or len(missing) != 1:
+                continue
+            display_outcome_id = missing[0]
+        display_side = (rows[0].get("display_side") or "no").lower()
+        if display_side != "no":
+            continue
+
+        base = {**rows[0]}
+        base["id"] = rows[0].get("display_group_id") or f"synthetic-{rows[0]['id']}"
+        base["outcome_id"] = rows[0]["outcome_id"]
+        base["display_outcome_id"] = display_outcome_id
+        base["display_side"] = "no"
+        base["display_shares"] = rows[0].get("display_shares") or abs(float(rows[0].get("shares_delta") or 0))
+        base["cash_amount"] = round(sum(float(row.get("cash_amount") or 0) for row in rows), 4)
+        base["components"] = [assemble_event_trade({**row, "display_side": None, "display_outcome_id": None, "display_shares": None}, outcome_lookup) for row in rows]
+        display_trades.append(assemble_event_trade(base, outcome_lookup))
+        consumed |= row_ids
+
+    for row in trades_raw:
+        if row["id"] not in consumed:
+            display_trades.append(assemble_event_trade(row, outcome_lookup))
+
+    return sorted(display_trades, key=lambda item: item.get("createdAt") or "")
+
+
+def insert_event_trade_rows(db, rows: list[dict]) -> None:
+    if not rows:
+        return
+    try:
+        db.table("event_trades").insert(rows).execute()
+    except Exception as exc:
+        message = str(exc)
+        if "display_group_id" not in message and "display_outcome_id" not in message and "display_side" not in message and "display_shares" not in message:
+            raise
+        stripped = [
+            {
+                key: value
+                for key, value in row.items()
+                if key not in {"display_group_id", "display_outcome_id", "display_side", "display_shares"}
+            }
+            for row in rows
+        ]
+        db.table("event_trades").insert(stripped).execute()
 
 
 def assemble_market_analytics(m: dict, trades_raw: list[dict]) -> dict:
@@ -820,7 +909,7 @@ def assemble_event_markets(event: dict) -> list[dict]:
     trades_raw = sorted(event.pop("event_trades", []), key=lambda x: x.get("created_at") or "")
     positions_raw = event.pop("event_positions", [])
     outcome_lookup = {outcome["id"]: outcome for outcome in outcomes}
-    trades = [assemble_event_trade(trade, outcome_lookup) for trade in trades_raw]
+    trades = display_event_trades(trades_raw, outcomes, outcome_lookup)
     positions: dict[str, dict[str, float]] = {}
     for position in positions_raw:
         positions.setdefault(position["participant"], {})[position["outcome_id"]] = float(position.get("shares") or 0)
@@ -2021,6 +2110,7 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
     allocation_total = sum(allocation_weights) or len(complement)
     trade_rows = []
     remaining_cash = amount
+    display_group_id = create_id()
     for idx, item in enumerate(complement):
         if idx == len(complement) - 1:
             cash_amount = remaining_cash
@@ -2038,9 +2128,13 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
             "avg_price": round((amount / abs(shares)) if shares else 0, 8),
             "prices_before": prices_before,
             "prices_after": {key: round(value, 8) for key, value in prices_after.items()},
+            "display_group_id": display_group_id,
+            "display_outcome_id": excluded_outcome_id,
+            "display_side": "no",
+            "display_shares": round(abs(shares), 8),
             "created_at": now,
         })
-    db.table("event_trades").insert(trade_rows).execute()
+    insert_event_trade_rows(db, trade_rows)
     db.table("market_events").update({
         "total_volume": round(float(event.get("total_volume") or 0) + amount, 4),
     }).eq("id", event["id"]).execute()

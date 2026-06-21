@@ -131,8 +131,17 @@ CREATE TABLE IF NOT EXISTS event_trades (
   avg_price     numeric     NOT NULL,
   prices_before jsonb       NOT NULL,
   prices_after  jsonb       NOT NULL,
+  display_group_id text,
+  display_outcome_id text,
+  display_side text,
+  display_shares numeric,
   created_at    timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_group_id text;
+ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_outcome_id text;
+ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_side text;
+ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_shares numeric;
 
 -- Indexes for common lookups
 CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id);

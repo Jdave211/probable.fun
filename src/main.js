@@ -4529,13 +4529,14 @@ function marketHistoryTrades(market, event) {
 function marketHistoryRow(trade, market, eventMeta) {
   const action = String(trade.action || "buy").toLowerCase();
   const isSell = action === "sell";
-  const outcomeTitle = trade.outcomeTitle || marketOptionTitleForOutcome(market, trade.outcomeId) || String(trade.side || "Yes").toUpperCase();
+  const outcomeTitle = tradeDisplayOutcomeTitle(trade, market);
   const priceAfter = Number(trade.probAfter ?? trade.avgPrice ?? 0);
   const priceBefore = Number(trade.probBefore ?? priceAfter);
   const move = (priceAfter - priceBefore) * 100;
   const amount = Number(trade.amount ?? trade.cashAmount ?? 0);
   const avgPrice = Number(trade.avgPrice || 0);
-  const sideClass = String(outcomeTitle).trim().toLowerCase() === "no" ? "no" : "yes";
+  const normalizedOutcomeTitle = String(outcomeTitle).trim().toLowerCase();
+  const sideClass = trade.side === "no" || normalizedOutcomeTitle === "no" || normalizedOutcomeTitle.endsWith("· no") ? "no" : "yes";
   return `
     <div class="market-history-row ${isSell ? "sell" : "buy"}">
       <span class="market-history-thumb ${eventThumbClass(eventMeta.title, eventMeta.imageUrl)}" aria-hidden="true">${eventThumb(eventMeta.title, eventMeta.imageUrl)}</span>
@@ -4555,6 +4556,17 @@ function marketHistoryRow(trade, market, eventMeta) {
       </div>
       <time>${esc(fmtDate(trade.createdAt))}</time>
     </div>`;
+}
+
+function tradeDisplayOutcomeTitle(trade, market = null) {
+  const title = trade.outcomeTitle || (market ? marketOptionTitleForOutcome(market, trade.outcomeId) : "") || String(trade.side || "Yes").toUpperCase();
+  return trade.side === "no" && !String(title).trim().toLowerCase().endsWith("· no")
+    ? `${title} · No`
+    : title;
+}
+
+function tradeComponents(trade) {
+  return Array.isArray(trade?.components) && trade.components.length ? trade.components : [trade];
 }
 
 function openTradeHistoryModal(marketId) {
@@ -5841,7 +5853,7 @@ function portfolioActivityForGroup(group, participant) {
           groupEmoji: group.emoji,
           title: sampleEventTitle(market),
           imageUrl: market.imageUrl || "",
-          outcomeTitle: trade.outcomeTitle || marketOptionTitleForOutcome(market, trade.outcomeId),
+          outcomeTitle: tradeDisplayOutcomeTitle(trade, market),
           action: trade.action || "buy",
           amount: Number(trade.amount || trade.cashAmount || 0),
           createdAt: trade.createdAt || market.createdAt,
@@ -6070,9 +6082,11 @@ function seedEventPrices(state, market) {
     quantities.set(outcome.id, Number(outcome.quantity || 0));
   }
   for (const trade of trades) {
-    const outcomeId = trade.outcomeId;
-    if (!outcomeId) continue;
-    quantities.set(outcomeId, Number(quantities.get(outcomeId) || 0) - Number(trade.shares || trade.sharesDelta || 0));
+    for (const component of tradeComponents(trade)) {
+      const outcomeId = component.outcomeId;
+      if (!outcomeId) continue;
+      quantities.set(outcomeId, Number(quantities.get(outcomeId) || 0) - Number(component.shares || component.sharesDelta || 0));
+    }
   }
   state.prices.set(market.eventId, prices);
   state.quantities.set(market.eventId, quantities);
@@ -6094,14 +6108,17 @@ function applyPortfolioTimelineEvent(event) {
     Object.entries(event.trade.pricesAfter || {}).forEach(([id, price]) => prices.set(id, Number(price || 0)));
     event.state.prices.set(event.market.eventId, prices);
     const quantities = event.state.quantities.get(event.market.eventId) || new Map();
-    const outcomeId = event.trade.outcomeId;
-    if (outcomeId) {
-      quantities.set(outcomeId, Number(quantities.get(outcomeId) || 0) + Number(event.trade.shares || event.trade.sharesDelta || 0));
-      event.state.quantities.set(event.market.eventId, quantities);
+    for (const component of tradeComponents(event.trade)) {
+      const outcomeId = component.outcomeId;
+      if (!outcomeId) continue;
+      quantities.set(outcomeId, Number(quantities.get(outcomeId) || 0) + Number(component.shares || component.sharesDelta || 0));
     }
+    event.state.quantities.set(event.market.eventId, quantities);
     if (event.trade.participant !== event.state.owner) return;
     event.state.cash += (event.trade.action || "buy") === "sell" ? tradeCashAmount(event.trade) : -tradeCashAmount(event.trade);
-    addTimelineShares(event.state, event.market.eventId, event.trade.outcomeId, Number(event.trade.shares || event.trade.sharesDelta || 0));
+    for (const component of tradeComponents(event.trade)) {
+      addTimelineShares(event.state, event.market.eventId, component.outcomeId, Number(component.shares || component.sharesDelta || 0));
+    }
     return;
   }
   if (event.type === "resolve") {
@@ -6256,8 +6273,11 @@ function positionRowsForGroup(group, status, participantOverride = "") {
       const marketStatus = market.status === "open" ? "open" : "closed";
       if (marketStatus !== status) continue;
       const positions = market.positions?.[participant] ?? {};
+      const syntheticRows = syntheticNoPositionRows(market, participant);
+      rows.push(...syntheticRows);
+      const covered = syntheticNoCoveredShares(market, participant);
       for (const outcome of market.outcomes) {
-        const shares = Number(positions[outcome.id] || 0);
+        const shares = Number(positions[outcome.id] || 0) - Number(covered[outcome.id] || 0);
         if (!Number.isFinite(shares) || shares <= 0.000001) continue;
         rows.push(positionRowFromOutcome(market, outcome, shares));
       }
@@ -6267,6 +6287,59 @@ function positionRowsForGroup(group, status, participantOverride = "") {
     rows.push(...legacyRows);
   }
   return rows.sort((a, b) => b.value - a.value);
+}
+
+function syntheticNoPositionRows(market, participant) {
+  const netByOutcome = {};
+  for (const trade of market.eventTrades ?? []) {
+    if (trade.participant !== participant || trade.side !== "no") continue;
+    const outcomeId = trade.outcomeId;
+    if (!outcomeId) continue;
+    const direction = trade.action === "sell" ? -1 : 1;
+    netByOutcome[outcomeId] = Number(netByOutcome[outcomeId] || 0) + direction * Math.abs(Number(trade.shares || 0));
+  }
+  return Object.entries(netByOutcome)
+    .filter(([, shares]) => shares > 0.000001)
+    .map(([outcomeId, shares]) => positionRowFromSyntheticNo(market, outcomeId, shares));
+}
+
+function syntheticNoCoveredShares(market, participant) {
+  const covered = {};
+  for (const row of syntheticNoPositionRows(market, participant)) {
+    for (const outcome of market.outcomes ?? []) {
+      if (outcome.id === row.marketId) continue;
+      covered[outcome.id] = Number(covered[outcome.id] || 0) + Number(row.shares || 0);
+    }
+  }
+  return covered;
+}
+
+function positionRowFromSyntheticNo(market, outcomeId, shares) {
+  const outcome = market.outcomes?.find(item => item.id === outcomeId) || {};
+  const status = market.status === "open" ? "open" : "closed";
+  const price = Math.max(0, 1 - Number(outcome.price || 0));
+  const resolvedOutcome = market.outcome;
+  const value = market.status === "resolved"
+    ? (resolvedOutcome !== outcomeId ? shares : 0)
+    : status === "open"
+      ? lmsrCashForComplementSellShares(market, outcomeId, shares)
+      : shares * price;
+  return {
+    marketId: outcomeId,
+    title: sampleEventTitle(market),
+    outcomeTitle: `${outcome.title || marketOptionTitle(market)} · No`,
+    shares,
+    price,
+    value,
+    status,
+    statusLabel: market.status === "resolved" ? "Resolved" : market.status === "closed" ? "Closed" : "Open",
+    closeLabel: fmtClose(market),
+    winnerTitle: market.status === "resolved" ? resolutionOutcomeLabel(market, resolvedOutcome) : "",
+    isWinner: market.status === "resolved" && resolvedOutcome !== outcomeId,
+    resolvedBy: market.resolvedBy || "",
+    resolutionNotes: market.resolutionNotes || "",
+    resolvedAt: market.resolvedAt || "",
+  };
 }
 
 function positionRowFromOutcome(market, outcome, shares) {
@@ -6473,7 +6546,7 @@ function recentTradesForMember(group, memberName) {
         if (trade.participant !== memberName) continue;
         trades.push({
           title: sampleEventTitle(market),
-          outcomeTitle: trade.outcomeTitle || marketOptionTitleForOutcome(market, trade.outcomeId),
+          outcomeTitle: tradeDisplayOutcomeTitle(trade, market),
           action: trade.action === "sell" ? "sold" : "bought",
           amount: Number(trade.amount || trade.cashAmount || 0),
           createdAt: trade.createdAt || trade.timestamp || "",
