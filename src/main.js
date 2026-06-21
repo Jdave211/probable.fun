@@ -2047,9 +2047,14 @@ function marketTypeLabel(outcomes) {
   return keys.length === 2 && keys.includes("yes") && keys.includes("no") ? "Binary" : "Multiple choice";
 }
 
-function outcomePreviewHtml(outcomes) {
+function outcomePreviewHtml(outcomes, { limit = Infinity } = {}) {
   const list = outcomes.length ? outcomes : ["Yes", "No"];
-  return list.map(outcome => `<span>${escapeHtml(outcome)}</span>`).join("");
+  const visible = list.slice(0, limit);
+  const remaining = Math.max(0, list.length - visible.length);
+  return [
+    ...visible.map(outcome => `<span>${escapeHtml(outcome)}</span>`),
+    remaining ? `<span class="prediction-chip-more">+${remaining} more</span>` : "",
+  ].join("");
 }
 
 function outcomeReviewHtml(outcomes) {
@@ -2066,7 +2071,7 @@ function outcomeReviewHtml(outcomes) {
 function updateOutcomePreviews(form = dom.marketForm) {
   const outcomes = parseOutcomeOptions(form.querySelector("[name=outcomes]")?.value ?? "");
   form.querySelectorAll("[data-outcome-preview]").forEach(target => {
-    target.innerHTML = outcomePreviewHtml(outcomes);
+    target.innerHTML = outcomePreviewHtml(outcomes, { limit: 10 });
   });
 }
 

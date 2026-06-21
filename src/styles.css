@@ -5068,6 +5068,11 @@ button { color: inherit; }
   font-weight: 800;
   padding: 5px 8px;
 }
+.prediction-chip-preview .prediction-chip-more {
+  border-color: rgba(157, 171, 181, 0.18);
+  background: rgba(157, 171, 181, 0.08);
+  color: var(--text-2);
+}
 .market-image-picker {
   display: grid;
   gap: 10px;
