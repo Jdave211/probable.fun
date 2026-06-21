@@ -3255,7 +3255,7 @@ function renderFocusedTradeView(group, market, event) {
             ${sortedMarkets.map((item, index) => focusedOutcomeRow(item, tradeMarket.id, index, event)).join("")}
           </div>
 
-          ${verificationPanel(tradeMarket, event)}
+          ${marketHistoryPanel(tradeMarket, event)}
           ${marketParticipants(tradeMarket, event)}
         </section>
 
@@ -4128,6 +4128,87 @@ function verificationPanel(market, event) {
       ${proposalHtml(market, proposal)}
       ${oracleControls(market, proposal, oracleError)}
     </section>`;
+}
+
+function marketHistoryPanel(market, event) {
+  const title = event?.title || sampleEventTitle(market);
+  const imageUrl = event?.imageUrl || market.imageUrl || "";
+  const allTrades = marketHistoryTrades(market, event);
+  const trades = allTrades.slice(-8).reverse();
+  const total = allTrades.length;
+  return `
+    <section class="market-history-panel" data-market-id="${esc(market.id)}">
+      <div class="market-history-head">
+        <div>
+          <span class="market-history-kicker">Market history</span>
+          <h3>${trades.length ? "Recent activity" : "No trades yet"}</h3>
+        </div>
+        <span>${total} ${total === 1 ? "trade" : "trades"}</span>
+      </div>
+      ${trades.length ? `
+        <div class="market-history-list">
+          ${trades.map(trade => marketHistoryRow(trade, market, { title, imageUrl })).join("")}
+        </div>
+      ` : `
+        <div class="market-history-empty">
+          <span class="market-history-thumb ${eventThumbClass(title, imageUrl)}" aria-hidden="true">${eventThumb(title, imageUrl)}</span>
+          <div>
+            <strong>Market opened</strong>
+            <p>Trades will appear here as people buy or sell outcomes.</p>
+          </div>
+          <time>${esc(fmtDate(market.createdAt || event?.createdAt || Date.now()))}</time>
+        </div>
+      `}
+    </section>`;
+}
+
+function marketHistoryTrades(market, event) {
+  const markets = event?.markets?.length ? event.markets : [market];
+  const eventTradeSource = markets.find(item => Array.isArray(item.eventTrades) && item.eventTrades.length) || (market.eventTrades?.length ? market : null);
+  const rawTrades = eventTradeSource
+    ? eventTradeSource.eventTrades
+    : markets.flatMap(item => (item.trades || []).map(trade => ({
+        ...trade,
+        outcomeTitle: trade.outcomeTitle || marketOptionTitleForOutcome(item, trade.outcomeId) || marketOptionTitle(item),
+      })));
+  const seen = new Set();
+  return sortedTrades(rawTrades).filter(trade => {
+    const key = trade.id || `${trade.participant}-${trade.createdAt}-${trade.outcomeId || trade.side}-${trade.amount || trade.cashAmount}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function marketHistoryRow(trade, market, eventMeta) {
+  const action = String(trade.action || "buy").toLowerCase();
+  const isSell = action === "sell";
+  const outcomeTitle = trade.outcomeTitle || marketOptionTitleForOutcome(market, trade.outcomeId) || String(trade.side || "Yes").toUpperCase();
+  const priceAfter = Number(trade.probAfter ?? trade.avgPrice ?? 0);
+  const priceBefore = Number(trade.probBefore ?? priceAfter);
+  const move = (priceAfter - priceBefore) * 100;
+  const amount = Number(trade.amount ?? trade.cashAmount ?? 0);
+  const avgPrice = Number(trade.avgPrice || 0);
+  const sideClass = String(outcomeTitle).trim().toLowerCase() === "no" ? "no" : "yes";
+  return `
+    <div class="market-history-row ${isSell ? "sell" : "buy"}">
+      <span class="market-history-thumb ${eventThumbClass(eventMeta.title, eventMeta.imageUrl)}" aria-hidden="true">${eventThumb(eventMeta.title, eventMeta.imageUrl)}</span>
+      <div class="market-history-main">
+        <span class="market-history-line">
+          <em>${isSell ? "Sold" : "Bought"}</em>
+          <strong>${esc(outcomeTitle)}</strong>
+          <small>${esc(trade.participant || "Trader")}</small>
+        </span>
+        <span class="market-history-meta">
+          ${money(amount)}${avgPrice > 0 ? ` · avg ${(avgPrice * 100).toFixed(1)}¢` : ""}
+        </span>
+      </div>
+      <div class="market-history-price">
+        <strong class="${sideClass}">${Number.isFinite(priceAfter) ? `${Math.round(priceAfter * 100)}%` : "-"}</strong>
+        <span class="${move >= 0 ? "up" : "down"}">${Number.isFinite(move) ? `${move >= 0 ? "+" : ""}${move.toFixed(1)}%` : ""}</span>
+      </div>
+      <time>${esc(fmtDate(trade.createdAt))}</time>
+    </div>`;
 }
 
 function splitRuleSentences(text) {

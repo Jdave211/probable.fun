@@ -1522,6 +1522,189 @@ button { color: inherit; }
   font-weight: 800;
   white-space: nowrap;
 }
+
+.market-history-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  border-top: 1px solid rgba(157, 171, 181, 0.14);
+  padding-top: 18px;
+}
+
+.market-history-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.market-history-kicker {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-3);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.market-history-head h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.02rem;
+}
+
+.market-history-head > span {
+  color: var(--text-3);
+  font-size: 0.8rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.market-history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.market-history-row,
+.market-history-empty {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  border-radius: 16px;
+  padding: 8px 10px 8px 0;
+}
+
+.market-history-row {
+  border-bottom: 1px solid rgba(157, 171, 181, 0.08);
+}
+
+.market-history-row:last-child {
+  border-bottom: 0;
+}
+
+.market-history-row:hover {
+  background: rgba(45, 156, 255, 0.045);
+}
+
+.market-history-thumb {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  overflow: hidden;
+  border-radius: 13px;
+  background: rgba(255,255,255,0.055);
+  box-shadow: inset 0 0 0 1px rgba(157, 171, 181, 0.14);
+}
+
+.market-history-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.market-history-main {
+  min-width: 0;
+}
+
+.market-history-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.market-history-line em {
+  color: #7bbdff;
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 950;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.market-history-row.sell .market-history-line em {
+  color: #ff626a;
+}
+
+.market-history-line strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-history-line small {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-history-meta {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-2);
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.market-history-price {
+  display: grid;
+  gap: 2px;
+  justify-items: end;
+}
+
+.market-history-price strong {
+  color: var(--text);
+  font-size: 0.98rem;
+  font-weight: 950;
+}
+
+.market-history-price strong.yes { color: var(--primary); }
+.market-history-price strong.no { color: var(--red); }
+
+.market-history-price span {
+  color: var(--text-3);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.market-history-price span.up { color: #35c46f; }
+.market-history-price span.down { color: var(--red); }
+
+.market-history-row time,
+.market-history-empty time {
+  color: var(--text-3);
+  font-size: 0.74rem;
+  font-weight: 850;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.market-history-empty {
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  color: var(--text-2);
+}
+
+.market-history-empty strong {
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.market-history-empty p {
+  margin: 2px 0 0;
+  color: var(--text-3);
+  font-size: 0.82rem;
+}
+
 .resolution-rules {
   display: grid;
   gap: 12px;
@@ -5176,6 +5359,23 @@ button { color: inherit; }
   }
   .focused-range {
     margin-left: 0;
+  }
+  .market-history-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .market-history-row,
+  .market-history-empty {
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    padding-right: 0;
+  }
+  .market-history-row time {
+    grid-column: 2 / 4;
+    justify-self: start;
+  }
+  .market-history-line {
+    flex-wrap: wrap;
   }
   .focused-market-stage .trade-panel {
     border-radius: 12px;
