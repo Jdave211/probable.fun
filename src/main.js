@@ -271,13 +271,13 @@ const portfolioEndMarkerPlugin = {
     const height = 24;
     const labelX = Math.min(chartArea.right - width, Math.max(chartArea.left, x - width - 10));
     const labelY = Math.max(chartArea.top + 2, y - height - 12);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.86)";
-    ctx.strokeStyle = "rgba(216, 163, 62, 0.26)";
+    ctx.fillStyle = options.labelBg || "rgba(15, 22, 26, 0.92)";
+    ctx.strokeStyle = options.labelBorder || "rgba(216, 163, 62, 0.28)";
     ctx.lineWidth = 1;
     roundRect(ctx, labelX, labelY, width, height, 12);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = "rgba(32,35,39,0.74)";
+    ctx.fillStyle = options.labelColor || "rgba(244,247,249,0.82)";
     ctx.fillText(label, labelX + 9, labelY + 16);
     ctx.restore();
   },
@@ -338,6 +338,8 @@ const state = {
   accountMenuOpen: false,
   leaderboardMode: "chart",
   leaderboardMetric: "nominal",
+  portfolioChartMetric: "mark",
+  portfolioChartRange: "all",
   positionsStatus: "open",
   expandedParticipants: new Set(),
   marketSort: "trending",
@@ -945,6 +947,20 @@ async function onGlobalClick(e) {
   if (leaderboardMetricBtn) {
     state.leaderboardMetric = leaderboardMetricBtn.dataset.leaderboardMetric || "nominal";
     refreshLeaderboardComponent();
+    return;
+  }
+
+  const portfolioMetricBtn = e.target.closest("[data-portfolio-chart-metric]");
+  if (portfolioMetricBtn) {
+    state.portfolioChartMetric = portfolioMetricBtn.dataset.portfolioChartMetric === "cashout" ? "cashout" : "mark";
+    refreshPortfolioChartComponent();
+    return;
+  }
+
+  const portfolioRangeBtn = e.target.closest("[data-portfolio-chart-range]");
+  if (portfolioRangeBtn) {
+    state.portfolioChartRange = ["7d", "30d", "all"].includes(portfolioRangeBtn.dataset.portfolioChartRange) ? portfolioRangeBtn.dataset.portfolioChartRange : "all";
+    refreshPortfolioChartComponent();
     return;
   }
 
@@ -5038,18 +5054,7 @@ function renderPositions() {
               <strong class="${deltaClass}">${signedMoney(snapshot.pnl)}</strong>
             </div>
           </div>
-          <div class="portfolio-chart-card">
-            <div class="portfolio-chart-head">
-              <div>
-                <span>Earnings</span>
-                <strong>${signedMoney(snapshot.pnl)}</strong>
-              </div>
-              <small>All time</small>
-            </div>
-            <div class="portfolio-chart-wrap">
-              <canvas data-portfolio-chart aria-label="Portfolio value history"></canvas>
-            </div>
-          </div>
+          ${portfolioChartCardHtml(snapshot)}
         </div>
         <aside class="portfolio-activity-card">
           <div class="portfolio-activity-head">
@@ -5209,41 +5214,100 @@ function portfolioActivityListHtml(activity) {
     </div>`;
 }
 
-function portfolioChartConfig() {
-  const snapshot = portfolioSnapshot();
+function portfolioChartCardHtml(snapshot = portfolioSnapshot()) {
+  const config = portfolioChartConfig(snapshot);
+  return `
+    <div class="portfolio-chart-card">
+      <div class="portfolio-chart-head">
+        <div>
+          <span>${esc(config.metricLabel)}</span>
+          <strong>${config.delta >= 0 ? "+" : ""}${money(config.delta)}</strong>
+        </div>
+        <div class="portfolio-chart-controls" aria-label="Portfolio chart controls">
+          <div class="portfolio-chart-toggle" aria-label="Portfolio value metric">
+            <button class="${config.metric === "mark" ? "active" : ""}" type="button" data-portfolio-chart-metric="mark">Mark</button>
+            <button class="${config.metric === "cashout" ? "active" : ""}" type="button" data-portfolio-chart-metric="cashout">Cash-out</button>
+          </div>
+          <div class="portfolio-chart-toggle" aria-label="Portfolio time range">
+            <button class="${config.range === "7d" ? "active" : ""}" type="button" data-portfolio-chart-range="7d">1W</button>
+            <button class="${config.range === "30d" ? "active" : ""}" type="button" data-portfolio-chart-range="30d">1M</button>
+            <button class="${config.range === "all" ? "active" : ""}" type="button" data-portfolio-chart-range="all">ALL</button>
+          </div>
+        </div>
+      </div>
+      <div class="portfolio-chart-subhead">
+        <span>${money(config.currentValue)} current</span>
+        <span>${esc(config.rangeLabel)}</span>
+      </div>
+      <div class="portfolio-chart-wrap">
+        <canvas data-portfolio-chart aria-label="Portfolio value history"></canvas>
+      </div>
+    </div>`;
+}
+
+function portfolioChartConfig(snapshot = portfolioSnapshot()) {
+  const metric = state.portfolioChartMetric === "cashout" ? "cashout" : "mark";
+  const range = ["7d", "30d", "all"].includes(state.portfolioChartRange) ? state.portfolioChartRange : "all";
   const sorted = [...snapshot.activity].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   const now = Date.now();
   const baseline = snapshot.startingValue || snapshot.portfolioMark || DEFAULT_BALANCE;
-  const finalValue = Math.round(snapshot.portfolioMark || baseline);
-  const startTime = sorted[0]?.createdAt ? new Date(sorted[0].createdAt).getTime() : now - 7 * 24 * 60 * 60 * 1000;
-  const labels = [fmtShortDate(startTime)];
-  const data = [Math.round(baseline)];
+  const finalValue = Math.round((metric === "cashout" ? snapshot.cashOutPortfolio : snapshot.portfolioMark) || baseline);
+  const fullStartTime = sorted[0]?.createdAt ? new Date(sorted[0].createdAt).getTime() : now - 7 * 24 * 60 * 60 * 1000;
+  const points = [{ time: fullStartTime, value: Math.round(baseline) }];
 
   if (sorted.length) {
     sorted.forEach((item, index) => {
       const progress = (index + 1) / Math.max(1, sorted.length + 1);
-      labels.push(fmtShortDate(item.createdAt));
-      data.push(Math.round(baseline + (finalValue - baseline) * progress));
+      points.push({
+        time: new Date(item.createdAt).getTime(),
+        value: Math.round(baseline + (finalValue - baseline) * progress),
+      });
     });
-  } else {
-    labels.push("Now");
-    data.push(Math.round(baseline));
+  }
+  points.push({ time: now, value: finalValue });
+
+  const cutoff = range === "7d" ? now - 7 * 24 * 60 * 60 * 1000 : range === "30d" ? now - 30 * 24 * 60 * 60 * 1000 : -Infinity;
+  let visible = points.filter(point => point.time >= cutoff);
+  if (range !== "all" && points[0] && (!visible.length || visible[0].time > cutoff)) {
+    const anchor = [...points].reverse().find(point => point.time < cutoff) || points[0];
+    visible.unshift({ time: cutoff, value: anchor.value });
+  }
+  if (visible.length < 2) visible = [{ time: now - 24 * 60 * 60 * 1000, value: finalValue }, { time: now, value: finalValue }];
+  if (visible.length === 2 && visible[0].value === visible[1].value) {
+    visible.splice(1, 0, { time: Math.round((visible[0].time + visible[1].time) / 2), value: visible[0].value });
   }
 
-  labels.push("Today");
-  data.push(finalValue);
-
-  // Add one midpoint so a flat/no-activity account still looks intentional instead of broken.
-  if (data.length === 2) {
-    data.splice(1, 0, Math.round((data[0] + data[1]) / 2));
-    labels.splice(1, 0, "Now");
-  }
-
+  const labels = chartTimeLabels(visible.map(point => point.time));
+  const data = visible.map(point => point.value);
   const min = Math.min(...data);
   const max = Math.max(...data);
-  const range = Math.max(1, max - min);
-  const pad = Math.max(baseline * 0.015, range * 0.28);
-  return { labels, data, minY: Math.max(0, min - pad), maxY: max + pad };
+  const spread = Math.max(1, max - min);
+  const pad = Math.max(baseline * 0.01, spread * 0.24);
+  const delta = data.at(-1) - data[0];
+  return {
+    labels,
+    data,
+    minY: Math.max(0, min - pad),
+    maxY: max + pad,
+    metric,
+    range,
+    metricLabel: metric === "cashout" ? "Cash-out value" : "Portfolio mark",
+    rangeLabel: range === "7d" ? "Last 7 days" : range === "30d" ? "Last 30 days" : "All time",
+    currentValue: data.at(-1),
+    delta,
+  };
+}
+
+function refreshPortfolioChartComponent() {
+  const card = document.querySelector(".portfolio-chart-card");
+  if (!card) return;
+  const existing = charts.get("portfolio");
+  if (existing) {
+    existing.destroy();
+    charts.delete("portfolio");
+  }
+  card.outerHTML = portfolioChartCardHtml();
+  requestAnimationFrame(renderPortfolioCharts);
 }
 
 function positionGroupHtml(group, rows, status, groupData = {}) {
@@ -5913,14 +5977,14 @@ function leaderRow(entry, index = 0) {
     </button>`;
 }
 
-function renderCharts() {
+function renderPortfolioCharts() {
   document.querySelectorAll("[data-portfolio-chart]").forEach(canvas => {
     const { labels, data, minY, maxY } = portfolioChartConfig();
     const ctx = canvas.getContext("2d");
     const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height || 300);
-    gradient.addColorStop(0, "rgba(224, 171, 69, 0.82)");
-    gradient.addColorStop(0.42, "rgba(224, 171, 69, 0.42)");
-    gradient.addColorStop(0.78, "rgba(224, 171, 69, 0.12)");
+    gradient.addColorStop(0, "rgba(224, 171, 69, 0.58)");
+    gradient.addColorStop(0.42, "rgba(224, 171, 69, 0.27)");
+    gradient.addColorStop(0.78, "rgba(224, 171, 69, 0.08)");
     gradient.addColorStop(1, "rgba(224, 171, 69, 0.00)");
     const chart = new Chart(canvas, {
       type: "line",
@@ -5952,13 +6016,13 @@ function renderCharts() {
         layout: { padding: { top: 18, right: 62, bottom: 4, left: 2 } },
         plugins: {
           legend: { display: false },
-          portfolioEndMarker: { enabled: true, color: "#d8a33e" },
+          portfolioEndMarker: { enabled: true, color: "#d8a33e", labelBg: "rgba(15, 22, 26, 0.94)", labelColor: "rgba(244,247,249,0.86)", labelBorder: "rgba(216,163,62,0.3)" },
           tooltip: {
             displayColors: false,
-            backgroundColor: "rgba(255,255,255,0.92)",
-            titleColor: "rgba(32,35,39,0.68)",
-            bodyColor: "#202327",
-            borderColor: "rgba(216,163,62,0.26)",
+            backgroundColor: "rgba(15,22,26,0.94)",
+            titleColor: "rgba(174,188,198,0.78)",
+            bodyColor: "#f4f7f9",
+            borderColor: "rgba(216,163,62,0.28)",
             borderWidth: 1,
             padding: 10,
             callbacks: {
@@ -5971,7 +6035,7 @@ function renderCharts() {
             grid: { display: false },
             border: { display: false },
             ticks: {
-              color: "rgba(65, 73, 84, 0.46)",
+              color: "rgba(157, 171, 181, 0.46)",
               maxTicksLimit: window.innerWidth < 620 ? 2 : 4,
               maxRotation: 0,
               font: { size: 10, family: "IBM Plex Mono" },
@@ -5983,18 +6047,22 @@ function renderCharts() {
             position: "right",
             border: { display: false },
             ticks: {
-              color: "rgba(65, 73, 84, 0.44)",
+              color: "rgba(157, 171, 181, 0.44)",
               maxTicksLimit: 3,
               callback: value => compactMoney(value),
               font: { size: 10, family: "IBM Plex Mono" },
             },
-            grid: { color: "rgba(185, 151, 88, 0.12)", tickLength: 0, drawTicks: false },
+            grid: { color: "rgba(157, 171, 181, 0.09)", tickLength: 0, drawTicks: false },
           },
         },
       },
     });
     charts.set("portfolio", chart);
   });
+}
+
+function renderCharts() {
+  renderPortfolioCharts();
 
   document.querySelectorAll("[data-event-chart-canvas]").forEach(canvas => {
     const key = canvas.dataset.eventChartCanvas;
