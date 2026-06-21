@@ -3178,8 +3178,9 @@ function renderDashboard() {
     return;
   }
 
-  const open = markets.filter(m => m.status === "open").length;
-  const closed = markets.filter(m => m.status === "closed" || m.status === "resolved").length;
+  const allEvents = marketEvents(markets);
+  const open = allEvents.filter(event => eventStatus(event) === "open").length;
+  const closed = allEvents.filter(event => eventStatus(event) !== "open").length;
   const visibleMarkets = dashboardVisibleMarkets(markets);
   const events = sortedMarketEvents(visibleMarkets);
   const activeStatus = state.marketStatus === "closed" ? "closed" : "open";
