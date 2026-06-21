@@ -3241,7 +3241,7 @@ function renderFocusedTradeView(group, market, event) {
   const yesPrice = prob.toFixed(2);
   const noPrice = (1 - prob).toFixed(2);
   const sortedMarkets = event?.markets?.length ? event.markets : [market];
-  const leadingMarkets = sortedMarkets.slice(0, 4);
+  const leadingMarkets = chartMarketsForEvent(event || { markets: sortedMarkets });
   dom.mainContent.innerHTML = `
     <section class="dashboard-shell focused-market-shell ${sharedLanding ? "shared-market-shell" : ""}">
       <div class="focused-market-nav motion-item">
@@ -6687,12 +6687,13 @@ function findCurrentEventByKey(key) {
 function eventChartConfig(event) {
   if (isBinaryEvent(event)) return binaryEventChartConfig(event);
 
-  const histories = event.markets.map(market => displayMarketHistory(market, event));
+  const chartMarkets = chartMarketsForEvent(event);
+  const histories = chartMarkets.map(market => displayMarketHistory(market, event));
   const times = [...new Set(histories.flat().map(point => point.time))]
     .sort((a, b) => a - b);
   const chartTimes = times.length ? times : [Date.now()];
   const values = [];
-  const datasets = event.markets.map((market, index) => {
+  const datasets = chartMarkets.map((market, index) => {
     const history = histories[index];
     const data = chartTimes.map(time => {
       const value = valueAtTime(history, time);
@@ -6721,6 +6722,16 @@ function eventChartConfig(event) {
     datasets,
     ...domain,
   };
+}
+
+function chartMarketsForEvent(event, limit = 5) {
+  const markets = event?.markets ?? [];
+  if (isBinaryEvent(event)) return markets;
+  return markets
+    .map((market, index) => ({ market, index, probability: Number(market.probability ?? 0) }))
+    .sort((a, b) => (b.probability - a.probability) || (a.index - b.index))
+    .slice(0, limit)
+    .map(item => item.market);
 }
 
 function binaryEventChartConfig(event) {
