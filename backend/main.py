@@ -1065,20 +1065,11 @@ def create_group_invite(group_id: str, created_by: str | None = None) -> dict:
 def add_group_member(group_id: str, name: str) -> None:
     db = get_db()
     cleaned = name.strip()
-    existing = (
-        db.table("group_members")
-        .select("id")
-        .eq("group_id", group_id)
-        .eq("name", cleaned)
-        .execute()
-    )
-    if existing.data:
-        return
-    db.table("group_members").insert({
+    db.table("group_members").upsert({
         "group_id": group_id,
         "name": cleaned,
         "balance": DEFAULT_FAKE_BALANCE,
-    }).execute()
+    }, on_conflict="group_id,name", ignore_duplicates=True).execute()
 
 
 def legacy_event_title(market: dict) -> str:
