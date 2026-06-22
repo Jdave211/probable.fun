@@ -2703,19 +2703,11 @@ def place_trade(market_id: str, payload: TradeCreate) -> dict:
                 f"split into smaller trades to move the price further).",
             )
 
-    explicit_outcome = bool(payload.outcomeId)
-    outcome_id = selected_outcome_id(payload, route_outcome, outcomes)
-    if not outcome_id:
-        if len(outcomes) == 2 and payload.side == "no":
-            outcome_id = outcomes[1]["id"]
-        elif outcomes:
-            outcome_id = outcomes[0]["id"]
-    if not explicit_outcome and route_outcome and len(outcomes) == 2 and payload.side == "no":
-        other = next((outcome for outcome in outcomes if outcome["id"] != route_outcome["id"]), None)
-        if other:
-            outcome_id = other["id"]
-    if not outcome_id:
+    if not payload.outcomeId:
         raise HTTPException(400, "Choose an outcome to trade")
+    outcome_id = payload.outcomeId
+    if not any(outcome["id"] == outcome_id for outcome in outcomes):
+        raise HTTPException(400, "Outcome does not belong to this market")
 
     try:
         if len(outcomes) > 2 and payload.side == "no":

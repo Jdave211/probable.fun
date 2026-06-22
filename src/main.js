@@ -1624,12 +1624,20 @@ async function onGlobalSubmit(e) {
   const form = e.target.closest(".trade-form-el");
   if (!form) return;
   e.preventDefault();
-  const market = findMarket(form.closest("[data-market-id]")?.dataset.marketId);
+  const panel = form.closest(".trade-panel");
+  const market = findMarket(form.dataset.marketId || panel?.dataset.marketId || form.closest("[data-market-id]")?.dataset.marketId);
   if (!market) return;
   if (isSampleMarket(market)) {
     toast("Sample market only. Create a real market to trade.");
     return;
   }
+  const tradeContext = tradeContextFromPanel(panel, form, market);
+  if (!tradeContext.valid) {
+    toast(tradeContext.error || "Trade panel is stale. Reopen the market and try again.");
+    render();
+    return;
+  }
+  state.trade = { marketId: market.id, side: tradeContext.side, mode: tradeContext.action };
 
   const input = form.querySelector(".trade-input");
   const rawAmount = tradeInputAmount(input);
@@ -1644,7 +1652,7 @@ async function onGlobalSubmit(e) {
   }
 
   const balance = getCurrentGroup()?.balances?.[state.activeMember] ?? 0;
-  const action = state.trade.mode || "buy";
+  const { action, side, outcomeId } = tradeContext;
   let amount = rawAmount;
   if (state.pendingUi.tradeMarketId === market.id) return;
   if (action === "buy" && amount > balance) {
@@ -1657,8 +1665,7 @@ async function onGlobalSubmit(e) {
     return;
   }
   if (action === "sell") {
-    const outcomeId = tradeOutcomeId(market, state.trade.side);
-    const sellState = sellPreviewForShares(market, outcomeId, rawAmount, state.trade.side);
+    const sellState = sellPreviewForShares(market, outcomeId, rawAmount, side);
     if (!sellState.held || sellState.held <= 0) {
       toast(`You do not own ${marketOptionTitleForOutcome(market, outcomeId)} contracts.`);
       return;
@@ -1677,10 +1684,9 @@ async function onGlobalSubmit(e) {
   state.pendingUi.tradeMarketId = market.id;
   setButtonPending(submit, true, action === "sell" ? "Selling" : "Buying");
   try {
-    const side = state.trade.side;
     const data = await api(`/api/markets/${market.id}/trade`, {
       method: "POST",
-      body: JSON.stringify({ participant: state.activeMember, side, amount, action, outcomeId: tradeOutcomeId(market, side) }),
+      body: JSON.stringify({ participant: state.activeMember, side, amount, action, outcomeId }),
     });
     state.pendingUi.tradeMarketId = null;
     setButtonPending(submit, false);
@@ -4385,21 +4391,18 @@ function statusBadge(market) {
 }
 
 function tradePanel(market, yesPrice, noPrice, event = null) {
-  const side = state.trade.side || "yes";
-  const mode = state.trade.mode || "buy";
+  const side = state.trade.marketId === market.id ? (state.trade.side || "yes") : "yes";
+  const mode = state.trade.marketId === market.id ? (state.trade.mode || "buy") : "buy";
   const balance = getCurrentGroup()?.balances?.[state.activeMember] ?? 0;
   const eventTitle = sampleEventTitle(market);
   const binary = isBinaryEvent(event);
   const selectedLabel = marketOptionTitle(market);
   const opposite = binary ? event.markets.find(item => item.id !== market.id) : null;
-  const yesOutcome = binaryOutcomeForSide(market, "yes");
-  const noOutcome = binaryOutcomeForSide(market, "no");
-  const yesMarket = binaryMarketForSide(event, "yes");
-  const noMarket = binaryMarketForSide(event, "no");
-  const yesLabel = binary ? (yesOutcome?.title || (yesMarket ? marketOptionTitle(yesMarket) : "Yes")) : selectedLabel;
-  const noLabel = binary ? (noOutcome?.title || (noMarket ? marketOptionTitle(noMarket) : "No")) : "No";
-  const yesTradePrice = binary ? Number(yesOutcome?.price ?? yesMarket?.probability ?? yesPrice) : Number(yesPrice);
-  const noTradePrice = binary ? Number(noOutcome?.price ?? noMarket?.probability ?? noPrice) : Math.max(0, 1 - Number(yesPrice));
+  const yesLabel = binary ? selectedLabel : selectedLabel;
+  const noLabel = binary ? (opposite ? marketOptionTitle(opposite) : "No") : "No";
+  const yesTradePrice = binary ? Number(market.probability ?? yesPrice) : Number(yesPrice);
+  const noTradePrice = binary ? Number(opposite?.probability ?? noPrice) : Math.max(0, 1 - Number(yesPrice));
+  const activeOutcomeId = tradeOutcomeId(market, side);
   const activeLabel = binary
     ? (side === "no" ? noLabel : yesLabel)
     : `${selectedLabel} · ${side === "no" ? "No" : "Yes"}`;
@@ -4420,7 +4423,7 @@ function tradePanel(market, yesPrice, noPrice, event = null) {
     ? `<span class="button-spinner" aria-hidden="true"></span><span>${mode === "sell" ? "Selling" : "Buying"}</span>`
     : submitText;
   return `
-    <div class="trade-panel" data-market-id="${market.id}">
+    <div class="trade-panel" data-market-id="${market.id}" data-trade-side="${side}" data-trade-mode="${mode}" data-outcome-id="${esc(activeOutcomeId)}">
       <div class="trade-panel-context ${side === "yes" ? "yes" : "no"}">
         <div class="trade-context-thumb ${eventThumbClass(eventTitle, event?.imageUrl || market.imageUrl)}" aria-hidden="true">${eventThumb(eventTitle, event?.imageUrl || market.imageUrl)}</div>
         <div>
@@ -4439,7 +4442,7 @@ function tradePanel(market, yesPrice, noPrice, event = null) {
         <button class="trade-pick ${side === "yes" ? "yes active" : "yes"} ${yesSellDisabled ? "disabled" : ""}" type="button" data-buy="yes" ${yesSellDisabled ? "disabled" : ""}><span>${outcomeTitleHtml(yesLabel)}</span> <strong>${(yesTradePrice * 100).toFixed(0)}¢</strong></button>
         <button class="trade-pick ${side === "no" ? "no active" : "no"} ${noSellDisabled ? "disabled" : ""}" type="button" data-buy="no" ${noSellDisabled ? "disabled" : ""}><span>${outcomeTitleHtml(noLabel)}</span> <strong>${(noTradePrice * 100).toFixed(0)}¢</strong></button>
       </div>
-      <form class="trade-form-el">
+      <form class="trade-form-el" data-market-id="${market.id}" data-trade-side="${side}" data-trade-mode="${mode}" data-outcome-id="${esc(activeOutcomeId)}">
         <div class="trade-amount-row">
           <label class="trade-amount-label"><span data-trade-input-label>${sellMode ? "Shares" : "Amount"}</span> <span data-trade-limit-copy>${sellMode ? sellLimitCopy(sellState) : `${money(balance)} cash`}</span></label>
           <div class="trade-input-row ${sellMode ? "sell" : "buy"}">
@@ -5105,14 +5108,65 @@ async function requestTradeQuote(market, amount) {
 }
 
 function tradeOutcomeId(market, side = "yes") {
-  const absoluteBinaryOutcome = binaryOutcomeForSide(market, side);
-  if (absoluteBinaryOutcome) {
-    return absoluteBinaryOutcome.id;
-  }
   if (side === "no" && (market.outcomes?.length || 0) === 2) {
     return market.outcomes.find(item => item.id !== market.outcomeId)?.id || market.outcomeId || market.id;
   }
   return market.outcomeId || market.id;
+}
+
+function tradeContextFromPanel(panel, form, market) {
+  const side = sanitizeTradeSide(form?.dataset.tradeSide || panel?.dataset.tradeSide || state.trade.side);
+  const action = sanitizeTradeMode(form?.dataset.tradeMode || panel?.dataset.tradeMode || state.trade.mode);
+  const outcomeId = form?.dataset.outcomeId || panel?.dataset.outcomeId || tradeOutcomeId(market, side);
+  if (!market?.id) return { valid: false, error: "Trade panel is missing a market." };
+  if (panel?.dataset.marketId && panel.dataset.marketId !== market.id) {
+    return { valid: false, error: "Trade panel changed. Reopen it and try again." };
+  }
+  if (!side) return { valid: false, error: "Choose Yes or No." };
+  if (!action) return { valid: false, error: "Choose Buy or Sell." };
+  if (!outcomeBelongsToMarket(market, outcomeId)) {
+    return { valid: false, error: "Selected outcome does not belong to this market." };
+  }
+  if (action === "sell" && !tradeSellState(market, side).canSellSelected) {
+    return { valid: false, error: "You do not own this side yet." };
+  }
+  const expectedOutcomeId = tradeOutcomeId(market, side);
+  if (outcomeId !== expectedOutcomeId) {
+    return { valid: false, error: "Trade ticket is stale. Reopen it and try again." };
+  }
+  return { valid: true, side, action, outcomeId };
+}
+
+function sanitizeTradeSide(side) {
+  const value = String(side || "").trim().toLowerCase();
+  return value === "yes" || value === "no" ? value : "";
+}
+
+function sanitizeTradeMode(mode) {
+  const value = String(mode || "").trim().toLowerCase();
+  return value === "sell" ? "sell" : value === "buy" ? "buy" : "";
+}
+
+function outcomeBelongsToMarket(market, outcomeId) {
+  if (!outcomeId) return false;
+  const outcomes = market.outcomes || [];
+  if (!outcomes.length) return outcomeId === (market.outcomeId || market.id);
+  return outcomes.some(outcome => outcome.id === outcomeId);
+}
+
+function syncTradePanelDataset(panel, market, side, mode) {
+  if (!panel || !market) return;
+  const outcomeId = tradeOutcomeId(market, side);
+  panel.dataset.tradeSide = side;
+  panel.dataset.tradeMode = mode;
+  panel.dataset.outcomeId = outcomeId;
+  const form = panel.querySelector(".trade-form-el");
+  if (form) {
+    form.dataset.marketId = market.id;
+    form.dataset.tradeSide = side;
+    form.dataset.tradeMode = mode;
+    form.dataset.outcomeId = outcomeId;
+  }
 }
 
 function isComplementNoTrade(market, side = state.trade.side || "yes") {
@@ -5415,6 +5469,7 @@ function setTradeSide(marketId, side) {
   const panel = [...document.querySelectorAll(".trade-panel")]
     .find(item => item.dataset.marketId === marketId);
   if (!panel) return;
+  syncTradePanelDataset(panel, market, side, state.trade.mode || "buy");
 
   panel.querySelectorAll(".trade-pick").forEach(button => {
     button.classList.toggle("active", button.dataset.buy === side);
@@ -5458,6 +5513,7 @@ function setTradeMode(marketId, mode) {
   const panel = [...document.querySelectorAll(".trade-panel")]
     .find(item => item.dataset.marketId === marketId);
   if (!panel) return;
+  syncTradePanelDataset(panel, market, nextSide, normalizedMode);
   panel.querySelectorAll("[data-trade-mode]").forEach(button => {
     button.classList.toggle("active", button.dataset.tradeMode === normalizedMode);
   });
@@ -5495,6 +5551,7 @@ function updateRenderedTradeSellControls(market) {
   if (!panel) return;
   const mode = state.trade.mode || "buy";
   const sellState = tradeSellState(market, state.trade.side || "yes");
+  syncTradePanelDataset(panel, market, state.trade.side || "yes", mode);
   const input = panel.querySelector(".trade-input");
   const inputRow = panel.querySelector(".trade-input-row");
   const inputLabel = panel.querySelector("[data-trade-input-label]");
