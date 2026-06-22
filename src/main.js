@@ -680,6 +680,7 @@ document.querySelector("#authSignUpBtn").addEventListener("click", () => dom.aut
 dom.marketForm.addEventListener("submit", onCreateMarket);
 
 document.addEventListener("click", onGlobalClick);
+document.addEventListener("click", onTradeSubmitClickCapture, true);
 document.addEventListener("click", onTradeAmountChipClick, true);
 document.addEventListener("change", onGlobalChange);
 document.addEventListener("input", onGlobalInput);
@@ -1553,6 +1554,17 @@ function onTradeAmountChipClick(e) {
   e.preventDefault();
   e.stopPropagation();
   handleTradeAmountFill(button);
+}
+
+function onTradeSubmitClickCapture(e) {
+  const submit = e.target.closest?.(".trade-submit");
+  if (!submit) return;
+  const form = submit.closest(".trade-form-el");
+  const input = form?.querySelector(".trade-input");
+  const amount = tradeInputAmount(input);
+  if (Number.isFinite(amount) && amount > 0) {
+    setTradeInputAmount(input, amount, { display: input.value || formatShareInput(amount) });
+  }
 }
 
 function handleTradeAmountFill(fillAmountBtn) {
