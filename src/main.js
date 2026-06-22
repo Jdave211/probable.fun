@@ -680,6 +680,7 @@ document.querySelector("#authSignUpBtn").addEventListener("click", () => dom.aut
 dom.marketForm.addEventListener("submit", onCreateMarket);
 
 document.addEventListener("click", onGlobalClick);
+document.addEventListener("click", onTradeAmountChipClick, true);
 document.addEventListener("change", onGlobalChange);
 document.addEventListener("input", onGlobalInput);
 document.addEventListener("submit", onGlobalSubmit);
@@ -1408,29 +1409,7 @@ async function onGlobalClick(e) {
 
   const fillAmountBtn = e.target.closest("[data-fill-amount], [data-fill-percent]");
   if (fillAmountBtn) {
-    if (fillAmountBtn.disabled) return;
-    const panel = fillAmountBtn.closest("[data-market-id]");
-    const input = panel?.querySelector(".trade-input");
-    const market = findMarket(panel?.dataset.marketId);
-    if (input && market) {
-      const max = Number(input.dataset.rawMax || input.max || DEFAULT_BALANCE);
-      if (fillAmountBtn.dataset.fillPercent) {
-        const percent = Number(fillAmountBtn.dataset.fillPercent || 0);
-        const exact = (max * percent) / 100;
-        input.dataset.rawAmount = formatShareInput(exact);
-        input.value = formatShareDisplay(exact);
-        renderTradePreview(market, exact);
-      } else if (fillAmountBtn.dataset.fillAmount === "max") {
-        input.dataset.rawAmount = formatShareInput(max);
-        input.value = formatShareDisplay(max);
-        renderTradePreview(market, max);
-      } else {
-        delete input.dataset.rawAmount;
-        const next = (parseFloat(input.value) || 0) + Number(fillAmountBtn.dataset.fillAmount || 0);
-        input.value = String(Math.min(max, next));
-        renderTradePreview(market, parseFloat(input.value) || 0);
-      }
-    }
+    handleTradeAmountFill(fillAmountBtn);
     return;
   }
 
@@ -1550,9 +1529,9 @@ function resetGroupEmoji(form = dom.groupForm) {
 
 function onGlobalInput(e) {
   if (e.target.classList.contains("trade-input")) {
-    delete e.target.dataset.rawAmount;
+    clearTradeInputRawAmount(e.target);
     const market = findMarket(e.target.closest("[data-market-id]")?.dataset.marketId);
-    if (market) renderTradePreview(market, parseFloat(e.target.value) || 0);
+    if (market) renderTradePreview(market, tradeInputAmount(e.target) || 0);
     return;
   }
   if (e.target.matches("#marketForm [name=outcomes]")) {
@@ -1566,6 +1545,37 @@ function onGlobalInput(e) {
     updateMarketOddsPanel();
     if (state.marketFormStep === marketReviewStep()) updateMarketReview();
   }
+}
+
+function onTradeAmountChipClick(e) {
+  const button = e.target.closest?.("[data-fill-amount], [data-fill-percent]");
+  if (!button) return;
+  e.preventDefault();
+  e.stopPropagation();
+  handleTradeAmountFill(button);
+}
+
+function handleTradeAmountFill(fillAmountBtn) {
+  if (!fillAmountBtn || fillAmountBtn.disabled) return;
+  const panel = fillAmountBtn.closest(".trade-panel") || fillAmountBtn.closest("[data-market-id]");
+  const input = panel?.querySelector(".trade-input");
+  if (!input) return;
+  const market = findMarket(panel?.dataset.marketId);
+  const max = Number(input.dataset.rawMax || input.max || DEFAULT_BALANCE);
+  let amount = 0;
+  if (fillAmountBtn.dataset.fillPercent) {
+    const percent = Number(fillAmountBtn.dataset.fillPercent || 0);
+    amount = (max * percent) / 100;
+    setTradeInputAmount(input, amount, { display: formatShareDisplay(amount) });
+  } else if (fillAmountBtn.dataset.fillAmount === "max") {
+    amount = max;
+    setTradeInputAmount(input, amount, { display: formatShareDisplay(amount) });
+  } else {
+    const next = (tradeInputAmount(input) || 0) + Number(fillAmountBtn.dataset.fillAmount || 0);
+    amount = Math.min(max, next);
+    setTradeInputAmount(input, amount, { display: String(amount) });
+  }
+  if (market) renderTradePreview(market, amount);
 }
 
 function onGlobalChange(e) {
@@ -4447,7 +4457,7 @@ function tradePanel(market, yesPrice, noPrice, event = null) {
           <label class="trade-amount-label"><span data-trade-input-label>${sellMode ? "Shares" : "Amount"}</span> <span data-trade-limit-copy>${sellMode ? sellLimitCopy(sellState) : `${money(balance)} cash`}</span></label>
           <div class="trade-input-row ${sellMode ? "sell" : "buy"}">
             ${sellMode ? "" : `<span class="trade-suffix">$</span>`}
-            <input class="trade-input" type="number" min="${sellMode ? "0.01" : "1"}" ${sellMode ? "" : `max="${max}"`} data-raw-max="${formatShareInput(max)}" step="any" placeholder="0" inputmode="decimal" ${inputDisabled} />
+            <input class="trade-input" type="text" min="${sellMode ? "0.01" : "1"}" ${sellMode ? "" : `max="${max}"`} data-raw-max="${formatShareInput(max)}" step="any" placeholder="0" inputmode="decimal" autocomplete="off" ${inputDisabled} />
           </div>
         </div>
         <div class="trade-chip-row ${mode === "sell" ? "sell" : ""}">
@@ -5094,8 +5104,7 @@ async function requestTradeQuote(market, amount) {
     });
     tradeQuoteCache.set(key, data.quote);
     const currentMarket = findMarket(market.id);
-    const panel = [...document.querySelectorAll(".trade-panel")]
-      .find(item => item.dataset.marketId === market.id);
+    const panel = findTradePanelForMarket(market.id);
     const input = panel?.querySelector(".trade-input");
     if (currentMarket && input && tradeQuoteKey(currentMarket, tradeInputAmount(input)) === key) {
       renderTradePreview(currentMarket, tradeInputAmount(input));
@@ -5167,6 +5176,16 @@ function syncTradePanelDataset(panel, market, side, mode) {
     form.dataset.tradeMode = mode;
     form.dataset.outcomeId = outcomeId;
   }
+}
+
+function findTradePanelForMarket(marketId) {
+  const panels = [...document.querySelectorAll(".trade-panel")]
+    .filter(item => item.dataset.marketId === marketId);
+  return panels.find(isElementVisible) || panels[0] || null;
+}
+
+function isElementVisible(element) {
+  return Boolean(element && (element.offsetWidth || element.offsetHeight || element.getClientRects().length));
 }
 
 function isComplementNoTrade(market, side = state.trade.side || "yes") {
@@ -5400,8 +5419,7 @@ function firstSellableSide(market) {
 }
 
 function updateTradeSubmitState(market, preview, amount) {
-  const panel = [...document.querySelectorAll(".trade-panel")]
-    .find(item => item.dataset.marketId === market.id);
+  const panel = findTradePanelForMarket(market.id);
   if (!panel) return;
   const submit = panel.querySelector(".trade-submit");
   const input = panel.querySelector(".trade-input");
@@ -5466,8 +5484,7 @@ function setTradeSide(marketId, side) {
   if (!market) return;
   if ((state.trade.mode || "buy") === "sell" && !tradeSellState(market, side).canSellSelected) return;
   state.trade = { marketId, side, mode: state.trade.mode || "buy" };
-  const panel = [...document.querySelectorAll(".trade-panel")]
-    .find(item => item.dataset.marketId === marketId);
+  const panel = findTradePanelForMarket(marketId);
   if (!panel) return;
   syncTradePanelDataset(panel, market, side, state.trade.mode || "buy");
 
@@ -5493,7 +5510,7 @@ function setTradeSide(marketId, side) {
   context?.classList.toggle("no", side === "no");
 
   const amountInput = panel.querySelector(".trade-input");
-  renderTradePreview(market, parseFloat(amountInput?.value) || 0);
+  renderTradePreview(market, tradeInputAmount(amountInput) || 0);
   updateRenderedTradeSellControls(market);
 }
 
@@ -5510,8 +5527,7 @@ function setTradeMode(marketId, mode) {
     if (!tradeSellState(market, nextSide).canSellSelected) return;
   }
   state.trade = { marketId, side: nextSide, mode: normalizedMode };
-  const panel = [...document.querySelectorAll(".trade-panel")]
-    .find(item => item.dataset.marketId === marketId);
+  const panel = findTradePanelForMarket(marketId);
   if (!panel) return;
   syncTradePanelDataset(panel, market, nextSide, normalizedMode);
   panel.querySelectorAll("[data-trade-mode]").forEach(button => {
@@ -5541,13 +5557,12 @@ function setTradeMode(marketId, mode) {
   const context = panel.querySelector(".trade-panel-context");
   context?.classList.toggle("yes", nextSide === "yes");
   context?.classList.toggle("no", nextSide === "no");
-  renderTradePreview(market, parseFloat(amountInput?.value) || 0);
+  renderTradePreview(market, tradeInputAmount(amountInput) || 0);
   updateRenderedTradeSellControls(market);
 }
 
 function updateRenderedTradeSellControls(market) {
-  const panel = [...document.querySelectorAll(".trade-panel")]
-    .find(item => item.dataset.marketId === market.id);
+  const panel = findTradePanelForMarket(market.id);
   if (!panel) return;
   const mode = state.trade.mode || "buy";
   const sellState = tradeSellState(market, state.trade.side || "yes");
@@ -6548,8 +6563,43 @@ function formatShareDisplay(value) {
 
 function tradeInputAmount(input) {
   if (!input) return NaN;
-  if (input.dataset.rawAmount) return parseFloat(input.dataset.rawAmount);
-  return parseFloat(input.value);
+  const raw = input.dataset.rawAmount ||
+    input.closest(".trade-form-el")?.dataset.rawAmount ||
+    input.closest(".trade-panel")?.dataset.rawAmount;
+  if (raw) return parseTradeNumber(raw);
+  return parseTradeNumber(input.value);
+}
+
+function parseTradeNumber(value) {
+  const normalized = String(value ?? "")
+    .trim()
+    .replace(/[$,\s_]/g, "")
+    .replace(/[^\d.+-]/g, "");
+  if (!normalized || normalized === "." || normalized === "+" || normalized === "-") return NaN;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function setTradeInputAmount(input, amount, { display = null } = {}) {
+  if (!input) return;
+  const safe = Number(amount);
+  if (!Number.isFinite(safe)) return;
+  const raw = formatShareInput(safe);
+  input.dataset.rawAmount = raw;
+  input.value = display ?? raw;
+  const form = input.closest(".trade-form-el");
+  const panel = input.closest(".trade-panel");
+  if (form) form.dataset.rawAmount = raw;
+  if (panel) panel.dataset.rawAmount = raw;
+}
+
+function clearTradeInputRawAmount(input) {
+  if (!input) return;
+  delete input.dataset.rawAmount;
+  const form = input.closest(".trade-form-el");
+  const panel = input.closest(".trade-panel");
+  if (form) delete form.dataset.rawAmount;
+  if (panel) delete panel.dataset.rawAmount;
 }
 
 function slugify(text) {
