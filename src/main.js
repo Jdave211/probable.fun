@@ -302,6 +302,7 @@ const DEFAULT_BALANCE = 100000;
 const DEFAULT_MARKET_LIQUIDITY = 20000;
 const MARKET_FEE_RATE = 0.015;
 const API_TIMEOUT_MS = 18000;
+const BOOT_API_TIMEOUT_MS = 45000;
 const AUTH_TIMEOUT_MS = 8000;
 
 function defaultMarketLiquidityForOutcomeCount(count) {
@@ -756,7 +757,7 @@ init();
 async function loadInitialAppData() {
   state.bootError = "";
   state.marketLinkError = "";
-  const data = await api("/api/groups", { timeoutMs: API_TIMEOUT_MS });
+  const data = await loadGroupsForBoot();
   setGroups(data.groups);
   if (state.inviteToken) await loadInvitePreview(state.inviteToken);
   if (state.sharedMarketId) openSharedMarket(state.sharedMarketId);
@@ -768,6 +769,15 @@ async function loadInitialAppData() {
   }
   if (state.authUser && !state.inviteToken && !state.sharedMarketId && (state.currentGroupId || state.groups.length)) {
     state.shell = "app";
+  }
+}
+
+async function loadGroupsForBoot() {
+  try {
+    return await api("/api/groups", { timeoutMs: BOOT_API_TIMEOUT_MS });
+  } catch (err) {
+    if (!/timed out/i.test(err?.message || "")) throw err;
+    return api("/api/groups", { timeoutMs: BOOT_API_TIMEOUT_MS });
   }
 }
 
