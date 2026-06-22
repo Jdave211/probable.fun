@@ -5393,7 +5393,7 @@ button { color: inherit; }
   position: fixed;
   left: 50%;
   bottom: 22px;
-  z-index: 120;
+  z-index: 1000;
   transform: translateX(-50%);
   max-width: calc(100vw - 28px);
   border-radius: 999px;
@@ -5409,6 +5409,20 @@ button { color: inherit; }
   text-overflow: ellipsis;
 }
 .toast.hidden { opacity: 0; transform: translateX(-50%) translateY(8px); pointer-events: none; }
+
+@media (max-width: 620px) {
+  .toast {
+    top: calc(env(safe-area-inset-top, 0px) + 72px);
+    bottom: auto;
+    max-width: calc(100vw - 24px);
+    border-radius: 16px;
+    white-space: normal;
+    text-align: center;
+  }
+  .toast.hidden {
+    transform: translateX(-50%) translateY(-8px);
+  }
+}
 
 html {
   scrollbar-color: rgba(149, 162, 173, 0.26) transparent;
