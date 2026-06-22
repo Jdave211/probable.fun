@@ -301,6 +301,8 @@ const API_CONFIG_ERROR = "Production API is not configured. Set VITE_API_BASE_UR
 const DEFAULT_BALANCE = 100000;
 const DEFAULT_MARKET_LIQUIDITY = 20000;
 const MARKET_FEE_RATE = 0.015;
+const API_TIMEOUT_MS = 18000;
+const AUTH_TIMEOUT_MS = 8000;
 
 function defaultMarketLiquidityForOutcomeCount(count) {
   const n = Math.max(2, Number(count || 2));
@@ -339,6 +341,8 @@ const state = {
   tradeHistoryModal: { marketId: null, sort: "recent" },
   embedRoute: null,
   sharedMarketId: null,
+  bootError: "",
+  marketLinkError: "",
   trade: { marketId: null, side: null, mode: "buy" },
   expandedEventKey: null,
   oracleErrors: {},
@@ -705,7 +709,7 @@ async function init() {
   applyRouteToState(initialRoute, { replaceLegacy: true });
 
   try {
-    const { data, error } = await supabase.auth.getSession();
+    const { data, error } = await withTimeout(supabase.auth.getSession(), AUTH_TIMEOUT_MS, "Sign-in check");
     if (error) throw error;
     applyAuthSession(data.session || restoreDevAuthSession(), { renderNow: false });
     const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
@@ -732,22 +736,11 @@ async function init() {
   });
 
   render();
+  loadMarketImages().catch(() => {});
   try {
-    await loadMarketImages();
-    const data = await api("/api/groups");
-    setGroups(data.groups);
-    if (state.inviteToken) await loadInvitePreview(state.inviteToken);
-    if (state.sharedMarketId) openSharedMarket(state.sharedMarketId);
-    normalizeSelection();
-    if (state.shell === "app" && !state.currentGroupId && state.groups.length) {
-      const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
-      state.currentGroupId = state.groups.some(group => group.id === savedGroup) ? savedGroup : state.groups[0].id;
-      normalizeSelection();
-    }
-    if (state.authUser && !state.inviteToken && !state.sharedMarketId && (state.currentGroupId || state.groups.length)) {
-      state.shell = "app";
-    }
+    await loadInitialAppData();
   } catch (err) {
+    state.bootError = err.message || "Could not load groups.";
     toast(err.message || "Could not load groups.");
   } finally {
     state.loaded = true;
@@ -757,6 +750,42 @@ async function init() {
 }
 
 init();
+
+async function loadInitialAppData() {
+  state.bootError = "";
+  state.marketLinkError = "";
+  const data = await api("/api/groups", { timeoutMs: API_TIMEOUT_MS });
+  setGroups(data.groups);
+  if (state.inviteToken) await loadInvitePreview(state.inviteToken);
+  if (state.sharedMarketId) openSharedMarket(state.sharedMarketId);
+  normalizeSelection();
+  if (state.shell === "app" && !state.currentGroupId && state.groups.length && !state.sharedMarketId) {
+    const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
+    state.currentGroupId = state.groups.some(group => group.id === savedGroup) ? savedGroup : state.groups[0].id;
+    normalizeSelection();
+  }
+  if (state.authUser && !state.inviteToken && !state.sharedMarketId && (state.currentGroupId || state.groups.length)) {
+    state.shell = "app";
+  }
+}
+
+async function retryInitialLoad() {
+  state.loaded = false;
+  state.bootError = "";
+  state.marketLinkError = "";
+  render();
+  loadMarketImages().catch(() => {});
+  try {
+    await loadInitialAppData();
+  } catch (err) {
+    state.bootError = err.message || "Could not load groups.";
+    toast(state.bootError);
+  } finally {
+    state.loaded = true;
+    render();
+    runStoredPendingAuthAction();
+  }
+}
 
 function routeFromLocation() {
   const url = new URL(location.href);
@@ -909,7 +938,7 @@ function routeToCurrentAppView({ replace = false } = {}) {
 
 async function loadMarketImages() {
   try {
-    const res = await fetch("/market-images/manifest.json", { cache: "no-cache" });
+    const res = await fetchWithTimeout("/market-images/manifest.json", { cache: "no-cache", timeoutMs: 6000 });
     if (!res.ok) return;
     const data = await res.json();
     state.marketImages = Array.isArray(data.images) ? data.images.filter(image => image?.src) : [];
@@ -1087,8 +1116,15 @@ async function onGlobalClick(e) {
     state.view = "dashboard";
     state.trade = emptyTrade();
     state.sharedMarketId = null;
+    state.bootError = "";
+    state.marketLinkError = "";
     routeToApp();
     render();
+    return;
+  }
+
+  if (e.target.closest("[data-retry-initial-load]")) {
+    await retryInitialLoad();
     return;
   }
 
@@ -1097,16 +1133,26 @@ async function onGlobalClick(e) {
       requireLogin("enter-app");
       return;
     }
-    if (!getCurrentGroup()) {
-      await ensureMarketGroup();
+    try {
+      if (!getCurrentGroup()) {
+        await ensureMarketGroup();
+      }
+      state.shell = "app";
+      state.view = "dashboard";
+      state.welcomeMode = "actions";
+      state.trade = emptyTrade();
+      state.bootError = "";
+      state.marketLinkError = "";
+      routeToApp();
+      normalizeSelection();
+      render();
+    } catch (err) {
+      state.shell = "app";
+      state.loaded = true;
+      state.bootError = err.message || "Could not enter the app.";
+      toast(state.bootError);
+      render();
     }
-    state.shell = "app";
-    state.view = "dashboard";
-    state.welcomeMode = "actions";
-    state.trade = emptyTrade();
-    routeToApp();
-    normalizeSelection();
-    render();
     return;
   }
 
@@ -1456,18 +1502,32 @@ function openEventTrade(key) {
 
 function openSharedMarket(marketId) {
   const group = findGroupForMarket(marketId);
-  const market = group?.markets?.find(item => item.id === marketId);
+  const market = findMarketForRoute(marketId, group);
   if (!group || !market) {
-    if (state.loaded) toast("That market link could not be found.");
+    state.marketLinkError = "That market link could not be found.";
+    if (state.loaded) toast(state.marketLinkError);
     return false;
   }
   state.currentGroupId = group.id;
   state.shell = "app";
   state.view = "dashboard";
   state.trade = { marketId: market.id, side: "yes", mode: "buy" };
+  state.sharedMarketId = market.id;
+  state.bootError = "";
+  state.marketLinkError = "";
   state.expandedEventKey = null;
   if (isLoggedIn()) localStorage.setItem("probable_groupId", group.id);
   return true;
+}
+
+function findMarketForRoute(marketId, group = null) {
+  if (!marketId) return null;
+  const markets = group?.markets ?? state.groups.flatMap(g => g.markets ?? []);
+  return markets.find(item => item.id === marketId) ||
+    markets.find(item => item.eventId === marketId) ||
+    markets.find(item => item.outcomeId === marketId) ||
+    markets.find(item => (item.outcomes ?? []).some(outcome => outcome.id === marketId)) ||
+    null;
 }
 
 function selectGroupEmoji(button) {
@@ -3156,11 +3216,12 @@ async function continueSharedMarketTrade() {
 
 async function joinSharedMarketAndOpen(marketId, side = "yes", mode = "buy") {
   if (!state.loaded || !state.groups.length) {
-    const data = await api("/api/groups");
+    const data = await api("/api/groups", { timeoutMs: API_TIMEOUT_MS });
     setGroups(data.groups);
   }
   let group = findGroupForMarket(marketId);
-  if (!group) throw new Error("That market link could not be found.");
+  let market = findMarketForRoute(marketId, group);
+  if (!group || !market) throw new Error("That market link could not be found.");
   const memberName = authDisplayName();
   if (!memberName) throw new Error("Sign in to trade.");
   let resolvedMember = memberAliasForGroup(group);
@@ -3171,19 +3232,20 @@ async function joinSharedMarketAndOpen(marketId, side = "yes", mode = "buy") {
     });
     setGroups(data.groups);
     group = findGroupForMarket(marketId) || group;
+    market = findMarketForRoute(marketId, group) || market;
     resolvedMember = memberAliasForGroup(group) || memberName;
   }
   state.currentGroupId = group.id;
   state.activeMember = resolvedMember;
   state.shell = "app";
   state.view = "dashboard";
-  state.sharedMarketId = marketId;
-  state.trade = { marketId, side, mode };
+  state.sharedMarketId = market.id;
+  state.trade = { marketId: market.id, side, mode };
   state.mobileTradeOpen = true;
   localStorage.setItem("probable_user", state.activeMember);
   localStorage.setItem("probable_groupId", group.id);
   localStorage.setItem(STORAGE_KEYS.shell, "app");
-  routeToMarket(marketId, { replace: true });
+  routeToMarket(market.id, { replace: true });
   normalizeSelection();
   render();
 }
@@ -3289,7 +3351,8 @@ async function onOracleVote(market, outcome) {
 function render() {
   destroyCharts();
   const waitingForInitialAppData = state.shell === "app" && !state.loaded && (state.currentGroupId || isLoggedIn() || state.sharedMarketId || shouldHoldAppShell());
-  if (state.shell === "app" && !getCurrentGroup() && !waitingForInitialAppData) {
+  const unresolvedMarketLink = Boolean(state.sharedMarketId && !findMarketForRoute(state.sharedMarketId));
+  if (state.shell === "app" && !getCurrentGroup() && !waitingForInitialAppData && !unresolvedMarketLink && !state.bootError) {
     enterWelcomeShell();
   }
   renderNav();
@@ -3298,6 +3361,8 @@ function render() {
     renderEmbedRoute();
   } else if (state.shell === "app" && !state.loaded && !getCurrentGroup()) {
     renderMarketLinkLoading();
+  } else if (state.shell === "app" && (state.bootError || unresolvedMarketLink)) {
+    renderMarketLinkLoading({ error: state.bootError || state.marketLinkError || "That market link could not be found." });
   } else if (state.shell === "invite") {
     renderInvitePreview();
   } else if (state.shell !== "app") {
@@ -7664,14 +7729,19 @@ function groupHasCurrentMember(group) {
   return Boolean(memberAliasForGroup(group));
 }
 
-function renderMarketLinkLoading() {
+function renderMarketLinkLoading({ error = "" } = {}) {
+  const isError = Boolean(error);
   dom.mainContent.innerHTML = `
     <section class="invite-preview-page">
-      <div class="invite-preview-card motion-item">
+      <div class="invite-preview-card motion-item market-link-card">
         <button class="logo invite-preview-logo" type="button" data-go-welcome>probable<span class="logo-dot">.</span></button>
         <p class="eyebrow">Market link</p>
-        <h1>Opening market</h1>
-        <p class="muted">Loading the latest prices and trade panel.</p>
+        <h1>${isError ? "Could not open market" : "Opening market"}</h1>
+        <p class="${isError ? "invite-error" : "muted"}">${esc(isError ? error : "Loading the latest prices and trade panel.")}</p>
+        <div class="market-link-actions">
+          <button class="btn btn-primary" type="button" data-retry-initial-load>${isError ? "Retry" : "Still loading?"}</button>
+          <button class="btn btn-ghost" type="button" data-enter-app>Enter app</button>
+        </div>
       </div>
     </section>`;
 }
@@ -7931,9 +8001,11 @@ async function api(path, opts = {}) {
   if (!API && import.meta.env.PROD && !isLocalHost()) {
     throw new Error(API_CONFIG_ERROR);
   }
-  const res = await fetch(`${API}${path}`, {
+  const { timeoutMs = API_TIMEOUT_MS, ...fetchOpts } = opts;
+  const res = await fetchWithTimeout(`${API}${path}`, {
+    ...fetchOpts,
+    timeoutMs,
     headers: { "Content-Type": "application/json", ...(opts.headers ?? {}) },
-    ...opts,
   });
   if (!res.ok) {
     let msg = "Request failed";
@@ -7941,6 +8013,31 @@ async function api(path, opts = {}) {
     throw new Error(msg);
   }
   return res.json();
+}
+
+async function fetchWithTimeout(url, opts = {}) {
+  const { timeoutMs = API_TIMEOUT_MS, signal, ...fetchOpts } = opts;
+  if (signal) return fetch(url, { ...fetchOpts, signal });
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...fetchOpts, signal: controller.signal });
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error("Connection timed out. Check your connection and try again.");
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function withTimeout(promise, timeoutMs, label = "Request") {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = window.setTimeout(() => reject(new Error(`${label} timed out. Try again.`)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer));
 }
 
 function isLocalHost() {

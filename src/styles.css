@@ -4842,6 +4842,14 @@ button { color: inherit; }
   color: var(--text-2);
   font-size: 1rem;
 }
+.market-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.market-link-card .invite-error {
+  color: var(--red);
+}
 .invite-preview-stats {
   width: 100%;
   display: grid;
