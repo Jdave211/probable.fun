@@ -1041,6 +1041,12 @@ button { color: inherit; }
   background: var(--red-bg);
   border-color: var(--red-line);
 }
+.admin-outcome-btn.draw {
+  grid-column: 1 / -1;
+  color: var(--text);
+  background: linear-gradient(135deg, rgba(20, 92, 168, 0.28), rgba(149, 162, 173, 0.12));
+  border-color: rgba(77, 163, 255, 0.34);
+}
 .admin-outcome-btn:hover {
   filter: brightness(1.12);
   transform: translateY(-1px);

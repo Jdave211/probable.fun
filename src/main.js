@@ -304,6 +304,7 @@ const MARKET_FEE_RATE = 0.015;
 const API_TIMEOUT_MS = 18000;
 const BOOT_API_TIMEOUT_MS = 45000;
 const AUTH_TIMEOUT_MS = 8000;
+const ALL_OUTCOMES_RESOLUTION = "__all__";
 
 function defaultMarketLiquidityForOutcomeCount(count) {
   const n = Math.max(2, Number(count || 2));
@@ -4530,11 +4531,13 @@ function resolutionOutcomes(market) {
 
 function resolutionOutcomeLabel(market, outcome) {
   const raw = String(outcome || "").trim();
+  if (raw === ALL_OUTCOMES_RESOLUTION) return "Draw / all outcomes correct";
   const found = resolutionOutcomes(market).find(item => item.id === raw || String(item.title).toLowerCase() === raw.toLowerCase());
   return found?.title || raw || "Unknown";
 }
 
 function resolutionOutcomeClass(market, outcome, index = 0) {
+  if (String(outcome || "").trim() === ALL_OUTCOMES_RESOLUTION) return "draw";
   const label = resolutionOutcomeLabel(market, outcome).toLowerCase();
   if (label === "yes") return "yes";
   if (label === "no") return "no";
@@ -5779,6 +5782,7 @@ function adminGroupHtml({ group, events }) {
 function adminEventCard(group, event) {
   const market = event.markets[0];
   const outcomes = resolutionOutcomes(market);
+  const showAllCorrect = outcomes.length > 2;
   const source = market.resolutionSource || event.resolutionSource || "";
   const edgeCases = market.edgeCases || event.edgeCases || "";
   const rules = market.description || event.description || "No resolution rules saved.";
@@ -5811,6 +5815,7 @@ function adminEventCard(group, event) {
             const cls = resolutionOutcomeClass(market, outcome.id, index);
             return `<button class="admin-outcome-btn ${cls}" type="button" data-resolve="${esc(outcome.id)}" ${pending ? "disabled" : ""}>${esc(outcome.title)}</button>`;
           }).join("")}
+          ${showAllCorrect ? `<button class="admin-outcome-btn draw" type="button" data-resolve="${ALL_OUTCOMES_RESOLUTION}" ${pending ? "disabled" : ""}>Draw · all correct</button>` : ""}
         </div>
       </div>
     </article>`;
@@ -5961,7 +5966,12 @@ function portfolioCashFlowForGroup(group, participant) {
         else flow.buys += amount;
       }
       if (market.status === "resolved" && market.outcome) {
-        flow.payouts += Number(market.positions?.[participant]?.[market.outcome] || 0);
+        const positions = market.positions?.[participant] ?? {};
+        if (market.outcome === ALL_OUTCOMES_RESOLUTION) {
+          flow.payouts += Object.values(positions).reduce((sum, shares) => sum + Math.max(0, Number(shares || 0)), 0);
+        } else {
+          flow.payouts += Number(positions[market.outcome] || 0);
+        }
       }
       continue;
     }
@@ -6282,10 +6292,16 @@ function applyPortfolioTimelineEvent(event) {
   }
   if (event.type === "resolve") {
     const positions = event.state.positions.get(event.market.eventId) || new Map();
-    event.state.cash += Math.max(0, Number(positions.get(event.market.outcome) || 0));
+    if (event.market.outcome === ALL_OUTCOMES_RESOLUTION) {
+      positions.forEach(shares => {
+        event.state.cash += Math.max(0, Number(shares || 0));
+      });
+    } else {
+      event.state.cash += Math.max(0, Number(positions.get(event.market.outcome) || 0));
+    }
     event.state.positions.delete(event.market.eventId);
     const prices = event.state.prices.get(event.market.eventId) || new Map();
-    for (const outcome of event.market.outcomes ?? []) prices.set(outcome.id, outcome.id === event.market.outcome ? 1 : 0);
+    for (const outcome of event.market.outcomes ?? []) prices.set(outcome.id, event.market.outcome === ALL_OUTCOMES_RESOLUTION || outcome.id === event.market.outcome ? 1 : 0);
     event.state.prices.set(event.market.eventId, prices);
     event.state.quantities.delete(event.market.eventId);
     return;
@@ -6479,7 +6495,7 @@ function positionRowFromSyntheticNo(market, outcomeId, shares) {
   const price = Math.max(0, 1 - Number(outcome.price || 0));
   const resolvedOutcome = market.outcome;
   const value = market.status === "resolved"
-    ? (resolvedOutcome !== outcomeId ? shares : 0)
+    ? (resolvedOutcome === ALL_OUTCOMES_RESOLUTION || resolvedOutcome !== outcomeId ? shares : 0)
     : status === "open"
       ? lmsrCashForComplementSellShares(market, outcomeId, shares)
       : shares * price;
@@ -6494,7 +6510,7 @@ function positionRowFromSyntheticNo(market, outcomeId, shares) {
     statusLabel: market.status === "resolved" ? "Resolved" : market.status === "closed" ? "Closed" : "Open",
     closeLabel: fmtClose(market),
     winnerTitle: market.status === "resolved" ? resolutionOutcomeLabel(market, resolvedOutcome) : "",
-    isWinner: market.status === "resolved" && resolvedOutcome !== outcomeId,
+    isWinner: market.status === "resolved" && (resolvedOutcome === ALL_OUTCOMES_RESOLUTION || resolvedOutcome !== outcomeId),
     resolvedBy: market.resolvedBy || "",
     resolutionNotes: market.resolutionNotes || "",
     resolvedAt: market.resolvedAt || "",
@@ -6506,7 +6522,7 @@ function positionRowFromOutcome(market, outcome, shares) {
   const price = Number(outcome.price || 0);
   const resolvedOutcome = market.outcome;
   const value = market.status === "resolved"
-    ? (resolvedOutcome === outcome.id ? shares : 0)
+    ? (resolvedOutcome === ALL_OUTCOMES_RESOLUTION || resolvedOutcome === outcome.id ? shares : 0)
     : status === "open"
       ? lmsrSellValueForShares(market, outcome.id, shares)
       : shares * price;
@@ -6521,7 +6537,7 @@ function positionRowFromOutcome(market, outcome, shares) {
     statusLabel: market.status === "resolved" ? "Resolved" : market.status === "closed" ? "Closed" : "Open",
     closeLabel: fmtClose(market),
     winnerTitle: market.status === "resolved" ? resolutionOutcomeLabel(market, resolvedOutcome) : "",
-    isWinner: market.status === "resolved" && resolvedOutcome === outcome.id,
+    isWinner: market.status === "resolved" && (resolvedOutcome === ALL_OUTCOMES_RESOLUTION || resolvedOutcome === outcome.id),
     resolvedBy: market.resolvedBy || "",
     resolutionNotes: market.resolutionNotes || "",
     resolvedAt: market.resolvedAt || "",

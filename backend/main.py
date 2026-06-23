@@ -31,6 +31,7 @@ load_dotenv(dotenv_path=BASE_DIR / ".env", override=False)
 DIST_DIR = BASE_DIR / "dist"
 DEFAULT_FAKE_BALANCE = 100000.0
 MARKET_FEE_RATE = 0.015
+ALL_OUTCOMES_RESOLUTION = "__all__"
 
 
 # ── Pydantic models ────────────────────────────────────────────────────
@@ -1940,6 +1941,70 @@ def resolve_event_market_rpc(
     return result.data or {}
 
 
+def resolve_event_market_all_outcomes(
+    db,
+    event: dict,
+    *,
+    resolved_by: str = "manual",
+    notes: str | None = None,
+) -> dict:
+    event_id = event["id"]
+    if event.get("status") == "resolved":
+        raise HTTPException(400, "Already resolved")
+    if event.get("status") not in ("open", "closed"):
+        raise HTTPException(400, "Market must be open or closed before resolution")
+
+    resolved_by_clean = (resolved_by or "manual").strip()[:80] or "manual"
+    note = (notes or "").strip()[:1200] or "Resolved as draw: all listed outcomes were correct."
+    positions = db.table("event_positions").select("participant, shares").eq("event_id", event_id).gt("shares", 0).execute().data or []
+    payouts_by_participant: dict[str, float] = {}
+    shares_by_participant: dict[str, float] = {}
+    for position in positions:
+        participant = str(position.get("participant") or "").strip()
+        shares = float(position.get("shares") or 0)
+        if not participant or shares <= 0:
+            continue
+        shares_by_participant[participant] = shares_by_participant.get(participant, 0.0) + shares
+        payouts_by_participant[participant] = payouts_by_participant.get(participant, 0.0) + shares
+
+    payouts = []
+    for participant in sorted(payouts_by_participant):
+        payout = round(payouts_by_participant[participant], 2)
+        balance_after = None
+        member_res = db.table("group_members").select("balance").eq("group_id", event["group_id"]).eq("name", participant).execute()
+        if member_res.data:
+            current_balance = float(member_res.data[0].get("balance") or 0)
+            balance_after = round(current_balance + payout, 2)
+            db.table("group_members").update({"balance": balance_after}).eq("group_id", event["group_id"]).eq("name", participant).execute()
+        payouts.append({
+            "participant": participant,
+            "shares": round(shares_by_participant.get(participant, 0.0), 8),
+            "payout": payout,
+            "balanceAfter": balance_after,
+        })
+
+    resolved_at = now_iso()
+    db.table("market_events").update({
+        "status": "resolved",
+        "outcome_id": ALL_OUTCOMES_RESOLUTION,
+        "resolved_at": resolved_at,
+        "resolved_by": resolved_by_clean,
+        "verification_status": "resolved",
+        "resolution_notes": note,
+    }).eq("id", event_id).execute()
+
+    return {
+        "eventId": event_id,
+        "outcomeId": ALL_OUTCOMES_RESOLUTION,
+        "outcomeTitle": "Draw / all outcomes correct",
+        "resolvedBy": resolved_by_clean,
+        "resolutionNotes": note,
+        "resolvedAt": resolved_at,
+        "payouts": payouts,
+        "totalPaid": round(sum(item["payout"] for item in payouts), 2),
+    }
+
+
 # ── Lifespan ───────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -2741,6 +2806,24 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
 
         outcomes = db.table("market_outcomes").select("*").eq("event_id", event["id"]).execute().data or []
         wanted = payload.outcome.strip().lower()
+        resolver = (payload.resolvedBy or "manual").strip()[:80] or "manual"
+        note = (payload.reasoning or "").strip()
+        if wanted in (ALL_OUTCOMES_RESOLUTION, "all", "draw", "all_correct", "all outcomes", "all outcomes correct"):
+            if len(outcomes) < 2:
+                raise HTTPException(400, "All-correct resolution requires multiple outcomes")
+            if not note:
+                note = "Resolved as draw: all listed outcomes were correct."
+            if event["status"] == "open":
+                db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
+                event["status"] = "closed"
+            settlement = resolve_event_market_all_outcomes(
+                db,
+                event,
+                resolved_by=resolver,
+                notes=note,
+            )
+            return groups_response(settlement=settlement)
+
         outcome = (
             next((item for item in outcomes if item["id"] == payload.outcome), None)
             or next((item for item in outcomes if item["title"].strip().lower() == wanted), None)
@@ -2751,8 +2834,6 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
         if not outcome:
             raise HTTPException(400, "Resolution outcome not found")
 
-        resolver = (payload.resolvedBy or "manual").strip()[:80] or "manual"
-        note = (payload.reasoning or "").strip()
         if not note:
             note = f"Manually resolved to {outcome['title']}."
         if event["status"] == "open":
