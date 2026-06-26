@@ -1048,21 +1048,78 @@ def assemble_group(g: dict) -> dict:
     }
 
 
-def load_all_groups() -> list[dict]:
+GROUPS_SELECT_FULL = "*, group_members(*), market_events(*, market_outcomes(*), event_trades(*), event_positions(*)), markets(*, trades(*))"
+EVENT_SELECT_COMPACT = (
+    "id,group_id,title,description,status,mode,oracle_type,liquidity_b,total_volume,"
+    "closes_at,created_at,outcome_id,resolved_at,oracle_proposal,legacy_key,"
+    "resolution_source,edge_cases,verification_status,verification_attempts,"
+    "resolved_by,resolution_notes,created_by,"
+    "market_outcomes(*),event_trades(*),event_positions(*)"
+)
+GROUPS_SELECT_COMPACT = (
+    "id,name,emoji,mode,created_at,"
+    "group_members(*),"
+    f"market_events({EVENT_SELECT_COMPACT}),"
+    "markets(*, trades(*))"
+)
+
+
+def strip_data_url_images(groups: list[dict]) -> list[dict]:
+    for group in groups:
+        for market in group.get("markets", []):
+            image_url = market.get("imageUrl")
+            if isinstance(image_url, str) and image_url.startswith("data:"):
+                market["imageUrl"] = None
+    return groups
+
+
+def load_all_groups(*, compact: bool = True, group_id: str | None = None) -> list[dict]:
     db = get_db()
     close_expired_markets(db)
-    result = db.table("groups").select(
-        "*, group_members(*), market_events(*, market_outcomes(*), event_trades(*), event_positions(*)), markets(*, trades(*))"
-    ).order("created_at", desc=True).execute()
-    return [assemble_group(deepcopy(g)) for g in result.data]
+    query = db.table("groups").select(GROUPS_SELECT_COMPACT if compact else GROUPS_SELECT_FULL)
+    if group_id:
+        query = query.eq("id", group_id)
+    result = query.order("created_at", desc=True).execute()
+    groups = [assemble_group(deepcopy(g)) for g in result.data]
+    return strip_data_url_images(groups) if compact else groups
 
 
-def groups_response(**extra) -> dict:
-    return {"groups": load_all_groups(), **extra}
+def groups_response(*, compact: bool = True, group_id: str | None = None, **extra) -> dict:
+    return {"groups": load_all_groups(compact=compact, group_id=group_id), **extra}
+
+
+def load_market_context_group(market_id: str) -> dict:
+    db = get_db()
+    close_expired_markets(db)
+    try:
+        event, _route_outcome = require_event_or_outcome(market_id)
+        group_id = event["group_id"]
+        group_rows = db.table("groups").select("id,name,emoji,mode,created_at,group_members(*)").eq("id", group_id).execute().data or []
+        event_rows = db.table("market_events").select(EVENT_SELECT_COMPACT).eq("id", event["id"]).execute().data or []
+        if not group_rows or not event_rows:
+            raise HTTPException(404, "Market group not found")
+        group = deepcopy(group_rows[0])
+        group["market_events"] = event_rows
+        group["markets"] = []
+        return strip_data_url_images([assemble_group(group)])[0]
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        legacy_rows = db.table("markets").select("*, trades(*)").eq("id", market_id).execute().data or []
+        if not legacy_rows:
+            raise
+        group_id = legacy_rows[0]["group_id"]
+        group_rows = db.table("groups").select("id,name,emoji,mode,created_at,group_members(*)").eq("id", group_id).execute().data or []
+        if not group_rows:
+            raise HTTPException(404, "Market group not found")
+        group = deepcopy(group_rows[0])
+        group["market_events"] = []
+        group["markets"] = legacy_rows
+        return strip_data_url_images([assemble_group(group)])[0]
 
 
 def find_assembled_market(market_id: str) -> tuple[dict, dict, dict]:
-    for group in load_all_groups():
+    for group in load_all_groups(compact=False):
         for market in group.get("markets", []):
             if market.get("id") == market_id or market.get("eventId") == market_id:
                 event_markets = [item for item in group.get("markets", []) if item.get("eventId") == market.get("eventId")]
@@ -1081,7 +1138,7 @@ def find_assembled_market(market_id: str) -> tuple[dict, dict, dict]:
 
 
 def find_assembled_event(event_id: str) -> tuple[dict, dict]:
-    for group in load_all_groups():
+    for group in load_all_groups(compact=False):
         event_markets = [item for item in group.get("markets", []) if item.get("eventId") == event_id]
         if event_markets:
             head = event_markets[0]
@@ -2052,8 +2109,14 @@ def health() -> dict:
 
 
 @app.get("/api/groups")
-def list_groups() -> dict:
-    return groups_response()
+def list_groups(compact: bool = True) -> dict:
+    return groups_response(compact=compact)
+
+
+@app.get("/api/markets/{market_id}/context")
+def get_market_context(market_id: str) -> dict:
+    group = load_market_context_group(market_id)
+    return {"group": group, "groups": [group]}
 
 
 @app.post("/api/groups", status_code=201)

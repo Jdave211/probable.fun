@@ -758,10 +758,20 @@ init();
 async function loadInitialAppData() {
   state.bootError = "";
   state.marketLinkError = "";
+  if (state.sharedMarketId) {
+    const data = await loadMarketContextForBoot(state.sharedMarketId);
+    if (data.group) {
+      upsertGroup(data.group);
+    } else {
+      setGroups(data.groups);
+    }
+    openSharedMarket(state.sharedMarketId);
+    normalizeSelection();
+    return;
+  }
   const data = await loadGroupsForBoot();
   setGroups(data.groups);
   if (state.inviteToken) await loadInvitePreview(state.inviteToken);
-  if (state.sharedMarketId) openSharedMarket(state.sharedMarketId);
   normalizeSelection();
   if (state.shell === "app" && !state.currentGroupId && state.groups.length && !state.sharedMarketId) {
     const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
@@ -775,10 +785,20 @@ async function loadInitialAppData() {
 
 async function loadGroupsForBoot() {
   try {
-    return await api("/api/groups", { timeoutMs: BOOT_API_TIMEOUT_MS });
+    return await api("/api/groups?compact=1", { timeoutMs: BOOT_API_TIMEOUT_MS });
   } catch (err) {
     if (!/timed out/i.test(err?.message || "")) throw err;
-    return api("/api/groups", { timeoutMs: BOOT_API_TIMEOUT_MS });
+    return api("/api/groups?compact=1", { timeoutMs: BOOT_API_TIMEOUT_MS });
+  }
+}
+
+async function loadMarketContextForBoot(marketId) {
+  const path = `/api/markets/${encodeURIComponent(marketId)}/context`;
+  try {
+    return await api(path, { timeoutMs: BOOT_API_TIMEOUT_MS });
+  } catch (err) {
+    if (!/timed out/i.test(err?.message || "")) throw err;
+    return api(path, { timeoutMs: BOOT_API_TIMEOUT_MS });
   }
 }
 
@@ -3254,9 +3274,13 @@ async function continueSharedMarketTrade() {
 }
 
 async function joinSharedMarketAndOpen(marketId, side = "yes", mode = "buy") {
-  if (!state.loaded || !state.groups.length) {
-    const data = await api("/api/groups", { timeoutMs: API_TIMEOUT_MS });
-    setGroups(data.groups);
+  if (!findMarketForRoute(marketId)) {
+    const data = await api(`/api/markets/${encodeURIComponent(marketId)}/context`, { timeoutMs: API_TIMEOUT_MS });
+    if (data.group) {
+      upsertGroup(data.group);
+    } else {
+      setGroups(data.groups);
+    }
   }
   let group = findGroupForMarket(marketId);
   let market = findMarketForRoute(marketId, group);
@@ -7748,6 +7772,18 @@ function setGroups(groups) {
   state.groups = groups ?? [];
   tradeQuoteCache.clear();
   tradeQuoteInflight.clear();
+}
+
+function upsertGroup(group) {
+  if (!group?.id) return;
+  const next = [...state.groups];
+  const index = next.findIndex(item => item.id === group.id);
+  if (index >= 0) {
+    next[index] = group;
+  } else {
+    next.unshift(group);
+  }
+  setGroups(next);
 }
 
 function isPbMyMarketsGroup(group) {
