@@ -19,7 +19,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -1051,6 +1051,7 @@ def assemble_group(g: dict) -> dict:
 GROUPS_SELECT_FULL = "*, group_members(*), market_events(*, market_outcomes(*), event_trades(*), event_positions(*)), markets(*, trades(*))"
 EVENT_SELECT_COMPACT = (
     "id,group_id,title,description,status,mode,oracle_type,liquidity_b,total_volume,"
+    "image_url,"
     "closes_at,created_at,outcome_id,resolved_at,oracle_proposal,legacy_key,"
     "resolution_source,edge_cases,verification_status,verification_attempts,"
     "resolved_by,resolution_notes,created_by,"
@@ -1064,12 +1065,16 @@ GROUPS_SELECT_COMPACT = (
 )
 
 
+def compact_market_image_url(market_id: str) -> str:
+    return f"{public_base_url().rstrip('/')}/api/markets/{market_id}/image"
+
+
 def strip_data_url_images(groups: list[dict]) -> list[dict]:
     for group in groups:
         for market in group.get("markets", []):
             image_url = market.get("imageUrl")
             if isinstance(image_url, str) and image_url.startswith("data:"):
-                market["imageUrl"] = None
+                market["imageUrl"] = compact_market_image_url(market["id"])
     return groups
 
 
@@ -2117,6 +2122,45 @@ def list_groups(compact: bool = True) -> dict:
 def get_market_context(market_id: str) -> dict:
     group = load_market_context_group(market_id)
     return {"group": group, "groups": [group]}
+
+
+@app.get("/api/markets/{market_id}/image")
+def get_market_image(market_id: str) -> Response:
+    image_url: str | None = None
+    try:
+        event, _route_outcome = require_event_or_outcome(market_id)
+        image_url = event.get("image_url")
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        legacy = require_market(market_id)
+        image_url = legacy.get("image_url")
+
+    if not image_url:
+        raise HTTPException(404, "Market image not found")
+
+    if image_url.startswith("data:image") and "," in image_url:
+        header, encoded = image_url.split(",", 1)
+        media_type = header[5:].split(";", 1)[0] or "image/png"
+        try:
+            raw = base64.b64decode(encoded)
+        except Exception:
+            raise HTTPException(422, "Market image is invalid")
+        return Response(
+            content=raw,
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=86400, stale-while-revalidate=604800"},
+        )
+
+    if image_url.startswith(("http://", "https://")):
+        return RedirectResponse(image_url, status_code=307)
+
+    if image_url.startswith("/"):
+        path = BASE_DIR / "public" / image_url.lstrip("/")
+        if path.exists() and path.is_file():
+            return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
+
+    raise HTTPException(404, "Market image not found")
 
 
 @app.post("/api/groups", status_code=201)
