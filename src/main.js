@@ -366,12 +366,31 @@ const state = {
   marketImageName: "",
   marketOddsSeed: null,
   marketImages: [],
+  bracketPicks: {},
+  bracketSubmitted: false,
   pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, tradeMarketId: null, resolveMarketId: null },
   loaded: false,
 };
 
 const tradeQuoteCache = new Map();
 const tradeQuoteInflight = new Map();
+
+const BRACKET_CHALLENGE = {
+  id: "wc26-bracket",
+  prize: "$100",
+  title: "World Cup Bracket Challenge",
+  subtitle: "Free to enter. Submit the cleanest knockout bracket and chase the perfect run.",
+  matchups: [
+    { id: "r16-1", teams: ["France", "USA"] },
+    { id: "r16-2", teams: ["Spain", "Japan"] },
+    { id: "r16-3", teams: ["England", "Morocco"] },
+    { id: "r16-4", teams: ["Argentina", "Mexico"] },
+    { id: "r16-5", teams: ["Brazil", "South Korea"] },
+    { id: "r16-6", teams: ["Portugal", "Colombia"] },
+    { id: "r16-7", teams: ["Germany", "Uruguay"] },
+    { id: "r16-8", teams: ["Netherlands", "Italy"] },
+  ],
+};
 
 document.querySelector("#app").innerHTML = `
   <nav class="topnav" id="topnav">
@@ -758,6 +777,10 @@ init();
 async function loadInitialAppData() {
   state.bootError = "";
   state.marketLinkError = "";
+  if (state.view === "bracket" && !state.sharedMarketId && !state.inviteToken) {
+    loadBracketEntryIntoState();
+    return;
+  }
   if (state.sharedMarketId) {
     const data = await loadMarketContextForBoot(state.sharedMarketId);
     if (data.group) {
@@ -833,6 +856,7 @@ function routeFromLocation() {
   if (parts[0] === "admin") return { name: "admin" };
   if (parts[0] === "portfolio") return { name: "positions" };
   if (parts[0] === "positions") return { name: "positions", legacyPath: "/portfolio" };
+  if (parts[0] === "bracket") return { name: "bracket" };
   if (parts[0] === "app") return { name: "app" };
 
   const legacyInvite = url.searchParams.get("invite");
@@ -860,6 +884,7 @@ function shouldHoldAppShell() {
     route.name === "leaderboard" ||
     route.name === "admin" ||
     route.name === "positions" ||
+    route.name === "bracket" ||
     route.name === "market" ||
     route.name === "embedMarket" ||
     route.name === "embedEvent" ||
@@ -907,6 +932,10 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
     state.shell = "app";
     state.view = "positions";
     state.trade = emptyTrade();
+  } else if (route.name === "bracket") {
+    state.shell = "app";
+    state.view = "bracket";
+    state.trade = emptyTrade();
   } else if (route.name === "app") {
     state.shell = "app";
     state.view = "dashboard";
@@ -948,6 +977,10 @@ function routeToPositions({ replace = false } = {}) {
   navigateTo("/portfolio", { replace });
 }
 
+function routeToBracket({ replace = false } = {}) {
+  navigateTo("/bracket", { replace });
+}
+
 function routeToMarket(marketId, { replace = false } = {}) {
   navigateTo(`/market/${encodeURIComponent(marketId)}`, { replace });
 }
@@ -956,9 +989,11 @@ function appViewFromRouteOrSaved(route, savedView = "dashboard") {
   if (route.name === "leaderboard") return "leaderboard";
   if (route.name === "admin") return "admin";
   if (route.name === "positions") return "positions";
+  if (route.name === "bracket") return "bracket";
   if (savedView === "leaderboard") return "leaderboard";
   if (savedView === "admin") return "admin";
   if (savedView === "positions") return "positions";
+  if (savedView === "bracket") return "bracket";
   return "dashboard";
 }
 
@@ -966,6 +1001,7 @@ function routeToCurrentAppView({ replace = false } = {}) {
   if (state.view === "leaderboard") return routeToLeaderboard({ replace });
   if (state.view === "admin") return routeToAdmin({ replace });
   if (state.view === "positions") return routeToPositions({ replace });
+  if (state.view === "bracket") return routeToBracket({ replace });
   return routeToApp({ replace });
 }
 
@@ -1153,6 +1189,40 @@ async function onGlobalClick(e) {
     state.marketLinkError = "";
     routeToApp();
     render();
+    return;
+  }
+
+  if (e.target.closest("[data-go-bracket]")) {
+    state.shell = "app";
+    state.view = "bracket";
+    state.trade = emptyTrade();
+    state.sharedMarketId = null;
+    loadBracketEntryIntoState();
+    routeToBracket();
+    render();
+    return;
+  }
+
+  const bracketPickBtn = e.target.closest("[data-bracket-pick]");
+  if (bracketPickBtn) {
+    const matchupId = bracketPickBtn.dataset.bracketPick;
+    const team = bracketPickBtn.dataset.team;
+    pickBracketTeam(matchupId, team);
+    render();
+    return;
+  }
+
+  if (e.target.closest("[data-reset-bracket]")) {
+    state.bracketPicks = {};
+    state.bracketSubmitted = false;
+    persistBracketEntry({ submitted: false });
+    render();
+    toast("Bracket reset.");
+    return;
+  }
+
+  if (e.target.closest("[data-submit-bracket]")) {
+    submitBracketEntry();
     return;
   }
 
@@ -1814,6 +1884,14 @@ function runPendingAuthAction() {
   }
   if (action === "welcome-create-market") {
     createStoredWelcomeMarket().catch(err => toast(err.message || "Failed to create market."));
+    return;
+  }
+  if (action === "submit-bracket") {
+    state.shell = "app";
+    state.view = "bracket";
+    routeToBracket();
+    render();
+    submitBracketEntry();
     return;
   }
   if (action === "trade-shared-market") {
@@ -3415,7 +3493,7 @@ function render() {
   destroyCharts();
   const waitingForInitialAppData = state.shell === "app" && !state.loaded && (state.currentGroupId || isLoggedIn() || state.sharedMarketId || shouldHoldAppShell());
   const unresolvedMarketLink = Boolean(state.sharedMarketId && !findMarketForRoute(state.sharedMarketId));
-  if (state.shell === "app" && !getCurrentGroup() && !waitingForInitialAppData && !unresolvedMarketLink && !state.bootError) {
+  if (state.shell === "app" && state.view !== "bracket" && !getCurrentGroup() && !waitingForInitialAppData && !unresolvedMarketLink && !state.bootError) {
     enterWelcomeShell();
   }
   renderNav();
@@ -3424,7 +3502,7 @@ function render() {
     renderEmbedRoute();
   } else if (state.shell === "app" && !state.loaded && !getCurrentGroup()) {
     renderMarketLinkLoading();
-  } else if (state.shell === "app" && (state.bootError || unresolvedMarketLink)) {
+  } else if (state.shell === "app" && state.view !== "bracket" && (state.bootError || unresolvedMarketLink)) {
     renderMarketLinkLoading({ error: state.bootError || state.marketLinkError || "That market link could not be found." });
   } else if (state.shell === "invite") {
     renderInvitePreview();
@@ -3436,6 +3514,8 @@ function render() {
     renderAdminVerification();
   } else if (state.view === "positions") {
     renderPositions();
+  } else if (state.view === "bracket") {
+    renderBracketChallenge();
   } else {
     renderDashboard();
   }
@@ -3459,13 +3539,16 @@ function renderNav() {
   const displayName = authDisplayName() || state.activeMember || "User";
   const balance = group?.balances?.[state.activeMember] ?? 0;
 
+  const bracketButton = `<button class="btn btn-ghost btn-sm nav-bracket ${state.view === "bracket" ? "active" : ""}" type="button" data-go-bracket>Bracket</button>`;
   dom.navRight.innerHTML = group ? `
+    ${bracketButton}
     <div class="member-pill" title="${esc(displayName)}">
       <span class="member-name">${esc(displayName)}</span>
       <span class="member-balance">${topbarMoney(balance)}</span>
     </div>
     ${accountIndicatorHtml()}
   ` : `
+    ${bracketButton}
     <button class="btn btn-primary btn-sm nav-enter" type="button" data-enter-app>Enter app</button>
     ${accountIndicatorHtml()}
   `;
@@ -3976,6 +4059,15 @@ function renderEmptyDashboard() {
       <button class="btn btn-primary btn-lg" type="button" data-create-market-welcome>Create market</button>
       <button class="btn btn-ghost btn-lg" type="button" data-join-group>Join group</button>
     </div>`;
+  const bracketPromo = `
+    <button class="welcome-bracket-card" type="button" data-go-bracket>
+      <span class="welcome-bracket-copy">
+        <em>New</em>
+        <strong>${BRACKET_CHALLENGE.prize} Bracket Challenge</strong>
+        <small>Free to enter. Submit your World Cup knockout picks.</small>
+      </span>
+      <span class="welcome-bracket-prize">🏆</span>
+    </button>`;
   const welcomeCreateForm = `
     <form class="welcome-inline-form" id="dashboardCreateForm">
       <div class="form-topline">
@@ -4041,6 +4133,7 @@ function renderEmptyDashboard() {
             <p class="eyebrow">Enter market mode</p>
           </div>
           <div class="welcome-action-stack">
+            ${bracketPromo}
             ${welcomeEntry}
           </div>
         </div>
@@ -5723,6 +5816,244 @@ function renderLeaderboard() {
         </div>
       </div>
       ${expandedLeaderboard(entries)}
+    </section>`;
+}
+
+function bracketStorageKey() {
+  const owner = authDisplayName() || state.authUser?.email || localStorage.getItem(STORAGE_KEYS.user) || "guest";
+  return `probable_bracket_${BRACKET_CHALLENGE.id}_${slug(owner) || "guest"}`;
+}
+
+function loadBracketEntry() {
+  try {
+    const raw = localStorage.getItem(bracketStorageKey());
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadBracketEntryIntoState() {
+  const entry = loadBracketEntry();
+  let pending = null;
+  try {
+    pending = JSON.parse(sessionStorage.getItem("probable_pending_bracket") || "null");
+  } catch {
+    pending = null;
+  }
+  state.bracketPicks = entry?.picks && typeof entry.picks === "object"
+    ? { ...entry.picks }
+    : pending?.picks && typeof pending.picks === "object"
+      ? { ...pending.picks }
+      : {};
+  state.bracketSubmitted = Boolean(entry?.submittedAt);
+  normalizeBracketPicks();
+}
+
+function persistBracketEntry({ submitted = state.bracketSubmitted } = {}) {
+  const payload = {
+    challengeId: BRACKET_CHALLENGE.id,
+    name: authDisplayName() || state.activeMember || "Guest",
+    prize: BRACKET_CHALLENGE.prize,
+    picks: { ...state.bracketPicks },
+    submittedAt: submitted ? (loadBracketEntry()?.submittedAt || new Date().toISOString()) : null,
+    updatedAt: new Date().toISOString(),
+  };
+  localStorage.setItem(bracketStorageKey(), JSON.stringify(payload));
+  state.bracketSubmitted = Boolean(payload.submittedAt);
+  return payload;
+}
+
+function bracketWinner(id) {
+  return state.bracketPicks[id] || "";
+}
+
+function bracketMatchup(id, sourceA, sourceB) {
+  const teams = [
+    typeof sourceA === "function" ? sourceA() : sourceA,
+    typeof sourceB === "function" ? sourceB() : sourceB,
+  ].filter(Boolean);
+  return { id, teams };
+}
+
+function bracketRounds() {
+  const r16 = BRACKET_CHALLENGE.matchups.map(item => ({ ...item }));
+  const qf = [
+    bracketMatchup("qf-1", () => bracketWinner("r16-1"), () => bracketWinner("r16-2")),
+    bracketMatchup("qf-2", () => bracketWinner("r16-3"), () => bracketWinner("r16-4")),
+    bracketMatchup("qf-3", () => bracketWinner("r16-5"), () => bracketWinner("r16-6")),
+    bracketMatchup("qf-4", () => bracketWinner("r16-7"), () => bracketWinner("r16-8")),
+  ];
+  const sf = [
+    bracketMatchup("sf-1", () => bracketWinner("qf-1"), () => bracketWinner("qf-2")),
+    bracketMatchup("sf-2", () => bracketWinner("qf-3"), () => bracketWinner("qf-4")),
+  ];
+  const final = [
+    bracketMatchup("final", () => bracketWinner("sf-1"), () => bracketWinner("sf-2")),
+  ];
+  return [
+    { id: "r16", name: "Round of 16", matchups: r16 },
+    { id: "qf", name: "Quarterfinals", matchups: qf },
+    { id: "sf", name: "Semifinals", matchups: sf },
+    { id: "final", name: "Final", matchups: final },
+  ];
+}
+
+function normalizeBracketPicks() {
+  const validIds = new Set();
+  for (const round of bracketRounds()) {
+    for (const matchup of round.matchups) {
+      validIds.add(matchup.id);
+      const picked = bracketWinner(matchup.id);
+      if (picked && !matchup.teams.includes(picked)) {
+        delete state.bracketPicks[matchup.id];
+      }
+    }
+  }
+  for (const id of Object.keys(state.bracketPicks)) {
+    if (!validIds.has(id)) delete state.bracketPicks[id];
+  }
+}
+
+function pickBracketTeam(matchupId, team) {
+  if (!matchupId || !team) return;
+  state.bracketPicks[matchupId] = team;
+  normalizeBracketPicks();
+  state.bracketSubmitted = false;
+  persistBracketEntry({ submitted: false });
+}
+
+function bracketComplete() {
+  normalizeBracketPicks();
+  return Boolean(bracketWinner("final"));
+}
+
+function submitBracketEntry() {
+  if (!bracketComplete()) {
+    toast("Finish the bracket before submitting.");
+    return;
+  }
+  if (!isLoggedIn()) {
+    sessionStorage.setItem("probable_pending_bracket", JSON.stringify({ picks: state.bracketPicks }));
+    requireLogin("submit-bracket");
+    return;
+  }
+  sessionStorage.removeItem("probable_pending_bracket");
+  persistBracketEntry({ submitted: true });
+  render();
+  toast(`Bracket submitted for the ${BRACKET_CHALLENGE.prize} prize.`);
+}
+
+function teamFlag(team) {
+  const flags = {
+    Argentina: "🇦🇷",
+    Brazil: "🇧🇷",
+    Colombia: "🇨🇴",
+    England: "ENG",
+    France: "🇫🇷",
+    Germany: "🇩🇪",
+    Italy: "🇮🇹",
+    Japan: "🇯🇵",
+    Mexico: "🇲🇽",
+    Morocco: "🇲🇦",
+    Netherlands: "🇳🇱",
+    Portugal: "🇵🇹",
+    "South Korea": "🇰🇷",
+    Spain: "🇪🇸",
+    Uruguay: "🇺🇾",
+    USA: "🇺🇸",
+  };
+  return flags[team] || "⚽";
+}
+
+function teamFlagHtml(team) {
+  const flagClass = regionalFlagClass(team);
+  return flagClass
+    ? `<span class="outcome-flag ${flagClass} bracket-flag" aria-hidden="true"></span>`
+    : `<span>${esc(teamFlag(team))}</span>`;
+}
+
+function bracketMatchupHtml(matchup) {
+  const winner = bracketWinner(matchup.id);
+  const empty = matchup.teams.length < 2;
+  const teams = empty ? [...matchup.teams, ...Array(2 - matchup.teams.length).fill("")] : matchup.teams.slice(0, 2);
+  return `
+    <article class="bracket-matchup ${winner ? "picked" : ""}">
+      ${teams.map(team => team ? `
+        <button class="bracket-team ${winner === team ? "active" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}">
+          ${teamFlagHtml(team)}
+          <strong>${esc(team)}</strong>
+        </button>
+      ` : `
+        <button class="bracket-team placeholder" type="button" disabled>
+          <span>•</span>
+          <strong>Pick previous round</strong>
+        </button>
+      `).join("")}
+    </article>
+  `;
+}
+
+function renderBracketChallenge() {
+  loadBracketEntryIntoState();
+  const rounds = bracketRounds();
+  const champion = bracketWinner("final");
+  const complete = bracketComplete();
+  const entry = loadBracketEntry();
+  dom.mainContent.innerHTML = `
+    <section class="bracket-page">
+      <div class="bracket-hero motion-item">
+        <div class="bracket-hero-copy">
+          <p class="eyebrow">Probable bracket challenge</p>
+          <h1>${BRACKET_CHALLENGE.title}</h1>
+          <p>${BRACKET_CHALLENGE.subtitle}</p>
+          <div class="bracket-rules">
+            <span>Free entry</span>
+            <span>One bracket per account</span>
+            <span>Perfect bracket wins</span>
+          </div>
+        </div>
+        <div class="bracket-prize-card">
+          <span>Prize pool</span>
+          <strong>${BRACKET_CHALLENGE.prize}</strong>
+          <em>${champion ? `${teamFlag(champion)} ${esc(champion)} to win it` : "Pick every round"}</em>
+        </div>
+      </div>
+
+      <div class="bracket-toolbar motion-item">
+        <div>
+          <p class="eyebrow">Your entry</p>
+          <h2>${state.bracketSubmitted ? "Submitted" : complete ? "Ready to submit" : "Build your bracket"}</h2>
+          ${entry?.submittedAt ? `<p>Submitted ${new Date(entry.submittedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</p>` : `<p>Pick winners left to right. Later rounds unlock as you choose.</p>`}
+        </div>
+        <div class="bracket-actions">
+          <button class="btn btn-ghost btn-sm" type="button" data-reset-bracket>Reset</button>
+          <button class="btn btn-primary btn-sm" type="button" data-submit-bracket>${state.bracketSubmitted ? "Update entry" : "Submit bracket"}</button>
+        </div>
+      </div>
+
+      <div class="bracket-board motion-item">
+        ${rounds.map(round => `
+          <section class="bracket-round">
+            <header>
+              <span>${esc(round.name)}</span>
+              <em>${round.matchups.length} ${round.matchups.length === 1 ? "match" : "matches"}</em>
+            </header>
+            <div class="bracket-round-list">
+              ${round.matchups.map(bracketMatchupHtml).join("")}
+            </div>
+          </section>
+        `).join("")}
+        <section class="bracket-round bracket-champion-round">
+          <header>
+            <span>Champion</span>
+            <em>${BRACKET_CHALLENGE.prize}</em>
+          </header>
+          <div class="bracket-winner-card">
+            ${champion ? `${teamFlagHtml(champion)}<strong>${esc(champion)}</strong><small>Your winner</small>` : `<span>🏆</span><strong>No winner yet</strong><small>Complete the final</small>`}
+          </div>
+        </section>
+      </div>
     </section>`;
 }
 
