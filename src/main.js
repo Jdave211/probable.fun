@@ -6348,9 +6348,9 @@ function bracketWideGridHtml(rounds, champion) {
               <span>Final</span>
               <em>${bracketWinner("final") ? "1/1" : "0/1"}</em>
             </header>
-            <div class="bracket-wide-list">
-              ${bracketMiniCellHtml(rounds[4].matchups[0], { row: 7 })}
-              <article class="bracket-mini-match champion" style="--bracket-row:9">
+            <div class="bracket-wide-list bracket-final-list">
+              ${bracketMiniCellHtml(rounds[4].matchups[0], { row: 1 })}
+              <article class="bracket-mini-match champion" style="--bracket-row:3">
                 ${champion ? `
                   <div class="bracket-mini-team active champion">
                     ${teamFlagHtml(champion)}

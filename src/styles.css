@@ -7454,3 +7454,132 @@ html {
     transform: none;
   }
 }
+
+/* Bracket layout hardening: keep picks compact and make the tree converge into the center. */
+.bracket-page {
+  width: min(1440px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding-top: 0;
+}
+.bracket-toolbar {
+  width: min(1120px, 100%);
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 18px;
+  margin: 0 auto 8px;
+  border: 0;
+  background: transparent;
+  padding: 8px 0 0;
+}
+.bracket-toolbar h2 {
+  margin: 0;
+  font-size: clamp(1.2rem, 2vw, 1.7rem);
+  letter-spacing: -0.04em;
+}
+.bracket-toolbar p {
+  max-width: 520px;
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 0.88rem;
+}
+.bracket-current-pick {
+  min-width: 148px;
+  margin-left: 0;
+  border-left: 1px solid rgba(157, 171, 181, 0.14);
+  padding-left: 16px;
+}
+.bracket-actions {
+  justify-content: flex-end;
+}
+.bracket-view-toggle {
+  width: min(1120px, 100%);
+  justify-content: center;
+  margin: 8px auto 12px;
+}
+.bracket-wide-preview {
+  width: 100%;
+  margin: 0 auto;
+  border-top: 1px solid rgba(157, 171, 181, 0.12);
+  padding-top: 14px;
+}
+.bracket-wide-head {
+  width: min(1320px, 100%);
+  margin: 0 auto 12px;
+}
+.bracket-wide-head h2 {
+  font-size: clamp(1.25rem, 2vw, 1.8rem);
+}
+.bracket-wide-scroll {
+  width: min(1320px, 100%);
+  margin: 0 auto;
+  padding: 12px;
+}
+.bracket-wide-grid {
+  min-width: 1180px;
+  grid-template-columns: 1.16fr 0.96fr 0.78fr 0.64fr 0.78fr 0.64fr 0.78fr 0.96fr 1.16fr;
+  gap: 10px;
+}
+.bracket-wide-list {
+  min-height: 560px;
+  grid-template-rows: repeat(16, minmax(24px, 1fr));
+}
+.bracket-wide-champ .bracket-wide-list {
+  min-height: 560px;
+}
+.bracket-final-list {
+  display: flex;
+  min-height: 560px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+}
+.bracket-final-list .bracket-mini-match {
+  grid-row: auto;
+}
+.bracket-mini-match {
+  min-height: 68px;
+  border-radius: 15px;
+}
+.bracket-mini-team {
+  min-height: 34px;
+  padding: 7px 10px;
+}
+.bracket-mini-team strong {
+  font-size: 0.77rem;
+}
+.bracket-mini-team.placeholder strong {
+  color: var(--text-3);
+}
+
+@media (max-width: 900px) {
+  .bracket-page {
+    width: calc(100vw - 20px);
+  }
+  .bracket-toolbar {
+    width: 100%;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .bracket-current-pick {
+    width: 100%;
+    border-left: 0;
+    border-top: 1px solid rgba(157, 171, 181, 0.14);
+    padding: 10px 0 0;
+  }
+  .bracket-actions {
+    width: 100%;
+  }
+  .bracket-actions .btn {
+    flex: 1;
+  }
+  .bracket-view-toggle,
+  .bracket-wide-head,
+  .bracket-wide-scroll {
+    width: 100%;
+  }
+  .bracket-wide-grid {
+    min-width: 1080px;
+  }
+}
