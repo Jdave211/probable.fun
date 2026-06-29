@@ -369,6 +369,7 @@ const state = {
   bracketPicks: {},
   bracketSubmitted: false,
   bracketRoundIndex: 0,
+  bracketView: "grid",
   pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, tradeMarketId: null, resolveMarketId: null },
   loaded: false,
 };
@@ -1248,8 +1249,16 @@ async function onGlobalClick(e) {
     state.view = "bracket";
     state.trade = emptyTrade();
     state.sharedMarketId = null;
+    state.bracketView = "grid";
     loadBracketEntryIntoState();
     routeToBracket();
+    render();
+    return;
+  }
+
+  const bracketViewBtn = e.target.closest("[data-bracket-view]");
+  if (bracketViewBtn) {
+    state.bracketView = bracketViewBtn.dataset.bracketView === "table" ? "table" : "grid";
     render();
     return;
   }
@@ -6160,7 +6169,6 @@ function bracketRoundShellHtml(rounds, champion) {
         </div>
       </aside>
     </div>
-    ${bracketWideGridHtml(rounds, champion)}
   `;
 }
 
@@ -6242,6 +6250,7 @@ function renderBracketChallenge() {
   const rounds = bracketRounds();
   const champion = bracketWinner("final");
   const complete = bracketComplete();
+  const bracketView = state.bracketView === "table" ? "table" : "grid";
   const entry = loadBracketEntry();
   const entryStatus = state.bracketSubmitted ? "Entry locked" : complete ? "Ready to submit" : "Build your bracket";
   const entryHint = entry?.submittedAt
@@ -6267,7 +6276,12 @@ function renderBracketChallenge() {
         </div>
       </div>
 
-      ${bracketRoundShellHtml(rounds, champion)}
+      <div class="bracket-view-toggle motion-item" aria-label="Bracket view">
+        <button type="button" data-bracket-view="grid" class="${bracketView === "grid" ? "active" : ""}" aria-pressed="${bracketView === "grid"}">Grid</button>
+        <button type="button" data-bracket-view="table" class="${bracketView === "table" ? "active" : ""}" aria-pressed="${bracketView === "table"}">Table</button>
+      </div>
+
+      ${bracketView === "grid" ? bracketWideGridHtml(rounds, champion) : bracketRoundShellHtml(rounds, champion)}
     </section>`;
 }
 
