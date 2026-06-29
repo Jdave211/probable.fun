@@ -3665,6 +3665,22 @@ button { color: inherit; }
   padding: 7px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
 }
+.bracket-matchup.locked {
+  border-color: rgba(45, 156, 255, 0.2);
+  background:
+    linear-gradient(180deg, rgba(18, 79, 143, 0.22), rgba(17, 23, 27, 0.84));
+}
+.bracket-match-tag {
+  display: inline-flex;
+  width: fit-content;
+  margin: 0 0 2px 2px;
+  color: #78b7ff;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 .bracket-matchup::after {
   content: "";
   position: absolute;
@@ -3705,6 +3721,9 @@ button { color: inherit; }
 .bracket-team.placeholder {
   cursor: not-allowed;
   opacity: 0.52;
+}
+.bracket-team:disabled:not(.placeholder) {
+  cursor: default;
 }
 .bracket-team span {
   width: 22px;

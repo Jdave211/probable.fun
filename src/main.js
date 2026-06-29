@@ -376,21 +376,34 @@ const tradeQuoteCache = new Map();
 const tradeQuoteInflight = new Map();
 
 const BRACKET_CHALLENGE = {
-  id: "wc26-bracket",
+  id: "wc26-bracket-r32",
   prize: "$100",
   title: "World Cup Bracket Challenge",
-  subtitle: "Free to enter. Submit the cleanest knockout bracket and chase the perfect run.",
+  subtitle: "Free to enter. Submit the cleanest knockout bracket from the Round of 32 onward.",
   matchups: [
-    { id: "r16-1", teams: ["France", "USA"] },
-    { id: "r16-2", teams: ["Spain", "Japan"] },
-    { id: "r16-3", teams: ["England", "Morocco"] },
-    { id: "r16-4", teams: ["Argentina", "Mexico"] },
-    { id: "r16-5", teams: ["Brazil", "South Korea"] },
-    { id: "r16-6", teams: ["Portugal", "Colombia"] },
-    { id: "r16-7", teams: ["Germany", "Uruguay"] },
-    { id: "r16-8", teams: ["Netherlands", "Italy"] },
+    { id: "m73", matchNo: 73, teams: ["South Africa", "Canada"], winner: "Canada", completed: true },
+    { id: "m74", matchNo: 74, teams: ["Germany", "Paraguay"] },
+    { id: "m75", matchNo: 75, teams: ["Netherlands", "Morocco"] },
+    { id: "m76", matchNo: 76, teams: ["Brazil", "Japan"] },
+    { id: "m77", matchNo: 77, teams: ["France", "Sweden"] },
+    { id: "m78", matchNo: 78, teams: ["Ivory Coast", "Norway"] },
+    { id: "m79", matchNo: 79, teams: ["Mexico", "Ecuador"] },
+    { id: "m80", matchNo: 80, teams: ["England", "DR Congo"] },
+    { id: "m81", matchNo: 81, teams: ["USA", "Bosnia and Herzegovina"] },
+    { id: "m82", matchNo: 82, teams: ["Belgium", "Senegal"] },
+    { id: "m83", matchNo: 83, teams: ["Portugal", "Croatia"] },
+    { id: "m84", matchNo: 84, teams: ["Spain", "Austria"] },
+    { id: "m85", matchNo: 85, teams: ["Switzerland", "Algeria"] },
+    { id: "m86", matchNo: 86, teams: ["Argentina", "Cabo Verde"] },
+    { id: "m87", matchNo: 87, teams: ["Colombia", "Ghana"] },
+    { id: "m88", matchNo: 88, teams: ["Australia", "Egypt"] },
   ],
 };
+const BRACKET_LOCKED_WINNERS = Object.fromEntries(
+  BRACKET_CHALLENGE.matchups
+    .filter(matchup => matchup.completed && matchup.winner)
+    .map(matchup => [matchup.id, matchup.winner])
+);
 
 document.querySelector("#app").innerHTML = `
   <nav class="topnav" id="topnav">
@@ -807,11 +820,14 @@ async function loadInitialAppData() {
 }
 
 async function loadGroupsForBoot() {
+  const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
+  const include = savedGroup ? `&include=${encodeURIComponent(savedGroup)}` : "";
+  const path = `/api/groups?compact=1&limit=20${include}`;
   try {
-    return await api("/api/groups?compact=1", { timeoutMs: BOOT_API_TIMEOUT_MS });
+    return await api(path, { timeoutMs: BOOT_API_TIMEOUT_MS });
   } catch (err) {
     if (!/timed out/i.test(err?.message || "")) throw err;
-    return api("/api/groups?compact=1", { timeoutMs: BOOT_API_TIMEOUT_MS });
+    return api(path, { timeoutMs: BOOT_API_TIMEOUT_MS });
   }
 }
 
@@ -5865,7 +5881,7 @@ function persistBracketEntry({ submitted = state.bracketSubmitted } = {}) {
 }
 
 function bracketWinner(id) {
-  return state.bracketPicks[id] || "";
+  return BRACKET_LOCKED_WINNERS[id] || state.bracketPicks[id] || "";
 }
 
 function bracketMatchup(id, sourceA, sourceB) {
@@ -5877,21 +5893,32 @@ function bracketMatchup(id, sourceA, sourceB) {
 }
 
 function bracketRounds() {
-  const r16 = BRACKET_CHALLENGE.matchups.map(item => ({ ...item }));
+  const r32 = BRACKET_CHALLENGE.matchups.map(item => ({ ...item }));
+  const r16 = [
+    bracketMatchup("m89", () => bracketWinner("m74"), () => bracketWinner("m77")),
+    bracketMatchup("m90", () => bracketWinner("m73"), () => bracketWinner("m75")),
+    bracketMatchup("m91", () => bracketWinner("m76"), () => bracketWinner("m78")),
+    bracketMatchup("m92", () => bracketWinner("m79"), () => bracketWinner("m80")),
+    bracketMatchup("m93", () => bracketWinner("m81"), () => bracketWinner("m82")),
+    bracketMatchup("m94", () => bracketWinner("m83"), () => bracketWinner("m84")),
+    bracketMatchup("m95", () => bracketWinner("m86"), () => bracketWinner("m88")),
+    bracketMatchup("m96", () => bracketWinner("m85"), () => bracketWinner("m87")),
+  ];
   const qf = [
-    bracketMatchup("qf-1", () => bracketWinner("r16-1"), () => bracketWinner("r16-2")),
-    bracketMatchup("qf-2", () => bracketWinner("r16-3"), () => bracketWinner("r16-4")),
-    bracketMatchup("qf-3", () => bracketWinner("r16-5"), () => bracketWinner("r16-6")),
-    bracketMatchup("qf-4", () => bracketWinner("r16-7"), () => bracketWinner("r16-8")),
+    bracketMatchup("m97", () => bracketWinner("m89"), () => bracketWinner("m90")),
+    bracketMatchup("m98", () => bracketWinner("m91"), () => bracketWinner("m92")),
+    bracketMatchup("m99", () => bracketWinner("m93"), () => bracketWinner("m94")),
+    bracketMatchup("m100", () => bracketWinner("m95"), () => bracketWinner("m96")),
   ];
   const sf = [
-    bracketMatchup("sf-1", () => bracketWinner("qf-1"), () => bracketWinner("qf-2")),
-    bracketMatchup("sf-2", () => bracketWinner("qf-3"), () => bracketWinner("qf-4")),
+    bracketMatchup("m101", () => bracketWinner("m97"), () => bracketWinner("m98")),
+    bracketMatchup("m102", () => bracketWinner("m99"), () => bracketWinner("m100")),
   ];
   const final = [
-    bracketMatchup("final", () => bracketWinner("sf-1"), () => bracketWinner("sf-2")),
+    bracketMatchup("final", () => bracketWinner("m101"), () => bracketWinner("m102")),
   ];
   return [
+    { id: "r32", name: "Round of 32", matchups: r32 },
     { id: "r16", name: "Round of 16", matchups: r16 },
     { id: "qf", name: "Quarterfinals", matchups: qf },
     { id: "sf", name: "Semifinals", matchups: sf },
@@ -5917,6 +5944,7 @@ function normalizeBracketPicks() {
 
 function pickBracketTeam(matchupId, team) {
   if (!matchupId || !team) return;
+  if (BRACKET_LOCKED_WINNERS[matchupId]) return;
   state.bracketPicks[matchupId] = team;
   normalizeBracketPicks();
   state.bracketSubmitted = false;
@@ -5946,20 +5974,41 @@ function submitBracketEntry() {
 
 function teamFlag(team) {
   const flags = {
+    Algeria: "🇩🇿",
     Argentina: "🇦🇷",
+    Australia: "🇦🇺",
+    Austria: "🇦🇹",
+    Belgium: "🇧🇪",
+    "Bosnia and Herzegovina": "🇧🇦",
     Brazil: "🇧🇷",
+    Canada: "🇨🇦",
+    "Cabo Verde": "🇨🇻",
     Colombia: "🇨🇴",
+    Croatia: "🇭🇷",
+    "DR Congo": "🇨🇩",
+    Ecuador: "🇪🇨",
+    Egypt: "🇪🇬",
     England: "ENG",
     France: "🇫🇷",
     Germany: "🇩🇪",
+    Ghana: "🇬🇭",
     Italy: "🇮🇹",
+    "Ivory Coast": "🇨🇮",
     Japan: "🇯🇵",
     Mexico: "🇲🇽",
     Morocco: "🇲🇦",
     Netherlands: "🇳🇱",
+    Norway: "🇳🇴",
+    Paraguay: "🇵🇾",
     Portugal: "🇵🇹",
+    Scotland: "SCO",
+    Senegal: "🇸🇳",
+    "South Africa": "🇿🇦",
     "South Korea": "🇰🇷",
     Spain: "🇪🇸",
+    Sweden: "🇸🇪",
+    Switzerland: "🇨🇭",
+    Turkey: "🇹🇷",
     Uruguay: "🇺🇾",
     USA: "🇺🇸",
   };
@@ -5977,10 +6026,12 @@ function bracketMatchupHtml(matchup) {
   const winner = bracketWinner(matchup.id);
   const empty = matchup.teams.length < 2;
   const teams = empty ? [...matchup.teams, ...Array(2 - matchup.teams.length).fill("")] : matchup.teams.slice(0, 2);
+  const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
   return `
-    <article class="bracket-matchup ${winner ? "picked" : ""}">
+    <article class="bracket-matchup ${winner ? "picked" : ""} ${locked ? "locked" : ""}">
+      ${locked ? `<span class="bracket-match-tag">Final: ${esc(winner)} advanced</span>` : ""}
       ${teams.map(team => team ? `
-        <button class="bracket-team ${winner === team ? "active" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}">
+        <button class="bracket-team ${winner === team ? "active" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
           ${teamFlagHtml(team)}
           <strong>${esc(team)}</strong>
         </button>

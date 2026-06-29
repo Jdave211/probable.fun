@@ -19,6 +19,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -916,7 +917,11 @@ def assemble_event_markets(event: dict) -> list[dict]:
         positions.setdefault(position["participant"], {})[position["outcome_id"]] = float(position.get("shares") or 0)
 
     liquidity = float(event.get("liquidity_b") or 0)
-    volume = round(sum(abs(float(trade.get("cash_amount") or 0)) for trade in trades_raw), 4)
+    volume = round(
+        sum(abs(float(trade.get("cash_amount") or 0)) for trade in trades_raw)
+        if trades_raw else float(event.get("total_volume") or 0),
+        4,
+    )
     status = event["status"]
     markets: list[dict] = []
     for outcome in outcomes:
@@ -1055,13 +1060,21 @@ EVENT_SELECT_COMPACT = (
     "closes_at,created_at,outcome_id,resolved_at,oracle_proposal,legacy_key,"
     "resolution_source,edge_cases,verification_status,verification_attempts,"
     "resolved_by,resolution_notes,created_by,"
+    "market_outcomes(*),event_positions(*)"
+)
+EVENT_SELECT_CONTEXT = (
+    "id,group_id,title,description,status,mode,oracle_type,liquidity_b,total_volume,"
+    "image_url,"
+    "closes_at,created_at,outcome_id,resolved_at,oracle_proposal,legacy_key,"
+    "resolution_source,edge_cases,verification_status,verification_attempts,"
+    "resolved_by,resolution_notes,created_by,"
     "market_outcomes(*),event_trades(*),event_positions(*)"
 )
 GROUPS_SELECT_COMPACT = (
     "id,name,emoji,mode,created_at,"
     "group_members(*),"
     f"market_events({EVENT_SELECT_COMPACT}),"
-    "markets(*, trades(*))"
+    "markets(*)"
 )
 
 
@@ -1078,19 +1091,31 @@ def strip_data_url_images(groups: list[dict]) -> list[dict]:
     return groups
 
 
-def load_all_groups(*, compact: bool = True, group_id: str | None = None) -> list[dict]:
+def load_all_groups(*, compact: bool = True, group_id: str | None = None, limit: int | None = None) -> list[dict]:
     db = get_db()
     close_expired_markets(db)
     query = db.table("groups").select(GROUPS_SELECT_COMPACT if compact else GROUPS_SELECT_FULL)
     if group_id:
         query = query.eq("id", group_id)
+    if compact and limit:
+        query = query.limit(max(1, min(int(limit), 50)))
     result = query.order("created_at", desc=True).execute()
     groups = [assemble_group(deepcopy(g)) for g in result.data]
     return strip_data_url_images(groups) if compact else groups
 
 
-def groups_response(*, compact: bool = True, group_id: str | None = None, **extra) -> dict:
-    return {"groups": load_all_groups(compact=compact, group_id=group_id), **extra}
+def groups_response(
+    *,
+    compact: bool = True,
+    group_id: str | None = None,
+    include: str | None = None,
+    limit: int | None = None,
+    **extra,
+) -> dict:
+    groups = load_all_groups(compact=compact, group_id=group_id, limit=limit)
+    if include and not any(group.get("id") == include for group in groups):
+        groups.extend(load_all_groups(compact=compact, group_id=include))
+    return {"groups": groups, **extra}
 
 
 def load_market_context_group(market_id: str) -> dict:
@@ -1100,7 +1125,7 @@ def load_market_context_group(market_id: str) -> dict:
         event, _route_outcome = require_event_or_outcome(market_id)
         group_id = event["group_id"]
         group_rows = db.table("groups").select("id,name,emoji,mode,created_at,group_members(*)").eq("id", group_id).execute().data or []
-        event_rows = db.table("market_events").select(EVENT_SELECT_COMPACT).eq("id", event["id"]).execute().data or []
+        event_rows = db.table("market_events").select(EVENT_SELECT_CONTEXT).eq("id", event["id"]).execute().data or []
         if not group_rows or not event_rows:
             raise HTTPException(404, "Market group not found")
         group = deepcopy(group_rows[0])
@@ -2106,6 +2131,7 @@ app.add_middleware(
     allow_origins=allowed_cors_origins(),
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 @app.get("/api/health")
@@ -2114,8 +2140,8 @@ def health() -> dict:
 
 
 @app.get("/api/groups")
-def list_groups(compact: bool = True) -> dict:
-    return groups_response(compact=compact)
+def list_groups(compact: bool = True, limit: int | None = None, include: str | None = None) -> dict:
+    return groups_response(compact=compact, limit=limit, include=include)
 
 
 @app.get("/api/markets/{market_id}/context")
