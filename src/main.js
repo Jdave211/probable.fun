@@ -368,6 +368,7 @@ const state = {
   marketImages: [],
   bracketPicks: {},
   bracketSubmitted: false,
+  bracketRoundIndex: 0,
   pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, tradeMarketId: null, resolveMarketId: null },
   loaded: false,
 };
@@ -404,6 +405,40 @@ const BRACKET_LOCKED_WINNERS = Object.fromEntries(
     .filter(matchup => matchup.completed && matchup.winner)
     .map(matchup => [matchup.id, matchup.winner])
 );
+const BRACKET_TEAM_CHANCES = {
+  France: 23,
+  Spain: 11,
+  Argentina: 10,
+  Brazil: 9,
+  England: 8,
+  Portugal: 6,
+  Netherlands: 5,
+  Germany: 4,
+  Colombia: 4,
+  Belgium: 3,
+  USA: 3,
+  Mexico: 3,
+  Canada: 2,
+  Switzerland: 2,
+  Croatia: 1,
+  Morocco: 1,
+  Senegal: 1,
+  Japan: 1,
+  Norway: 1,
+  Austria: 1,
+  Ecuador: 1,
+  Ghana: 1,
+  Sweden: 1,
+  "Ivory Coast": 1,
+  Australia: 1,
+  Egypt: 1,
+  Algeria: 1,
+  Paraguay: 1,
+  "DR Congo": 1,
+  "Bosnia and Herzegovina": 1,
+  "Cabo Verde": 1,
+  "South Africa": 0.5,
+};
 
 document.querySelector("#app").innerHTML = `
   <nav class="topnav" id="topnav">
@@ -1228,9 +1263,17 @@ async function onGlobalClick(e) {
     return;
   }
 
+  const bracketNavBtn = e.target.closest("[data-bracket-round-nav]");
+  if (bracketNavBtn) {
+    moveBracketRound(Number(bracketNavBtn.dataset.bracketRoundNav || 0));
+    render();
+    return;
+  }
+
   if (e.target.closest("[data-reset-bracket]")) {
     state.bracketPicks = {};
     state.bracketSubmitted = false;
+    state.bracketRoundIndex = 0;
     persistBracketEntry({ submitted: false });
     render();
     toast("Bracket reset.");
@@ -5956,6 +5999,22 @@ function bracketComplete() {
   return Boolean(bracketWinner("final"));
 }
 
+function moveBracketRound(delta) {
+  const rounds = bracketRounds();
+  const next = Math.max(0, Math.min(rounds.length - 1, Number(state.bracketRoundIndex || 0) + delta));
+  state.bracketRoundIndex = next;
+}
+
+function bracketRoundPickCount(round) {
+  return (round?.matchups || []).filter(matchup => Boolean(bracketWinner(matchup.id))).length;
+}
+
+function bracketProgress(rounds) {
+  const total = rounds.reduce((sum, round) => sum + round.matchups.length, 0);
+  const picked = rounds.reduce((sum, round) => sum + bracketRoundPickCount(round), 0);
+  return { picked, total, pct: total ? Math.round((picked / total) * 100) : 0 };
+}
+
 function submitBracketEntry() {
   if (!bracketComplete()) {
     toast("Finish the bracket before submitting.");
@@ -6022,18 +6081,40 @@ function teamFlagHtml(team) {
     : `<span>${esc(teamFlag(team))}</span>`;
 }
 
-function bracketMatchupHtml(matchup) {
+function bracketChanceText(team) {
+  const chance = Number(BRACKET_TEAM_CHANCES[team] ?? 1);
+  return chance < 1 ? "<1%" : `${Math.round(chance)}%`;
+}
+
+function bracketChanceWidth(team) {
+  const chance = Number(BRACKET_TEAM_CHANCES[team] ?? 1);
+  return Math.max(3, Math.min(100, chance * 4));
+}
+
+function bracketMatchupHtml(matchup, index = 0) {
   const winner = bracketWinner(matchup.id);
   const empty = matchup.teams.length < 2;
   const teams = empty ? [...matchup.teams, ...Array(2 - matchup.teams.length).fill("")] : matchup.teams.slice(0, 2);
   const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
+  const missing = teams.every(team => !team);
   return `
-    <article class="bracket-matchup ${winner ? "picked" : ""} ${locked ? "locked" : ""}">
+    <article class="bracket-matchup ${winner ? "picked" : ""} ${locked ? "locked" : ""} ${missing ? "empty" : ""}">
+      ${!locked && !winner && !missing ? `
+        <div class="bracket-pick-slot">
+          <span>+</span>
+          <strong>Pick to advance</strong>
+          <em>⌄</em>
+        </div>
+      ` : ""}
       ${locked ? `<span class="bracket-match-tag">Final: ${esc(winner)} advanced</span>` : ""}
       ${teams.map(team => team ? `
         <button class="bracket-team ${winner === team ? "active" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
-          ${teamFlagHtml(team)}
-          <strong>${esc(team)}</strong>
+          <span class="bracket-team-main">
+            ${teamFlagHtml(team)}
+            <strong>${esc(team)}</strong>
+          </span>
+          <span class="bracket-team-chance">${bracketChanceText(team)}</span>
+          <span class="bracket-team-bar" style="--bar-width:${bracketChanceWidth(team)}%"></span>
         </button>
       ` : `
         <button class="bracket-team placeholder" type="button" disabled>
@@ -6042,6 +6123,43 @@ function bracketMatchupHtml(matchup) {
         </button>
       `).join("")}
     </article>
+  `;
+}
+
+function bracketRoundShellHtml(rounds, champion) {
+  const roundIndex = Math.max(0, Math.min(rounds.length - 1, Number(state.bracketRoundIndex || 0)));
+  state.bracketRoundIndex = roundIndex;
+  const round = rounds[roundIndex];
+  const progress = bracketProgress(rounds);
+  const pickedInRound = bracketRoundPickCount(round);
+  return `
+    <div class="bracket-progress-bar" aria-hidden="true">
+      <span style="width:${progress.pct}%"></span>
+    </div>
+    <div class="bracket-stage-nav">
+      <button class="bracket-nav-btn" type="button" data-bracket-round-nav="-1" ${roundIndex === 0 ? "disabled" : ""} aria-label="Previous round">‹</button>
+      <div>
+        <h2>${esc(round.name)}</h2>
+        <p>${pickedInRound}/${round.matchups.length} picked</p>
+      </div>
+      <button class="bracket-nav-btn" type="button" data-bracket-round-nav="1" ${roundIndex === rounds.length - 1 ? "disabled" : ""} aria-label="Next round">›</button>
+    </div>
+    <div class="bracket-board motion-item">
+      <section class="bracket-focused-round">
+        <div class="bracket-round-list">
+          ${round.matchups.map((matchup, index) => bracketMatchupHtml(matchup, index)).join("")}
+        </div>
+      </section>
+      <aside class="bracket-side-summary">
+        <div class="bracket-winner-card">
+          ${champion ? `${teamFlagHtml(champion)}<strong>${esc(champion)}</strong><small>Your winner</small>` : `<span>🏆</span><strong>No winner yet</strong><small>Complete the final</small>`}
+        </div>
+        <div class="bracket-faq-card">
+          <h3>Rules & FAQ</h3>
+          <p>Submit one bracket before entries close. If nobody is perfect, the best bracket wins.</p>
+        </div>
+      </aside>
+    </div>
   `;
 }
 
@@ -6059,41 +6177,9 @@ function renderBracketChallenge() {
       : "Pick winners left to right. Later rounds unlock as you choose.";
   dom.mainContent.innerHTML = `
     <section class="bracket-page">
-      <div class="bracket-hero motion-item">
-        <div class="bracket-poster" aria-label="${esc(BRACKET_CHALLENGE.title)} prize card">
-          <div class="bracket-brand-strip">
-            <span>probable<span class="logo-dot">.</span></span>
-            <em>free entry</em>
-          </div>
-          <div class="bracket-poster-stage">
-            <div class="bracket-prize-lockup">
-              <span>${BRACKET_CHALLENGE.prize}</span>
-              <strong>TO WIN</strong>
-              <em>WC26 bracket challenge</em>
-            </div>
-            <div class="bracket-trophy-mark" aria-hidden="true">🏆</div>
-            <div class="bracket-mini-tree" aria-hidden="true">
-              <span></span><span></span><span></span>
-              <i></i><i></i>
-              <b></b>
-            </div>
-          </div>
-        </div>
-        <div class="bracket-hero-copy">
-          <p class="eyebrow">World Cup bracket</p>
-          <h1>Pick the path. Flex the run.</h1>
-          <p>Free to enter. Submit your knockout bracket before the first ball is kicked. Perfect bracket wins ${BRACKET_CHALLENGE.prize}.</p>
-          <div class="bracket-rules">
-            <span>One bracket per account</span>
-            <span>Perfect bracket wins</span>
-            <span>Winner takes ${BRACKET_CHALLENGE.prize}</span>
-          </div>
-        </div>
-      </div>
-
       <div class="bracket-toolbar motion-item">
         <div>
-          <p class="eyebrow">Your entry</p>
+          <p class="eyebrow">World Cup bracket challenge · ${BRACKET_CHALLENGE.prize} prize</p>
           <h2>${entryStatus}</h2>
           <p>${entryHint}</p>
         </div>
@@ -6107,28 +6193,7 @@ function renderBracketChallenge() {
         </div>
       </div>
 
-      <div class="bracket-board motion-item">
-        ${rounds.map(round => `
-          <section class="bracket-round">
-            <header>
-              <span>${esc(round.name)}</span>
-              <em>${round.matchups.length} ${round.matchups.length === 1 ? "match" : "matches"}</em>
-            </header>
-            <div class="bracket-round-list">
-              ${round.matchups.map(bracketMatchupHtml).join("")}
-            </div>
-          </section>
-        `).join("")}
-        <section class="bracket-round bracket-champion-round">
-          <header>
-            <span>Champion</span>
-            <em>${BRACKET_CHALLENGE.prize}</em>
-          </header>
-          <div class="bracket-winner-card">
-            ${champion ? `${teamFlagHtml(champion)}<strong>${esc(champion)}</strong><small>Your winner</small>` : `<span>🏆</span><strong>No winner yet</strong><small>Complete the final</small>`}
-          </div>
-        </section>
-      </div>
+      ${bracketRoundShellHtml(rounds, champion)}
     </section>`;
 }
 
