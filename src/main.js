@@ -6195,7 +6195,35 @@ function bracketMiniCellHtml(matchup) {
   `;
 }
 
+function bracketSideStages(rounds, side) {
+  const left = side === "left";
+  const source = [
+    { round: rounds[0], matchups: rounds[0].matchups.slice(left ? 0 : 8, left ? 8 : 16) },
+    { round: rounds[1], matchups: rounds[1].matchups.slice(left ? 0 : 4, left ? 4 : 8) },
+    { round: rounds[2], matchups: rounds[2].matchups.slice(left ? 0 : 2, left ? 2 : 4) },
+    { round: rounds[3], matchups: rounds[3].matchups.slice(left ? 0 : 1, left ? 1 : 2) },
+  ];
+  return left ? source : source.reverse();
+}
+
+function bracketWideStageHtml(stage, side) {
+  const picked = stage.matchups.filter(matchup => Boolean(bracketWinner(matchup.id))).length;
+  return `
+    <section class="bracket-wide-round bracket-wide-${side}" style="--match-count:${stage.matchups.length}">
+      <header>
+        <span>${esc(stage.round.name)}</span>
+        <em>${picked}/${stage.matchups.length}</em>
+      </header>
+      <div class="bracket-wide-list">
+        ${stage.matchups.map(bracketMiniCellHtml).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function bracketWideGridHtml(rounds, champion) {
+  const leftStages = bracketSideStages(rounds, "left");
+  const rightStages = bracketSideStages(rounds, "right");
   return `
     <section class="bracket-wide-preview motion-item" aria-label="Full bracket preview">
       <div class="bracket-wide-head">
@@ -6207,23 +6235,14 @@ function bracketWideGridHtml(rounds, champion) {
       </div>
       <div class="bracket-wide-scroll">
         <div class="bracket-wide-grid">
-          ${rounds.map(round => `
-            <section class="bracket-wide-round" style="--match-count:${round.matchups.length}">
-              <header>
-                <span>${esc(round.name)}</span>
-                <em>${bracketRoundPickCount(round)}/${round.matchups.length}</em>
-              </header>
-              <div class="bracket-wide-list">
-                ${round.matchups.map(bracketMiniCellHtml).join("")}
-              </div>
-            </section>
-          `).join("")}
+          ${leftStages.map(stage => bracketWideStageHtml(stage, "left")).join("")}
           <section class="bracket-wide-round bracket-wide-champ" style="--match-count:1">
             <header>
-              <span>Champion</span>
-              <em>${BRACKET_CHALLENGE.prize}</em>
+              <span>Final</span>
+              <em>${bracketWinner("final") ? "1/1" : "0/1"}</em>
             </header>
             <div class="bracket-wide-list">
+              ${bracketMiniCellHtml(rounds[4].matchups[0])}
               <article class="bracket-mini-match champion">
                 ${champion ? `
                   <div class="bracket-mini-team active champion">
@@ -6239,6 +6258,7 @@ function bracketWideGridHtml(rounds, champion) {
               </article>
             </div>
           </section>
+          ${rightStages.map(stage => bracketWideStageHtml(stage, "right")).join("")}
         </div>
       </div>
     </section>

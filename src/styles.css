@@ -4074,7 +4074,7 @@ button { color: inherit; }
   color: var(--text-2);
 }
 .bracket-wide-preview {
-  width: min(1220px, calc(100vw - 24px));
+  width: min(1380px, calc(100vw - 24px));
   margin: 10px 50% 0;
   transform: translateX(-50%);
   border-top: 1px solid rgba(157, 171, 181, 0.12);
@@ -4107,10 +4107,10 @@ button { color: inherit; }
   scrollbar-width: thin;
 }
 .bracket-wide-grid {
-  min-width: 1080px;
+  min-width: 1260px;
   display: grid;
-  grid-template-columns: 1.24fr 1fr 0.86fr 0.76fr 0.66fr 0.58fr;
-  gap: 14px;
+  grid-template-columns: 1.22fr 1fr 0.82fr 0.68fr 0.82fr 0.68fr 0.82fr 1fr 1.22fr;
+  gap: 10px;
   align-items: stretch;
 }
 .bracket-wide-round {
@@ -4156,6 +4156,33 @@ button { color: inherit; }
   right: -15px;
   width: 14px;
   border-top: 1px solid rgba(157, 171, 181, 0.18);
+}
+.bracket-wide-right .bracket-mini-match::after {
+  right: auto;
+  left: -11px;
+  width: 10px;
+}
+.bracket-wide-left:nth-child(4) .bracket-mini-match::after,
+.bracket-wide-right:nth-child(6) .bracket-mini-match::after {
+  border-color: rgba(45, 156, 255, 0.28);
+}
+.bracket-wide-champ {
+  position: relative;
+}
+.bracket-wide-champ header {
+  color: #dfe8ef;
+}
+.bracket-wide-champ .bracket-wide-list {
+  min-height: 100%;
+  justify-content: center;
+  gap: 12px;
+}
+.bracket-wide-champ .bracket-mini-match {
+  border-color: rgba(45, 156, 255, 0.24);
+  background: linear-gradient(180deg, rgba(18, 79, 143, 0.18), rgba(18, 24, 28, 0.78));
+}
+.bracket-wide-champ .bracket-mini-match:first-child {
+  margin-bottom: 12px;
 }
 .bracket-wide-champ .bracket-mini-match::after,
 .bracket-mini-match.champion::after {
