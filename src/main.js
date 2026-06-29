@@ -6206,13 +6206,10 @@ function refreshBracketChallenge({ preserveScroll = true } = {}) {
   }
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
-  const wideScroll = document.querySelector(".bracket-wide-scroll")?.scrollLeft ?? 0;
   renderBracketChallenge();
   if (!preserveScroll) return;
   requestAnimationFrame(() => {
     window.scrollTo(scrollX, scrollY);
-    const nextWide = document.querySelector(".bracket-wide-scroll");
-    if (nextWide) nextWide.scrollLeft = wideScroll;
     animateBracketAdvance();
   });
 }
@@ -6275,11 +6272,55 @@ function teamFlag(team) {
   return flags[team] || "⚽";
 }
 
+function teamFlagCode(team) {
+  const codes = {
+    Algeria: "dz",
+    Argentina: "ar",
+    Australia: "au",
+    Austria: "at",
+    Belgium: "be",
+    "Bosnia and Herzegovina": "ba",
+    Brazil: "br",
+    Canada: "ca",
+    "Cabo Verde": "cv",
+    Colombia: "co",
+    Croatia: "hr",
+    "DR Congo": "cd",
+    Ecuador: "ec",
+    Egypt: "eg",
+    England: "gb-eng",
+    France: "fr",
+    Germany: "de",
+    Ghana: "gh",
+    Italy: "it",
+    "Ivory Coast": "ci",
+    Japan: "jp",
+    Mexico: "mx",
+    Morocco: "ma",
+    Netherlands: "nl",
+    Norway: "no",
+    Paraguay: "py",
+    Portugal: "pt",
+    Scotland: "gb-sct",
+    Senegal: "sn",
+    "South Africa": "za",
+    "South Korea": "kr",
+    Spain: "es",
+    Sweden: "se",
+    Switzerland: "ch",
+    Turkey: "tr",
+    Uruguay: "uy",
+    USA: "us",
+  };
+  return codes[team] || "";
+}
+
 function teamFlagHtml(team) {
-  const flagClass = regionalFlagClass(team);
-  return flagClass
-    ? `<span class="bracket-flag-token" aria-hidden="true"><span class="outcome-flag ${flagClass} bracket-flag"></span></span>`
-    : `<span class="bracket-flag-token" aria-hidden="true"><span class="bracket-emoji-flag">${esc(teamFlag(team))}</span></span>`;
+  const code = teamFlagCode(team);
+  if (code) {
+    return `<span class="bracket-flag-token" aria-hidden="true"><img src="https://flagcdn.com/${esc(code)}.svg" alt="" loading="lazy" /></span>`;
+  }
+  return `<span class="bracket-flag-token" aria-hidden="true"><span class="bracket-emoji-flag">${esc(teamFlag(team))}</span></span>`;
 }
 
 function bracketChanceText(team) {
@@ -6370,18 +6411,36 @@ function bracketMiniCellHtml(matchup, options = {}) {
   const hasChoices = matchup.teams.length >= 2;
   const teams = hasChoices ? matchup.teams.slice(0, 2) : [];
   const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
-  const row = typeof options === "object" && Number.isFinite(Number(options.row))
+  const depth = Number(options?.depth ?? 0);
+  const mobile = Boolean(options?.mobile);
+  const compact = !mobile && depth >= 2;
+  const row = !mobile && typeof options === "object" && Number.isFinite(Number(options.row))
     ? ` style="--bracket-row:${Number(options.row)}"`
     : "";
   if (!hasChoices) {
-    return "";
+    const waitingTeams = [...matchup.teams, ...Array(2 - matchup.teams.length).fill("")].slice(0, 2);
+    return `
+      <article class="bracket-mini-match waiting ${matchup.teams.length ? "has-pending" : "empty"} ${compact ? "compact" : ""} ${state.bracketLastPickedId === matchup.id ? "just-picked" : ""}" data-matchup-id="${esc(matchup.id)}"${row}>
+        ${waitingTeams.map(team => team ? `
+          <div class="bracket-mini-team pending-team" title="${esc(team)}">
+            ${teamFlagHtml(team)}
+            ${compact ? `<strong class="sr-only">${esc(team)}</strong>` : `<strong>${esc(team)}</strong>`}
+          </div>
+        ` : `
+          <div class="bracket-mini-team placeholder">
+            <span>·</span>
+            ${compact ? `<strong class="sr-only">Awaiting</strong>` : `<strong>Awaiting</strong>`}
+          </div>
+        `).join("")}
+      </article>
+    `;
   }
   return `
-    <article class="bracket-mini-match ready ${winner ? "picked" : ""} ${locked ? "locked" : ""} ${state.bracketLastPickedId === matchup.id ? "just-picked" : ""}" data-matchup-id="${esc(matchup.id)}"${row}>
+    <article class="bracket-mini-match ready ${compact ? "compact" : ""} ${winner ? "picked" : ""} ${locked ? "locked" : ""} ${state.bracketLastPickedId === matchup.id ? "just-picked" : ""}" data-matchup-id="${esc(matchup.id)}"${row}>
       ${teams.slice(0, 2).map(team => team ? `
-        <button class="bracket-mini-team ${winner === team ? "active" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
+        <button class="bracket-mini-team ${winner === team ? "active" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" aria-label="${esc(team)}" title="${esc(team)}" ${locked ? "disabled" : ""}>
           ${teamFlagHtml(team)}
-          <strong>${esc(team)}</strong>
+          ${compact ? `<strong class="sr-only">${esc(team)}</strong>` : `<strong>${esc(team)}</strong>`}
         </button>
       ` : "").join("")}
     </article>
@@ -6390,6 +6449,20 @@ function bracketMiniCellHtml(matchup, options = {}) {
 
 function bracketStageReadyMatchups(stage) {
   return (stage?.matchups || []).filter(matchup => matchup.teams.length >= 2);
+}
+
+function bracketIncomingConnectorHtml(stage, index) {
+  if (!stage || Number(stage.depth) <= 0) return "";
+  const previousMatchCount = stage.matchups.length * 2;
+  const topCenterLine = bracketGridRowForMatch(previousMatchCount, index * 2) + 1;
+  const bottomCenterLine = bracketGridRowForMatch(previousMatchCount, index * 2 + 1) + 1;
+  return `
+    <span
+      class="bracket-connector"
+      aria-hidden="true"
+      style="--connector-start:${topCenterLine}; --connector-end:${bottomCenterLine}"
+    ></span>
+  `;
 }
 
 function bracketGridRowForMatch(matchCount, index) {
@@ -6434,77 +6507,297 @@ function bracketGridRoundLabel(name) {
   return name;
 }
 
+function bracketSvgTeamRow(matchup, team, x, y, width, height, active, compact = false) {
+  const flagCode = teamFlagCode(team);
+  const flag = flagCode
+    ? `<image href="https://flagcdn.com/${esc(flagCode)}.svg" x="${x + 10}" y="${y + 6}" width="22" height="15" preserveAspectRatio="xMidYMid slice" />`
+    : `<text class="bracket-svg-flag-text" x="${x + 21}" y="${y + 18}" text-anchor="middle">${esc(teamFlag(team))}</text>`;
+  const label = compact && width < 130 ? team.slice(0, 3).toUpperCase() : team;
+  const data = BRACKET_LOCKED_WINNERS[matchup.id] ? "" : `data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}"`;
+  return `
+    <g class="bracket-svg-team ${active ? "active" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
+      <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" />
+      ${flag}
+      <text class="bracket-svg-team-name" x="${x + 40}" y="${y + height / 2 + 4}">${esc(label)}</text>
+    </g>
+  `;
+}
+
+function bracketSvgMatch(matchup, x, y, width, options = {}) {
+  const rowH = Number(options.rowH || 22);
+  const compact = Boolean(options.compact);
+  const winner = bracketWinner(matchup.id);
+  const teams = [...(matchup.teams || []), "", ""].slice(0, 2);
+  const empty = teams.every(team => !team);
+  if (empty) {
+    return `
+      <g class="bracket-svg-match waiting" data-matchup-id="${esc(matchup.id)}">
+        <rect x="${x}" y="${y}" width="${width}" height="${rowH * 2}" rx="10" />
+        <text x="${x + width / 2}" y="${y + rowH + 4}" text-anchor="middle">Awaiting</text>
+      </g>
+    `;
+  }
+  return `
+    <g class="bracket-svg-match ${winner ? "picked" : ""}" data-matchup-id="${esc(matchup.id)}">
+      <rect class="bracket-svg-shell-rect" x="${x}" y="${y}" width="${width}" height="${rowH * 2}" rx="10" />
+      ${teams.map((team, index) => team
+        ? bracketSvgTeamRow(matchup, team, x, y + index * rowH, width, rowH, winner === team, compact)
+        : `<g class="bracket-svg-team empty"><rect x="${x}" y="${y + index * rowH}" width="${width}" height="${rowH}" rx="8" /><text x="${x + width / 2}" y="${y + index * rowH + rowH / 2 + 4}" text-anchor="middle">Awaiting</text></g>`
+      ).join("")}
+    </g>
+  `;
+}
+
+function bracketSvgConnector(side, fromCenters, toCenter, fromX, toX) {
+  if (!fromCenters.length || !Number.isFinite(toCenter)) return "";
+  const midX = side === "left" ? fromX + (toX - fromX) * 0.52 : toX + (fromX - toX) * 0.52;
+  const first = fromCenters[0];
+  const last = fromCenters[fromCenters.length - 1];
+  const top = Math.min(first, last, toCenter);
+  const bottom = Math.max(first, last, toCenter);
+  const segments = fromCenters.map(y => `<path d="M ${fromX} ${y} H ${midX}" />`).join("");
+  return `
+    <g class="bracket-svg-lines">
+      ${segments}
+      <path d="M ${midX} ${top} V ${bottom}" />
+      <path d="M ${midX} ${toCenter} H ${toX}" />
+    </g>
+  `;
+}
+
+function bracketSvgRoundMap(rounds) {
+  return new Map(rounds.flatMap(round => round.matchups.map(matchup => [matchup.id, matchup])));
+}
+
+function bracketSvgHtml(rounds, champion) {
+  const lookup = bracketSvgRoundMap(rounds);
+  const sideConfig = {
+    left: {
+      ids: [
+        ["m74", "m77", "m73", "m75", "m81", "m82", "m83", "m84"],
+        ["m89", "m90", "m93", "m94"],
+        ["m97", "m98"],
+        ["m101"],
+      ],
+      x: [48, 310, 520, 670],
+      widths: [240, 180, 130, 105],
+      edge(match, stage) { return this.x[stage] + this.widths[stage]; },
+      targetEdge(stage) { return this.x[stage + 1]; },
+    },
+    right: {
+      ids: [
+        ["m76", "m78", "m79", "m80", "m86", "m88", "m85", "m87"],
+        ["m91", "m92", "m95", "m96"],
+        ["m99", "m100"],
+        ["m102"],
+      ],
+      x: [1312, 1110, 950, 825],
+      widths: [240, 180, 130, 105],
+      edge(match, stage) { return this.x[stage]; },
+      targetEdge(stage) { return this.x[stage + 1] + this.widths[stage + 1]; },
+    },
+  };
+  const y0 = 46;
+  const gap = 16;
+  const rowH = 29;
+  const cardH = rowH * 2;
+  const centers = { left: [], right: [] };
+  const cards = [];
+  const lines = [];
+
+  for (const side of ["left", "right"]) {
+    const cfg = sideConfig[side];
+    centers[side] = cfg.ids.map(() => []);
+    for (const [stage, ids] of cfg.ids.entries()) {
+      const width = cfg.widths[stage];
+      for (const [index, id] of ids.entries()) {
+        const matchup = lookup.get(id);
+        if (!matchup) continue;
+        let y;
+        if (stage === 0) {
+          y = y0 + index * (cardH + gap);
+        } else {
+          const parentA = centers[side][stage - 1][index * 2];
+          const parentB = centers[side][stage - 1][index * 2 + 1];
+          y = ((parentA + parentB) / 2) - cardH / 2;
+          lines.push(bracketSvgConnector(side, [parentA, parentB], y + cardH / 2, cfg.edge(null, stage - 1), cfg.targetEdge(stage - 1)));
+        }
+        centers[side][stage][index] = y + cardH / 2;
+        cards.push(bracketSvgMatch(matchup, cfg.x[stage], y, width, { rowH, compact: stage >= 2 }));
+      }
+    }
+  }
+
+  const finalMatch = lookup.get("final");
+  const finalX = 735;
+  const finalY = 526;
+  const finalW = 130;
+  const leftSf = centers.left[3][0];
+  const rightSf = centers.right[3][0];
+  lines.push(bracketSvgConnector("left", [leftSf], finalY + cardH / 2, sideConfig.left.x[3] + sideConfig.left.widths[3], finalX));
+  lines.push(bracketSvgConnector("right", [rightSf], finalY + cardH / 2, sideConfig.right.x[3], finalX + finalW));
+
+  return `
+    <svg class="bracket-svg" viewBox="0 0 1600 765" role="img" aria-label="World Cup bracket path">
+      <text class="bracket-svg-title" x="160" y="26" text-anchor="middle">ROUND OF 32</text>
+      <text class="bracket-svg-title" x="400" y="26" text-anchor="middle">R16</text>
+      <text class="bracket-svg-title" x="585" y="26" text-anchor="middle">QF</text>
+      <text class="bracket-svg-title" x="722" y="26" text-anchor="middle">SF</text>
+      <text class="bracket-svg-title" x="800" y="512" text-anchor="middle">FINAL</text>
+      <text class="bracket-svg-title" x="878" y="26" text-anchor="middle">SF</text>
+      <text class="bracket-svg-title" x="1015" y="26" text-anchor="middle">QF</text>
+      <text class="bracket-svg-title" x="1200" y="26" text-anchor="middle">R16</text>
+      <text class="bracket-svg-title" x="1438" y="26" text-anchor="middle">ROUND OF 32</text>
+      ${lines.join("")}
+      ${cards.join("")}
+      ${bracketSvgMatch(finalMatch, finalX, finalY, finalW, { rowH, compact: false })}
+      <g class="bracket-svg-champion">
+        <rect x="735" y="605" width="130" height="54" rx="14" />
+        <text x="800" y="627" text-anchor="middle">🏆</text>
+        <text x="800" y="648" text-anchor="middle">${champion ? esc(champion) : "Pick winner"}</text>
+      </g>
+    </svg>
+  `;
+}
+
 function bracketWideStageHtml(stage, side) {
   const readyMatchups = bracketStageReadyMatchups(stage);
-  const picked = readyMatchups.filter(matchup => Boolean(bracketWinner(matchup.id))).length;
+  const picked = stage.matchups.filter(matchup => Boolean(bracketWinner(matchup.id))).length;
   const ready = readyMatchups.length;
   const empty = ready === 0;
   return `
     <section class="bracket-wide-round bracket-wide-${side} bracket-depth-${stage.depth} ${empty ? "stage-empty" : "stage-ready"}" style="--match-count:${stage.matchups.length}; --stage-depth:${stage.depth}" data-match-count="${stage.matchups.length}" data-ready-count="${ready}">
       <header>
         <span>${esc(bracketGridRoundLabel(stage.round.name))}</span>
-        <em>${empty ? "" : `${picked}/${ready}`}</em>
+        <em>${picked}/${stage.matchups.length}</em>
       </header>
       <div class="bracket-wide-list">
-        ${empty ? `
-          <div class="bracket-stage-rail" aria-hidden="true"><span></span></div>
-        ` : stage.matchups.map((matchup, index) => bracketMiniCellHtml(matchup, {
+        ${stage.matchups.map((_, index) => bracketIncomingConnectorHtml(stage, index)).join("")}
+        ${stage.matchups.map((matchup, index) => bracketMiniCellHtml(matchup, {
           row: bracketGridRowForMatch(stage.matchups.length, index),
+          depth: stage.depth,
         })).join("")}
       </div>
     </section>
   `;
 }
 
-function bracketWideGridHtml(rounds, champion) {
+function bracketMobileStageHtml(stage) {
+  const visibleMatchups = stage.depth === 0
+    ? stage.matchups
+    : stage.matchups.filter(matchup => matchup.teams.length > 0 || bracketWinner(matchup.id));
+  const picked = stage.matchups.filter(matchup => Boolean(bracketWinner(matchup.id))).length;
+  const locked = stage.depth > 0 && visibleMatchups.length === 0;
+  return `
+    <section class="bracket-mobile-stage ${locked ? "locked" : "active"}" data-depth="${stage.depth}">
+      <header>
+        <span>${esc(bracketGridRoundLabel(stage.round.name))}</span>
+        <em>${picked}/${stage.matchups.length}</em>
+      </header>
+      ${locked ? `
+        <div class="bracket-mobile-locked">
+          <span></span>
+          <strong>Unlocks after previous picks</strong>
+        </div>
+      ` : `
+        <div class="bracket-mobile-list">
+          ${visibleMatchups.map(matchup => bracketMiniCellHtml(matchup, {
+            depth: stage.depth,
+            mobile: true,
+          })).join("")}
+        </div>
+      `}
+    </section>
+  `;
+}
+
+function bracketMobilePathHtml(rounds, champion) {
   const leftStages = bracketSideStages(rounds, "left");
-  const rightStages = bracketSideStages(rounds, "right");
+  return `
+    <div class="bracket-mobile-path" aria-label="Mobile bracket path">
+      <div class="bracket-mobile-path-head">
+        <p class="eyebrow">Left path</p>
+        <h3>Round of 32 to final</h3>
+        <span>${champion ? `${teamFlag(champion)} ${esc(champion)}` : "Pick through the path"}</span>
+      </div>
+      ${leftStages.map(stage => bracketMobileStageHtml(stage)).join("")}
+      <section class="bracket-mobile-stage final-stage">
+        <header>
+          <span>Final</span>
+          <em>${bracketWinner("final") ? "1/1" : "0/1"}</em>
+        </header>
+        <div class="bracket-mobile-list">
+          ${bracketMiniCellHtml(rounds[4].matchups[0], { mobile: true, depth: 4 })}
+          <article class="bracket-mini-match champion">
+            ${champion ? `
+              <div class="bracket-mini-team active champion">
+                ${teamFlagHtml(champion)}
+                <strong>${esc(champion)}</strong>
+              </div>
+            ` : `
+              <div class="bracket-mini-team placeholder champion">
+                <span>🏆</span>
+                <strong>Pick final winner</strong>
+              </div>
+            `}
+          </article>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function bracketViewToggleHtml(bracketView) {
+  return `
+    <div class="bracket-view-toggle compact-icons motion-item" aria-label="Bracket view">
+      <button type="button" data-bracket-view="grid" class="${bracketView === "grid" ? "active" : ""}" aria-pressed="${bracketView === "grid"}" aria-label="Grid bracket view">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 5h6v6H4zM14 5h6v6h-6zM4 15h6v4H4zM14 15h6v4h-6z" />
+        </svg>
+      </button>
+      <button type="button" data-bracket-view="table" class="${bracketView === "table" ? "active" : ""}" aria-pressed="${bracketView === "table"}" aria-label="Round-by-round table view">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 6h14v2H5zM5 11h14v2H5zM5 16h14v2H5z" />
+        </svg>
+      </button>
+    </div>
+  `;
+}
+
+function bracketActionControlsHtml(champion) {
+  return `
+    <div class="bracket-graph-actions">
+      <div class="bracket-current-pick">
+        <span>Champion</span>
+        <strong>${champion ? `${teamFlag(champion)} ${esc(champion)}` : "TBD"}</strong>
+      </div>
+      <button class="btn btn-ghost btn-sm" type="button" data-reset-bracket>Reset</button>
+      <button class="btn btn-primary btn-sm" type="button" data-submit-bracket>${state.bracketSubmitted ? "Update entry" : "Submit bracket"}</button>
+    </div>
+  `;
+}
+
+function bracketWideGridHtml(rounds, champion, bracketView = "grid") {
   const progress = bracketProgress(rounds);
   return `
     <section class="bracket-wide-preview motion-item" aria-label="Full bracket preview">
-      <div class="bracket-progress-bar bracket-progress-wide" aria-hidden="true">
-        <span style="width:${progress.pct}%"></span>
-      </div>
-      <div class="bracket-wide-head">
+      <div class="bracket-wide-head compact">
         <div>
           <p class="eyebrow">Progressive bracket</p>
           <h2>See the whole path</h2>
-          <small>Future cards stay compressed until both teams are known.</small>
         </div>
-        <span>${champion ? `${teamFlag(champion)} ${esc(champion)}` : "No winner yet"}</span>
-      </div>
-      <div class="bracket-wide-scroll">
-        <div class="bracket-wide-grid bracket-progressive-grid">
-          <div class="bracket-side-tree bracket-side-left">
-            ${leftStages.map(stage => bracketWideStageHtml(stage, "left")).join("")}
-          </div>
-          <section class="bracket-wide-round bracket-wide-champ bracket-final-column" style="--match-count:1">
-            <header>
-              <span>Final</span>
-              <em>${bracketWinner("final") ? "1/1" : "0/1"}</em>
-            </header>
-            <div class="bracket-wide-list bracket-final-list">
-              ${bracketMiniCellHtml(rounds[4].matchups[0], { row: 1 })}
-              <article class="bracket-mini-match champion" style="--bracket-row:3">
-                ${champion ? `
-                  <div class="bracket-mini-team active champion">
-                    ${teamFlagHtml(champion)}
-                    <strong>${esc(champion)}</strong>
-                  </div>
-                ` : `
-                  <div class="bracket-mini-team placeholder champion">
-                    <span>🏆</span>
-                    <strong>Pick final winner</strong>
-                  </div>
-                `}
-              </article>
-            </div>
-          </section>
-          <div class="bracket-side-tree bracket-side-right">
-            ${rightStages.map(stage => bracketWideStageHtml(stage, "right")).join("")}
-          </div>
+        <div class="bracket-graph-controls">
+          ${bracketViewToggleHtml(bracketView)}
+          ${bracketActionControlsHtml(champion)}
         </div>
       </div>
+      <div class="bracket-progress-bar bracket-progress-wide" aria-hidden="true">
+        <span style="width:${progress.pct}%"></span>
+      </div>
+      <div class="bracket-svg-shell">
+        ${bracketSvgHtml(rounds, champion)}
+      </div>
+      ${bracketMobilePathHtml(rounds, champion)}
     </section>
   `;
 }
@@ -6529,22 +6822,23 @@ function renderBracketChallenge() {
           <h2>${entryStatus}</h2>
           <p>${entryHint}</p>
         </div>
-        <div class="bracket-current-pick">
-          <span>Champion</span>
-          <strong>${champion ? `${teamFlag(champion)} ${esc(champion)}` : "TBD"}</strong>
-        </div>
-        <div class="bracket-actions">
-          <button class="btn btn-ghost btn-sm" type="button" data-reset-bracket>Reset</button>
-          <button class="btn btn-primary btn-sm" type="button" data-submit-bracket>${state.bracketSubmitted ? "Update entry" : "Submit bracket"}</button>
-        </div>
       </div>
 
-      <div class="bracket-view-toggle motion-item" aria-label="Bracket view">
-        <button type="button" data-bracket-view="grid" class="${bracketView === "grid" ? "active" : ""}" aria-pressed="${bracketView === "grid"}">Grid</button>
-        <button type="button" data-bracket-view="table" class="${bracketView === "table" ? "active" : ""}" aria-pressed="${bracketView === "table"}">Table</button>
-      </div>
-
-      ${bracketView === "grid" ? bracketWideGridHtml(rounds, champion) : bracketRoundShellHtml(rounds, champion)}
+      ${bracketView === "grid" ? bracketWideGridHtml(rounds, champion, bracketView) : `
+        <section class="bracket-wide-preview table-mode motion-item" aria-label="Round table bracket">
+          <div class="bracket-wide-head compact">
+            <div>
+              <p class="eyebrow">Round view</p>
+              <h2>Pick one round at a time</h2>
+            </div>
+            <div class="bracket-graph-controls">
+              ${bracketViewToggleHtml(bracketView)}
+              ${bracketActionControlsHtml(champion)}
+            </div>
+          </div>
+          ${bracketRoundShellHtml(rounds, champion)}
+        </section>
+      `}
     </section>`;
 }
 
