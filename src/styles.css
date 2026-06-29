@@ -3392,33 +3392,157 @@ button { color: inherit; }
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
 }
 .bracket-hero {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.34fr);
-  gap: 18px;
+  grid-template-columns: minmax(300px, 0.56fr) minmax(0, 1fr);
+  gap: clamp(16px, 2.8vw, 30px);
   align-items: stretch;
   border-bottom: 1px solid var(--line);
-  padding: 18px 0 24px;
+  padding: 16px 0 26px;
+}
+.bracket-poster {
+  position: relative;
+  min-height: 310px;
+  overflow: hidden;
+  border: 1px solid rgba(89, 139, 180, 0.24);
+  border-radius: 30px;
+  background:
+    linear-gradient(135deg, rgba(10, 17, 24, 0.96), rgba(8, 27, 45, 0.96) 58%, rgba(10, 44, 76, 0.88)),
+    radial-gradient(circle at 78% 28%, rgba(45, 156, 255, 0.22), transparent 34%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 34px 80px rgba(0, 0, 0, 0.34);
+}
+.bracket-poster::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 100% 18px, 18px 100%;
+  opacity: 0.48;
+  pointer-events: none;
+}
+.bracket-brand-strip {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 22px 22px 0;
+  color: var(--text);
+  font-weight: 900;
+}
+.bracket-brand-strip em {
+  color: #9dabba;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.bracket-poster-stage {
+  position: relative;
+  z-index: 1;
+  min-height: 250px;
+  display: grid;
+  grid-template-columns: 0.92fr 0.88fr;
+  align-items: end;
+  gap: 10px;
+  padding: 16px 22px 24px;
+}
+.bracket-prize-lockup span {
+  display: block;
+  color: #fff;
+  font-size: clamp(4.1rem, 9vw, 7.2rem);
+  font-weight: 950;
+  line-height: 0.78;
+  letter-spacing: -0.09em;
+}
+.bracket-prize-lockup strong {
+  display: block;
+  margin-top: 8px;
+  color: #f2c75c;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: clamp(1.6rem, 4vw, 2.6rem);
+  line-height: 0.92;
+  letter-spacing: -0.05em;
+}
+.bracket-prize-lockup em {
+  display: block;
+  max-width: 190px;
+  margin-top: 12px;
+  color: #c5d2dd;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.05;
+  text-transform: uppercase;
+}
+.bracket-trophy-mark {
+  justify-self: center;
+  align-self: center;
+  filter: drop-shadow(0 20px 34px rgba(245, 184, 75, 0.24));
+  font-size: clamp(5.7rem, 13vw, 9rem);
+  transform: rotate(8deg);
+}
+.bracket-mini-tree {
+  position: absolute;
+  right: 20px;
+  bottom: 22px;
+  width: 132px;
+  height: 92px;
+  opacity: 0.72;
+}
+.bracket-mini-tree span,
+.bracket-mini-tree i,
+.bracket-mini-tree b {
+  position: absolute;
+  display: block;
+  border-radius: 999px;
+  background: rgba(45, 156, 255, 0.18);
+}
+.bracket-mini-tree span {
+  left: 0;
+  width: 58px;
+  height: 9px;
+}
+.bracket-mini-tree span:nth-child(1) { top: 6px; }
+.bracket-mini-tree span:nth-child(2) { top: 42px; }
+.bracket-mini-tree span:nth-child(3) { top: 78px; }
+.bracket-mini-tree i {
+  left: 68px;
+  width: 44px;
+  height: 9px;
+}
+.bracket-mini-tree i:nth-of-type(1) { top: 24px; }
+.bracket-mini-tree i:nth-of-type(2) { top: 60px; }
+.bracket-mini-tree b {
+  right: 0;
+  top: 42px;
+  width: 26px;
+  height: 9px;
 }
 .bracket-hero-copy {
-  min-height: 220px;
+  min-height: 310px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  border-radius: 32px;
+  border-radius: 0;
   background:
-    linear-gradient(110deg, rgba(18, 79, 143, 0.28), rgba(16, 20, 23, 0.54) 42%, rgba(16, 20, 23, 0.92)),
-    radial-gradient(circle at 22% 24%, rgba(45, 156, 255, 0.22), transparent 34%);
-  padding: clamp(22px, 4vw, 42px);
-  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.34);
+    radial-gradient(circle at 92% 24%, rgba(45, 156, 255, 0.12), transparent 28%),
+    transparent;
+  padding: clamp(10px, 3.5vw, 36px) 0;
 }
 .bracket-hero h1 {
-  max-width: 780px;
+  max-width: 690px;
   margin: 4px 0 8px;
-  font-size: clamp(2.6rem, 6vw, 5.7rem);
-  line-height: 0.9;
+  font-size: clamp(3rem, 6.8vw, 6.8rem);
+  line-height: 0.86;
   letter-spacing: -0.07em;
 }
 .bracket-hero p {
@@ -3435,7 +3559,7 @@ button { color: inherit; }
 .bracket-rules span {
   border: 1px solid rgba(157, 171, 181, 0.18);
   border-radius: 999px;
-  background: rgba(16, 20, 23, 0.5);
+  background: rgba(18, 79, 143, 0.12);
   color: #d7dde2;
   padding: 7px 10px;
   font-family: "IBM Plex Mono", monospace;
@@ -3443,43 +3567,15 @@ button { color: inherit; }
   font-weight: 800;
   text-transform: uppercase;
 }
-.bracket-prize-card {
-  min-height: 220px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  border: 1px solid rgba(245, 184, 75, 0.24);
-  border-radius: 32px;
-  background:
-    radial-gradient(circle at 60% 20%, rgba(245, 184, 75, 0.2), transparent 34%),
-    var(--surface);
-  padding: 28px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-}
-.bracket-prize-card span {
-  color: #ffe08a;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.bracket-prize-card strong {
-  font-size: clamp(3.1rem, 8vw, 5.6rem);
-  line-height: 0.85;
-  letter-spacing: -0.08em;
-}
-.bracket-prize-card em {
-  color: var(--text-2);
-  font-style: normal;
-  font-weight: 700;
-}
 .bracket-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  padding: 4px 0 10px;
+  border: 1px solid rgba(157, 171, 181, 0.14);
+  border-radius: 24px;
+  background: rgba(21, 26, 30, 0.58);
+  padding: 16px;
 }
 .bracket-toolbar h2 {
   font-size: 1.35rem;
@@ -3495,12 +3591,37 @@ button { color: inherit; }
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+.bracket-current-pick {
+  min-width: 160px;
+  margin-left: auto;
+  border-left: 1px solid rgba(157, 171, 181, 0.14);
+  padding-left: 18px;
+}
+.bracket-current-pick span {
+  display: block;
+  color: var(--text-3);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.bracket-current-pick strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 1.02rem;
+}
 .bracket-board {
   display: grid;
   grid-template-columns: 1.2fr 1fr 0.88fr 0.78fr 0.72fr;
   gap: 12px;
   overflow-x: auto;
-  padding: 4px 0 20px;
+  border: 1px solid rgba(157, 171, 181, 0.1);
+  border-radius: 28px;
+  background:
+    linear-gradient(90deg, rgba(18, 79, 143, 0.09), transparent 18%, transparent 82%, rgba(18, 79, 143, 0.07)),
+    rgba(8, 12, 15, 0.2);
+  padding: 16px 16px 22px;
   scrollbar-width: thin;
 }
 .bracket-round {
@@ -3520,6 +3641,7 @@ button { color: inherit; }
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  padding: 0 4px;
 }
 .bracket-round header em {
   color: var(--text-3);
@@ -3536,10 +3658,12 @@ button { color: inherit; }
   position: relative;
   display: grid;
   gap: 6px;
-  border: 1px solid rgba(157, 171, 181, 0.14);
-  border-radius: 18px;
-  background: rgba(21, 26, 30, 0.78);
-  padding: 8px;
+  border: 1px solid rgba(157, 171, 181, 0.12);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(31, 39, 45, 0.74), rgba(17, 23, 27, 0.82));
+  padding: 7px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
 }
 .bracket-matchup::after {
   content: "";
@@ -3560,8 +3684,8 @@ button { color: inherit; }
   align-items: center;
   gap: 9px;
   border: 1px solid transparent;
-  border-radius: 12px;
-  background: rgba(37, 46, 52, 0.74);
+  border-radius: 11px;
+  background: rgba(10, 15, 18, 0.38);
   color: var(--text-2);
   padding: 8px 10px;
   cursor: pointer;
@@ -3569,12 +3693,14 @@ button { color: inherit; }
 }
 .bracket-team:hover:not(:disabled),
 .bracket-team.active {
-  border-color: rgba(45, 156, 255, 0.38);
-  background: rgba(18, 79, 143, 0.24);
+  border-color: rgba(45, 156, 255, 0.45);
+  background: linear-gradient(90deg, rgba(18, 79, 143, 0.34), rgba(18, 79, 143, 0.14));
   color: var(--text);
 }
 .bracket-team.active {
-  box-shadow: inset 3px 0 0 #2d9cff;
+  box-shadow:
+    inset 3px 0 0 #2d9cff,
+    0 10px 20px rgba(0, 0, 0, 0.16);
 }
 .bracket-team.placeholder {
   cursor: not-allowed;
@@ -3603,10 +3729,10 @@ button { color: inherit; }
   justify-content: center;
   align-items: center;
   gap: 8px;
-  border: 1px solid rgba(245, 184, 75, 0.26);
-  border-radius: 24px;
+  border: 1px solid rgba(45, 156, 255, 0.24);
+  border-radius: 22px;
   background:
-    radial-gradient(circle at 50% 16%, rgba(245, 184, 75, 0.16), transparent 40%),
+    radial-gradient(circle at 50% 16%, rgba(45, 156, 255, 0.18), transparent 40%),
     rgba(21, 26, 30, 0.82);
   text-align: center;
 }

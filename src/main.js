@@ -6000,31 +6000,55 @@ function renderBracketChallenge() {
   const champion = bracketWinner("final");
   const complete = bracketComplete();
   const entry = loadBracketEntry();
+  const entryStatus = state.bracketSubmitted ? "Entry locked" : complete ? "Ready to submit" : "Build your bracket";
+  const entryHint = entry?.submittedAt
+    ? `Submitted ${new Date(entry.submittedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+    : complete
+      ? "Review the champion, then submit your entry."
+      : "Pick winners left to right. Later rounds unlock as you choose.";
   dom.mainContent.innerHTML = `
     <section class="bracket-page">
       <div class="bracket-hero motion-item">
-        <div class="bracket-hero-copy">
-          <p class="eyebrow">Probable bracket challenge</p>
-          <h1>${BRACKET_CHALLENGE.title}</h1>
-          <p>${BRACKET_CHALLENGE.subtitle}</p>
-          <div class="bracket-rules">
-            <span>Free entry</span>
-            <span>One bracket per account</span>
-            <span>Perfect bracket wins</span>
+        <div class="bracket-poster" aria-label="${esc(BRACKET_CHALLENGE.title)} prize card">
+          <div class="bracket-brand-strip">
+            <span>probable<span class="logo-dot">.</span></span>
+            <em>free entry</em>
+          </div>
+          <div class="bracket-poster-stage">
+            <div class="bracket-prize-lockup">
+              <span>${BRACKET_CHALLENGE.prize}</span>
+              <strong>TO WIN</strong>
+              <em>WC26 bracket challenge</em>
+            </div>
+            <div class="bracket-trophy-mark" aria-hidden="true">🏆</div>
+            <div class="bracket-mini-tree" aria-hidden="true">
+              <span></span><span></span><span></span>
+              <i></i><i></i>
+              <b></b>
+            </div>
           </div>
         </div>
-        <div class="bracket-prize-card">
-          <span>Prize pool</span>
-          <strong>${BRACKET_CHALLENGE.prize}</strong>
-          <em>${champion ? `${teamFlag(champion)} ${esc(champion)} to win it` : "Pick every round"}</em>
+        <div class="bracket-hero-copy">
+          <p class="eyebrow">World Cup bracket</p>
+          <h1>Pick the path. Flex the run.</h1>
+          <p>Free to enter. Submit your knockout bracket before the first ball is kicked. Perfect bracket wins ${BRACKET_CHALLENGE.prize}.</p>
+          <div class="bracket-rules">
+            <span>One bracket per account</span>
+            <span>Perfect bracket wins</span>
+            <span>Winner takes ${BRACKET_CHALLENGE.prize}</span>
+          </div>
         </div>
       </div>
 
       <div class="bracket-toolbar motion-item">
         <div>
           <p class="eyebrow">Your entry</p>
-          <h2>${state.bracketSubmitted ? "Submitted" : complete ? "Ready to submit" : "Build your bracket"}</h2>
-          ${entry?.submittedAt ? `<p>Submitted ${new Date(entry.submittedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</p>` : `<p>Pick winners left to right. Later rounds unlock as you choose.</p>`}
+          <h2>${entryStatus}</h2>
+          <p>${entryHint}</p>
+        </div>
+        <div class="bracket-current-pick">
+          <span>Champion</span>
+          <strong>${champion ? `${teamFlag(champion)} ${esc(champion)}` : "TBD"}</strong>
         </div>
         <div class="bracket-actions">
           <button class="btn btn-ghost btn-sm" type="button" data-reset-bracket>Reset</button>
