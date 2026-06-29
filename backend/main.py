@@ -113,6 +113,11 @@ class ResolveMarket(BaseModel):
     resolvedBy: str | None = Field(default=None, max_length=80)
 
 
+class EliminateOutcome(BaseModel):
+    reasoning: str | None = Field(default=None, max_length=1200)
+    eliminatedBy: str | None = Field(default=None, max_length=80)
+
+
 class OracleVote(BaseModel):
     participant: str = Field(min_length=1, max_length=40)
     outcome: str = Field(min_length=1, max_length=80)
@@ -945,6 +950,10 @@ def assemble_event_markets(event: dict) -> list[dict]:
             "verificationAttempts": event.get("verification_attempts") or [],
             "resolvedBy": event.get("resolved_by"),
             "resolutionNotes": event.get("resolution_notes"),
+            "outcomeStatus": outcome.get("status") or "active",
+            "eliminatedAt": outcome.get("eliminated_at"),
+            "eliminatedBy": outcome.get("eliminated_by"),
+            "eliminationNotes": outcome.get("elimination_notes"),
             "probability": probability,
             "pool_yes": None,
             "pool_no": None,
@@ -967,6 +976,10 @@ def assemble_event_markets(event: dict) -> list[dict]:
                     "price": round(float(item.get("price") or 0), 6),
                     "quantity": round(float(item.get("quantity") or 0), 6),
                     "sortOrder": item.get("sort_order") or 0,
+                    "status": item.get("status") or "active",
+                    "eliminatedAt": item.get("eliminated_at"),
+                    "eliminatedBy": item.get("eliminated_by"),
+                    "eliminationNotes": item.get("elimination_notes"),
                 }
                 for item in outcomes
             ],
@@ -1592,14 +1605,26 @@ def clamp_price(value: float) -> float:
     return max(0.001, min(0.999, float(value or 0)))
 
 
+def outcome_status(outcome: dict) -> str:
+    return str(outcome.get("status") or "active").strip().lower() or "active"
+
+
+def outcome_is_eliminated(outcome: dict | None) -> bool:
+    return outcome_status(outcome or {}) == "eliminated"
+
+
+def active_outcomes(outcomes: list[dict]) -> list[dict]:
+    return [item for item in outcomes if not outcome_is_eliminated(item)]
+
+
 def event_sum_exp(outcomes: list[dict], b: float) -> float:
-    return sum(math.exp(float(item.get("quantity") or 0) / b) for item in outcomes)
+    return sum(math.exp(float(item.get("quantity") or 0) / b) for item in active_outcomes(outcomes))
 
 
 def lmsr_buy_shares(outcomes: list[dict], b: float, outcome_id: str, cash: float) -> float:
     if cash <= 0:
         return 0.0
-    target = next((item for item in outcomes if item["id"] == outcome_id), None)
+    target = next((item for item in active_outcomes(outcomes) if item["id"] == outcome_id), None)
     if not target or b <= 0:
         return 0.0
     sum_exp = event_sum_exp(outcomes, b)
@@ -1610,7 +1635,7 @@ def lmsr_buy_shares(outcomes: list[dict], b: float, outcome_id: str, cash: float
 def lmsr_sell_cash_for_shares(outcomes: list[dict], b: float, outcome_id: str, shares: float) -> float:
     if shares <= 0:
         return 0.0
-    target = next((item for item in outcomes if item["id"] == outcome_id), None)
+    target = next((item for item in active_outcomes(outcomes) if item["id"] == outcome_id), None)
     if not target or b <= 0:
         return 0.0
     sum_exp = event_sum_exp(outcomes, b)
@@ -1625,7 +1650,7 @@ def lmsr_complement_buy_shares(outcomes: list[dict], b: float, excluded_outcome_
     net_cash = trade_net_cash(gross_cash)
     if net_cash <= 0 or b <= 0:
         return 0.0
-    values = [(item["id"], math.exp(float(item.get("quantity") or 0) / b)) for item in outcomes]
+    values = [(item["id"], math.exp(float(item.get("quantity") or 0) / b)) for item in active_outcomes(outcomes)]
     sum_exp = sum(value for _id, value in values)
     target_exp = next((value for oid, value in values if oid == excluded_outcome_id), None)
     if not target_exp or sum_exp <= 0:
@@ -1644,7 +1669,7 @@ def lmsr_complement_sell_cash_for_shares(outcomes: list[dict], b: float, exclude
     amount = max(0.0, float(shares or 0))
     if amount <= 0 or b <= 0:
         return 0.0
-    values = [(item["id"], math.exp(float(item.get("quantity") or 0) / b)) for item in outcomes]
+    values = [(item["id"], math.exp(float(item.get("quantity") or 0) / b)) for item in active_outcomes(outcomes)]
     sum_exp = sum(value for _id, value in values)
     target_exp = next((value for oid, value in values if oid == excluded_outcome_id), None)
     if not target_exp or sum_exp <= 0:
@@ -1674,9 +1699,15 @@ def lmsr_complement_sell_shares_for_cash(outcomes: list[dict], b: float, exclude
 
 
 def lmsr_prices_for_quantities(outcomes: list[dict], b: float) -> dict[str, float]:
-    exps = {item["id"]: math.exp(float(item.get("quantity") or 0) / b) for item in outcomes}
+    exps = {
+        item["id"]: math.exp(float(item.get("quantity") or 0) / b)
+        for item in active_outcomes(outcomes)
+    }
     total = sum(exps.values()) or 1.0
-    return {oid: value / total for oid, value in exps.items()}
+    prices = {oid: value / total for oid, value in exps.items()}
+    for item in outcomes:
+        prices.setdefault(item["id"], 0.0)
+    return prices
 
 
 def trade_net_cash(cash: float) -> float:
@@ -1712,9 +1743,14 @@ def event_trade_quote(event: dict, outcomes: list[dict], outcome_id: str, payloa
     target = next((item for item in outcomes if item["id"] == outcome_id), None)
     if not target:
         raise HTTPException(400, "Outcome not found")
+    if outcome_is_eliminated(target):
+        raise HTTPException(400, f"{target.get('title') or 'This outcome'} has been eliminated")
+    active = active_outcomes(outcomes)
+    if len(active) < 2:
+        raise HTTPException(400, "Market does not have enough active outcomes to trade")
     b = float(event.get("liquidity_b") or DEFAULT_FAKE_BALANCE)
     amount = float(payload.amount or 0)
-    is_complement = len(outcomes) > 2 and payload.side == "no"
+    is_complement = len(outcomes) > 2 and len(active) > 1 and payload.side == "no"
     target_price = float(target.get("price") or 0)
     price = max(0.0, 1.0 - target_price) if is_complement else target_price
     fee = amount * MARKET_FEE_RATE if payload.action == "buy" else max(0.0, sell_gross_cash_for_net(amount) - amount)
@@ -1738,24 +1774,24 @@ def event_trade_quote(event: dict, outcomes: list[dict], outcome_id: str, payloa
     if amount <= 0:
         return quote
     if is_complement:
-        complement = [item for item in outcomes if item["id"] != outcome_id]
+        complement = [item for item in active if item["id"] != outcome_id]
         if payload.action == "buy":
-            shares = lmsr_complement_buy_shares(outcomes, b, outcome_id, amount)
+            shares = lmsr_complement_buy_shares(active, b, outcome_id, amount)
             quote["shares"] = round(shares, 8)
             quote["allocations"] = weighted_allocations(complement, amount)
         else:
             holdings = positions or {}
             max_shares = min([float(holdings.get(item["id"], 0)) for item in complement] or [0.0])
-            max_cash = lmsr_complement_sell_cash_for_shares(outcomes, b, outcome_id, max_shares)
+            max_cash = lmsr_complement_sell_cash_for_shares(active, b, outcome_id, max_shares)
             quote["maxCash"] = round(max_cash, 4)
             quote["cashReceived"] = round(min(amount, max_cash), 4)
-            quote["shares"] = round(lmsr_complement_sell_shares_for_cash(outcomes, b, outcome_id, min(amount, max_cash), max_shares), 8)
+            quote["shares"] = round(lmsr_complement_sell_shares_for_cash(active, b, outcome_id, min(amount, max_cash), max_shares), 8)
         return quote
     if payload.action == "buy":
-        quote["shares"] = round(lmsr_buy_shares(outcomes, b, outcome_id, trade_net_cash(amount)), 8)
+        quote["shares"] = round(lmsr_buy_shares(active, b, outcome_id, trade_net_cash(amount)), 8)
     else:
         held = float((positions or {}).get(outcome_id, 0))
-        max_cash = trade_net_cash(lmsr_sell_cash_for_shares(outcomes, b, outcome_id, held))
+        max_cash = trade_net_cash(lmsr_sell_cash_for_shares(active, b, outcome_id, held))
         quote["maxCash"] = round(max_cash, 4)
         quote["cashReceived"] = round(min(amount, max_cash), 4)
     return quote
@@ -2092,6 +2128,75 @@ def resolve_event_market_all_outcomes(
     }
 
 
+def eliminate_event_outcome(
+    db,
+    event: dict,
+    outcome_id: str,
+    *,
+    eliminated_by: str = "manual",
+    notes: str | None = None,
+) -> dict:
+    event_id = event["id"]
+    if event.get("status") == "resolved":
+        raise HTTPException(400, "Resolved markets cannot be edited")
+    if event.get("status") not in ("open", "closed"):
+        raise HTTPException(400, "Market must be open or closed before eliminating an outcome")
+
+    outcomes = db.table("market_outcomes").select("*").eq("event_id", event_id).order("sort_order").execute().data or []
+    if len(outcomes) <= 2:
+        raise HTTPException(400, "Outcome elimination is only for multi-outcome markets")
+    outcome = next((item for item in outcomes if item["id"] == outcome_id), None)
+    if not outcome:
+        raise HTTPException(400, "Outcome not found")
+    if outcome_is_eliminated(outcome):
+        raise HTTPException(400, f"{outcome.get('title') or 'This outcome'} is already eliminated")
+
+    active = active_outcomes(outcomes)
+    if len(active) <= 2:
+        raise HTTPException(400, "Only two outcomes remain. Resolve the market instead.")
+
+    eliminated_by_clean = (eliminated_by or "manual").strip()[:80] or "manual"
+    note = (notes or "").strip()[:1200] or f"{outcome['title']} eliminated from contention."
+    eliminated_at = now_iso()
+
+    try:
+        db.table("market_outcomes").update({
+            "status": "eliminated",
+            "eliminated_at": eliminated_at,
+            "eliminated_by": eliminated_by_clean,
+            "elimination_notes": note,
+            "price": 0,
+            "quantity": -1_000_000_000,
+        }).eq("id", outcome_id).eq("event_id", event_id).execute()
+        attempts = event.get("verification_attempts") or []
+        if not isinstance(attempts, list):
+            attempts = []
+        attempts.append({
+            "type": "elimination",
+            "outcomeId": outcome_id,
+            "outcomeTitle": outcome.get("title"),
+            "by": eliminated_by_clean,
+            "notes": note,
+            "at": eliminated_at,
+        })
+        db.table("market_events").update({
+            "verification_status": "in_progress",
+            "verification_attempts": attempts,
+        }).eq("id", event_id).execute()
+        db.rpc("probable_reprice_event", {"p_event_id": event_id}).execute()
+    except Exception as exc:
+        raise HTTPException(400, rpc_error_message(exc)) from exc
+
+    return {
+        "eventId": event_id,
+        "outcomeId": outcome_id,
+        "outcomeTitle": outcome["title"],
+        "eliminatedBy": eliminated_by_clean,
+        "eliminationNotes": note,
+        "eliminatedAt": eliminated_at,
+    }
+
+
 # ── Lifespan ───────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -2287,7 +2392,15 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
         db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
         raise HTTPException(400, "Market is closed for trading")
 
-    complement = [item for item in outcomes if item["id"] != excluded_outcome_id]
+    target = next((item for item in outcomes if item["id"] == excluded_outcome_id), None)
+    if not target:
+        raise HTTPException(400, "Outcome not found")
+    if outcome_is_eliminated(target):
+        raise HTTPException(400, f"{target.get('title') or 'This outcome'} has been eliminated")
+    active = active_outcomes(outcomes)
+    if len(active) < 2:
+        raise HTTPException(400, "NO basket trades require at least two active outcomes")
+    complement = [item for item in active if item["id"] != excluded_outcome_id]
     if not complement:
         raise HTTPException(400, "No complement outcomes available")
 
@@ -2316,7 +2429,7 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
     if payload.action == "buy":
         if amount > balance:
             raise HTTPException(400, f"{participant} only has ${round(balance, 0)}")
-        shares = lmsr_complement_buy_shares(outcomes, b, excluded_outcome_id, amount)
+        shares = lmsr_complement_buy_shares(active, b, excluded_outcome_id, amount)
         if shares <= 0:
             raise HTTPException(400, "Trade amount is too small")
         cash_delta = -amount
@@ -2332,10 +2445,10 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
         )
         positions = {row["outcome_id"]: float(row.get("shares") or 0) for row in position_rows}
         max_shares = min([positions.get(item["id"], 0.0) for item in complement] or [0.0])
-        max_cash = lmsr_complement_sell_cash_for_shares(outcomes, b, excluded_outcome_id, max_shares)
+        max_cash = lmsr_complement_sell_cash_for_shares(active, b, excluded_outcome_id, max_shares)
         if amount > max_cash + 0.0001:
             raise HTTPException(400, f"{participant} can cash out up to ${round(max_cash, 2)} on this NO basket")
-        shares = lmsr_complement_sell_shares_for_cash(outcomes, b, excluded_outcome_id, amount, max_shares)
+        shares = lmsr_complement_sell_shares_for_cash(active, b, excluded_outcome_id, amount, max_shares)
         if shares <= 0 or shares > max_shares + 0.0001:
             raise HTTPException(400, f"{participant} does not have enough NO shares to sell")
         cash_delta = amount
@@ -2890,6 +3003,7 @@ def place_trade(market_id: str, payload: TradeCreate) -> dict:
     db = get_db()
     event, route_outcome = require_event_or_outcome(market_id)
     outcomes = db.table("market_outcomes").select("*").eq("event_id", event["id"]).order("sort_order").execute().data or []
+    active = active_outcomes(outcomes)
 
     if payload.action == "buy":
         b = float(event.get("liquidity_b") or DEFAULT_FAKE_BALANCE)
@@ -2904,11 +3018,16 @@ def place_trade(market_id: str, payload: TradeCreate) -> dict:
     if not payload.outcomeId:
         raise HTTPException(400, "Choose an outcome to trade")
     outcome_id = payload.outcomeId
-    if not any(outcome["id"] == outcome_id for outcome in outcomes):
+    selected_outcome = next((outcome for outcome in outcomes if outcome["id"] == outcome_id), None)
+    if not selected_outcome:
         raise HTTPException(400, "Outcome does not belong to this market")
+    if outcome_is_eliminated(selected_outcome):
+        raise HTTPException(400, f"{selected_outcome.get('title') or 'This outcome'} has been eliminated")
+    if len(active) < 2:
+        raise HTTPException(400, "Market does not have enough active outcomes to trade")
 
     try:
-        if len(outcomes) > 2 and payload.side == "no":
+        if len(outcomes) > 2 and len(active) > 1 and payload.side == "no":
             trade_result_data = place_complement_event_trade(db, event, outcomes, outcome_id, payload)
         else:
             trade_result = db.rpc("place_event_trade", {
@@ -2966,6 +3085,8 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
             outcome = next((item for item in outcomes if item["title"].strip().lower() == wanted), None)
         if not outcome:
             raise HTTPException(400, "Resolution outcome not found")
+        if outcome_is_eliminated(outcome):
+            raise HTTPException(400, "Cannot resolve to an eliminated outcome")
 
         if not note:
             note = f"Manually resolved to {outcome['title']}."
@@ -3017,6 +3138,20 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
     _credit_winners(db, market["group_id"], market, trades_res.data)
 
     return groups_response(settlement=settlement)
+
+
+@app.post("/api/markets/{market_id}/outcomes/{outcome_id}/eliminate")
+def eliminate_market_outcome(market_id: str, outcome_id: str, payload: EliminateOutcome) -> dict:
+    db = get_db()
+    event, _route_outcome = require_event_or_outcome(market_id)
+    elimination = eliminate_event_outcome(
+        db,
+        event,
+        outcome_id,
+        eliminated_by=payload.eliminatedBy or "manual",
+        notes=payload.reasoning,
+    )
+    return groups_response(elimination=elimination)
 
 
 # ── AI Oracle ──────────────────────────────────────────────────────────

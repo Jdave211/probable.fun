@@ -1,202 +1,14 @@
--- Probable — Supabase schema
--- Run this in the Supabase SQL editor before starting the backend.
+-- Outcome elimination for multi-outcome markets.
+-- Lets admins mark one outcome impossible without resolving the whole event.
 
--- Required for gen_random_uuid() on the group_members table.
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
--- Groups
-CREATE TABLE IF NOT EXISTS groups (
-  id          text        PRIMARY KEY,
-  name        text        NOT NULL,
-  emoji       text        NOT NULL DEFAULT '📣',
-  mode        text        NOT NULL DEFAULT 'fake',
-  created_at  timestamptz NOT NULL DEFAULT now()
-);
-
--- Members of each group (+ their fake-money balance)
-CREATE TABLE IF NOT EXISTS group_members (
-  id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  group_id    text        NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  name        text        NOT NULL,
-  balance     numeric     NOT NULL DEFAULT 100000.0,
-  joined_at   timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (group_id, name)
-);
-
--- Share links for groups. One active invite is expected per group; regenerating
--- an invite revokes older active rows.
-CREATE TABLE IF NOT EXISTS group_invites (
-  token      text        PRIMARY KEY,
-  group_id   text        NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  created_by text,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  revoked_at timestamptz
-);
-
--- Prediction markets
-CREATE TABLE IF NOT EXISTS markets (
-  id                      text        PRIMARY KEY,
-  group_id                text        NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  question                text        NOT NULL,
-  category                text        NOT NULL DEFAULT 'General',
-  status                  text        NOT NULL DEFAULT 'open',
-  mode                    text        NOT NULL DEFAULT 'fake',
-  oracle_type             text        NOT NULL DEFAULT 'ai',
-  probability             numeric     NOT NULL DEFAULT 0.5,
-  pool_yes                numeric     NOT NULL DEFAULT 2500.0,
-  pool_no                 numeric     NOT NULL DEFAULT 2500.0,
-  k                       numeric     NOT NULL DEFAULT 6250000.0,
-  initial_liquidity       numeric     NOT NULL DEFAULT 5000.0,
-  total_bet               numeric     NOT NULL DEFAULT 0.0,
-  yes_shares_outstanding  numeric     NOT NULL DEFAULT 0.0,
-  no_shares_outstanding   numeric     NOT NULL DEFAULT 0.0,
-  closes_at               timestamptz NOT NULL,
-  created_at              timestamptz NOT NULL DEFAULT now(),
-  outcome                 text,
-  resolved_at             timestamptz,
-  oracle_proposal         jsonb
-);
-
--- Trades
-CREATE TABLE IF NOT EXISTS trades (
-  id          text        PRIMARY KEY,
-  market_id   text        NOT NULL REFERENCES markets(id) ON DELETE CASCADE,
-  participant text        NOT NULL,
-  side        text        NOT NULL,   -- 'yes' | 'no'
-  amount      numeric     NOT NULL,
-  shares      numeric     NOT NULL,
-  prob_before numeric,
-  prob_after  numeric,
-  created_at  timestamptz NOT NULL DEFAULT now()
-);
-
--- Event-level market engine. New trades should use these tables; legacy
--- markets/trades remain for best-effort migration and compatibility only.
-CREATE TABLE IF NOT EXISTS market_events (
-  id              text        PRIMARY KEY,
-  group_id        text        NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-  title           text        NOT NULL,
-  description     text        NOT NULL DEFAULT '',
-  status          text        NOT NULL DEFAULT 'open',
-  mode            text        NOT NULL DEFAULT 'fake',
-  oracle_type     text        NOT NULL DEFAULT 'ai',
-  liquidity_b     numeric     NOT NULL DEFAULT 20000.0,
-  total_volume    numeric     NOT NULL DEFAULT 0.0,
-  closes_at       timestamptz NOT NULL,
-  created_at      timestamptz NOT NULL DEFAULT now(),
-  outcome_id      text,
-  resolved_at     timestamptz,
-  oracle_proposal jsonb,
-  image_url       text,
-  created_by      text,
-  legacy_key      text,
-  resolution_source text,
-  edge_cases text,
-  verification_status text NOT NULL DEFAULT 'not_started',
-  verification_attempts jsonb NOT NULL DEFAULT '[]',
-  resolved_by text,
-  resolution_notes text
-);
-
-CREATE TABLE IF NOT EXISTS market_outcomes (
-  id               text        PRIMARY KEY,
-  event_id         text        NOT NULL REFERENCES market_events(id) ON DELETE CASCADE,
-  title            text        NOT NULL,
-  sort_order       integer     NOT NULL DEFAULT 0,
-  quantity         numeric     NOT NULL DEFAULT 0.0,
-  price            numeric     NOT NULL DEFAULT 0.0,
-  status           text        NOT NULL DEFAULT 'active',
-  eliminated_at    timestamptz,
-  eliminated_by    text,
-  elimination_notes text,
-  legacy_market_id text,
-  created_at       timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (event_id, title)
-);
-
-CREATE TABLE IF NOT EXISTS event_positions (
-  id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  event_id    text        NOT NULL REFERENCES market_events(id) ON DELETE CASCADE,
-  outcome_id  text        NOT NULL REFERENCES market_outcomes(id) ON DELETE CASCADE,
-  participant text        NOT NULL,
-  shares      numeric     NOT NULL DEFAULT 0.0,
-  updated_at  timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (event_id, outcome_id, participant)
-);
-
-CREATE TABLE IF NOT EXISTS event_trades (
-  id            text        PRIMARY KEY,
-  event_id      text        NOT NULL REFERENCES market_events(id) ON DELETE CASCADE,
-  outcome_id    text        NOT NULL REFERENCES market_outcomes(id) ON DELETE CASCADE,
-  participant   text        NOT NULL,
-  action        text        NOT NULL,
-  cash_amount   numeric     NOT NULL,
-  shares_delta  numeric     NOT NULL,
-  avg_price     numeric     NOT NULL,
-  prices_before jsonb       NOT NULL,
-  prices_after  jsonb       NOT NULL,
-  display_group_id text,
-  display_outcome_id text,
-  display_side text,
-  display_shares numeric,
-  created_at    timestamptz NOT NULL DEFAULT now()
-);
-
-ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_group_id text;
-ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_outcome_id text;
-ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_side text;
-ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_shares numeric;
-
--- Indexes for common lookups
-CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id);
-CREATE INDEX IF NOT EXISTS idx_group_invites_group ON group_invites(group_id);
-CREATE INDEX IF NOT EXISTS idx_group_invites_active ON group_invites(group_id) WHERE revoked_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_markets_group       ON markets(group_id);
-CREATE INDEX IF NOT EXISTS idx_trades_market       ON trades(market_id);
-CREATE INDEX IF NOT EXISTS idx_market_events_group ON market_events(group_id);
-CREATE INDEX IF NOT EXISTS idx_market_events_open ON market_events(group_id, closes_at) WHERE status = 'open';
-CREATE INDEX IF NOT EXISTS idx_market_outcomes_event ON market_outcomes(event_id);
-CREATE INDEX IF NOT EXISTS idx_market_outcomes_legacy ON market_outcomes(legacy_market_id);
-CREATE INDEX IF NOT EXISTS idx_event_positions_event_participant ON event_positions(event_id, participant);
-CREATE INDEX IF NOT EXISTS idx_event_trades_event ON event_trades(event_id, created_at);
-
-ALTER TABLE market_events ADD COLUMN IF NOT EXISTS image_url text;
-ALTER TABLE market_events ADD COLUMN IF NOT EXISTS created_by text;
-ALTER TABLE market_events ADD COLUMN IF NOT EXISTS slug text;
-ALTER TABLE market_events ADD COLUMN IF NOT EXISTS resolution_source text;
-ALTER TABLE market_events ADD COLUMN IF NOT EXISTS edge_cases text;
-ALTER TABLE market_events ADD COLUMN IF NOT EXISTS verification_status text NOT NULL DEFAULT 'not_started';
-ALTER TABLE market_events ADD COLUMN IF NOT EXISTS verification_attempts jsonb NOT NULL DEFAULT '[]';
-ALTER TABLE market_events ADD COLUMN IF NOT EXISTS resolved_by text;
-ALTER TABLE market_events ADD COLUMN IF NOT EXISTS resolution_notes text;
 ALTER TABLE market_outcomes ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
 ALTER TABLE market_outcomes ADD COLUMN IF NOT EXISTS eliminated_at timestamptz;
 ALTER TABLE market_outcomes ADD COLUMN IF NOT EXISTS eliminated_by text;
 ALTER TABLE market_outcomes ADD COLUMN IF NOT EXISTS elimination_notes text;
-ALTER TABLE market_events ALTER COLUMN liquidity_b SET DEFAULT 20000.0;
-ALTER TABLE group_members ALTER COLUMN balance SET DEFAULT 100000.0;
 
--- Disable RLS for development (no auth yet)
-ALTER TABLE groups        DISABLE ROW LEVEL SECURITY;
-ALTER TABLE group_members DISABLE ROW LEVEL SECURITY;
-ALTER TABLE group_invites DISABLE ROW LEVEL SECURITY;
-ALTER TABLE markets       DISABLE ROW LEVEL SECURITY;
-ALTER TABLE trades        DISABLE ROW LEVEL SECURITY;
-ALTER TABLE market_events DISABLE ROW LEVEL SECURITY;
-ALTER TABLE market_outcomes DISABLE ROW LEVEL SECURITY;
-ALTER TABLE event_positions DISABLE ROW LEVEL SECURITY;
-ALTER TABLE event_trades DISABLE ROW LEVEL SECURITY;
-
--- Grant full access to the anon/publishable key role
-GRANT ALL ON groups        TO anon;
-GRANT ALL ON group_members TO anon;
-GRANT ALL ON group_invites TO anon;
-GRANT ALL ON markets       TO anon;
-GRANT ALL ON trades        TO anon;
-GRANT ALL ON market_events TO anon;
-GRANT ALL ON market_outcomes TO anon;
-GRANT ALL ON event_positions TO anon;
-GRANT ALL ON event_trades TO anon;
+CREATE INDEX IF NOT EXISTS idx_market_outcomes_event_active
+  ON market_outcomes(event_id, sort_order)
+  WHERE COALESCE(status, 'active') <> 'eliminated';
 
 CREATE OR REPLACE FUNCTION probable_reprice_event(p_event_id text)
 RETURNS void
@@ -498,22 +310,16 @@ BEGIN
     FROM winning_positions wp
     WHERE gm.group_id = v_event.group_id
       AND gm.name = wp.participant
-    RETURNING wp.participant, wp.shares, gm.balance
+    RETURNING gm.name AS participant, wp.shares, gm.balance AS balance_after
   )
   SELECT
-    COALESCE(
-      jsonb_agg(
-        jsonb_build_object(
-          'participant', participant,
-          'shares', shares,
-          'payout', ROUND(shares, 2),
-          'balanceAfter', balance
-        )
-        ORDER BY participant
-      ),
-      '[]'::jsonb
-    ),
-    COALESCE(SUM(shares), 0)
+    COALESCE(jsonb_agg(jsonb_build_object(
+      'participant', participant,
+      'shares', shares,
+      'payout', ROUND(shares, 2),
+      'balanceAfter', balance_after
+    ) ORDER BY participant), '[]'::jsonb),
+    COALESCE(SUM(ROUND(shares, 2)), 0)
   INTO v_payouts, v_total_paid
   FROM credited;
 
@@ -521,10 +327,10 @@ BEGIN
   SET status = 'resolved',
       outcome_id = p_outcome_id,
       resolved_at = v_resolved_at,
-      resolved_by = v_resolved_by,
+      oracle_proposal = COALESCE(p_oracle_proposal, oracle_proposal),
       verification_status = 'resolved',
-      resolution_notes = LEFT(v_notes, 1200),
-      oracle_proposal = COALESCE(p_oracle_proposal, oracle_proposal)
+      resolved_by = v_resolved_by,
+      resolution_notes = v_notes
   WHERE id = p_event_id;
 
   RETURN jsonb_build_object(
@@ -532,12 +338,10 @@ BEGIN
     'outcomeId', p_outcome_id,
     'outcomeTitle', v_outcome.title,
     'resolvedBy', v_resolved_by,
-    'resolutionNotes', LEFT(v_notes, 1200),
+    'resolutionNotes', v_notes,
     'resolvedAt', v_resolved_at,
     'payouts', v_payouts,
     'totalPaid', ROUND(v_total_paid, 2)
   );
 END;
 $$;
-
-GRANT EXECUTE ON FUNCTION resolve_event_market(text, text, text, text, jsonb) TO anon;

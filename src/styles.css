@@ -1060,6 +1060,63 @@ button { color: inherit; }
   cursor: wait;
   opacity: 0.7;
 }
+.admin-eliminate-block {
+  display: grid;
+  gap: 9px;
+  border-top: 1px solid rgba(157, 171, 181, 0.14);
+  padding-top: 10px;
+}
+.admin-eliminate-block > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+.admin-eliminate-block span {
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+.admin-eliminate-block em {
+  color: var(--text-3);
+  font-style: normal;
+  font-size: 0.72rem;
+}
+.admin-eliminate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  max-height: 176px;
+  overflow: auto;
+  padding-right: 2px;
+}
+.admin-eliminate-btn {
+  min-height: 35px;
+  border: 1px solid rgba(255, 92, 108, 0.22);
+  border-radius: 10px;
+  background: rgba(255, 92, 108, 0.08);
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 850;
+  overflow: hidden;
+  padding: 0 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-eliminate-btn:hover {
+  border-color: rgba(255, 92, 108, 0.42);
+  color: var(--text);
+}
+.admin-eliminate-btn:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+.admin-eliminate-btn.is-eliminated {
+  background: rgba(157, 171, 181, 0.07);
+  border-color: rgba(157, 171, 181, 0.12);
+  color: var(--text-3);
+  cursor: default;
+  text-decoration: line-through;
+}
 .admin-empty {
   display: grid;
   gap: 8px;
@@ -1549,6 +1606,12 @@ button { color: inherit; }
 }
 .focused-outcome-row.active {
   background: linear-gradient(90deg, rgba(45, 156, 255, 0.08), transparent 48%);
+}
+.focused-outcome-row.is-eliminated {
+  opacity: 0.58;
+}
+.focused-outcome-row.is-eliminated .focused-outcome-name span {
+  text-decoration: line-through;
 }
 .focused-outcome-name {
   display: flex;
@@ -2266,6 +2329,12 @@ button { color: inherit; }
 }
 .event-outcome-row.is-loser {
   opacity: 0.72;
+}
+.event-outcome-row.is-eliminated {
+  opacity: 0.58;
+}
+.event-outcome-row.is-eliminated .event-outcome-name {
+  text-decoration: line-through;
 }
 .event-outcome-main {
   min-width: 0;

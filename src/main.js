@@ -1592,6 +1592,15 @@ async function onGlobalClick(e) {
     return;
   }
 
+  const eliminateBtn = e.target.closest("[data-eliminate-outcome]");
+  if (eliminateBtn) {
+    const container = eliminateBtn.closest("[data-market-id]");
+    const market = findMarket(container?.dataset.marketId);
+    const reasoning = container?.querySelector("[data-resolution-reasoning]")?.value?.trim() || "";
+    if (market) onEliminateOutcome(market, eliminateBtn.dataset.eliminateOutcome, { reasoning, button: eliminateBtn });
+    return;
+  }
+
   const oracleBtn = e.target.closest("[data-oracle-trigger]");
   if (oracleBtn) {
     const market = findMarket(oracleBtn.closest("[data-market-id]")?.dataset.marketId);
@@ -3487,6 +3496,34 @@ async function onResolve(market, outcome, options = {}) {
   }
 }
 
+async function onEliminateOutcome(market, outcomeId, options = {}) {
+  if (state.pendingUi.resolveMarketId === market.id) return;
+  const reasoning = String(options.reasoning || "").trim();
+  const button = options.button || null;
+  state.pendingUi.resolveMarketId = market.id;
+  setButtonPending(button, true, "Eliminating");
+  try {
+    const data = await api(`/api/markets/${market.id}/outcomes/${outcomeId}/eliminate`, {
+      method: "POST",
+      body: JSON.stringify({
+        reasoning: reasoning || null,
+        eliminatedBy: authDisplayName() || state.activeMember || "manual",
+      }),
+    });
+    setGroups(data.groups);
+    delete state.oracleErrors[market.id];
+    normalizeSelection();
+    render();
+    const title = data.elimination?.outcomeTitle || resolutionOutcomeLabel(market, outcomeId);
+    toast(`${title} eliminated. Remaining outcomes repriced.`);
+  } catch (err) {
+    toast(err.message || "Eliminate failed.");
+  } finally {
+    if (state.pendingUi.resolveMarketId === market.id) state.pendingUi.resolveMarketId = null;
+    setButtonPending(button, false);
+  }
+}
+
 async function onOracleTrigger(market) {
   toast("Asking AI oracle...");
   try {
@@ -3969,6 +4006,7 @@ function focusedOutcomeRow(market, activeMarketId, index, event) {
   const option = marketOptionTitle(market);
   const tradeTarget = tradeTargetForOutcome(market, event);
   const active = tradeTarget.marketId === activeMarketId;
+  const eliminated = marketOutcomeEliminated(market);
   const binary = isBinaryEvent(event);
   const yesButtonMarket = binary ? binaryMarketForSide(event, "yes") : market;
   const noButtonMarket = binary ? binaryMarketForSide(event, "no") : market;
@@ -3977,13 +4015,13 @@ function focusedOutcomeRow(market, activeMarketId, index, event) {
     ? Math.round(displayedEventProbability(noButtonMarket || market, event))
     : 100 - yesButtonPct;
   return `
-    <div class="focused-outcome-row ${active ? "active" : ""}" data-market-id="${tradeTarget.marketId}">
+    <div class="focused-outcome-row ${active ? "active" : ""} ${eliminated ? "is-eliminated" : ""}" data-market-id="${tradeTarget.marketId}">
       <div class="focused-outcome-name">
         <i style="--series-color:${chartColorForMarket(market, index, event)}"></i>
         <span>${outcomeTitleHtml(option)}</span>
       </div>
       <strong>${yesPct}%</strong>
-      ${market.status === "open" ? `
+      ${eliminated ? `<span class="event-result-pill lost">Eliminated</span>` : market.status === "open" ? `
         <div class="event-trade-actions">
           <button class="event-side yes" type="button" data-buy="yes" aria-label="Buy YES on ${option} at ${yesButtonPct} cents"><span>Yes</span><em>${yesButtonPct}¢</em></button>
           <button class="event-side no" type="button" data-buy="no" aria-label="Buy NO on ${option} at ${noButtonPct} cents"><span>No</span><em>${noButtonPct}¢</em></button>
@@ -4301,7 +4339,10 @@ function marketEvents(markets) {
   });
   return [...map.values()].map(event => ({
     ...event,
-    markets: event.markets.sort((a, b) => Number(b.probability ?? 0) - Number(a.probability ?? 0)),
+    markets: event.markets.sort((a, b) => {
+      const eliminatedDelta = Number(marketOutcomeEliminated(a)) - Number(marketOutcomeEliminated(b));
+      return eliminatedDelta || Number(b.probability ?? 0) - Number(a.probability ?? 0);
+    }),
   }));
 }
 
@@ -4428,6 +4469,7 @@ function eventOutcomeRow(market, event) {
   const yesPct = Math.round(displayedEventProbability(market, event));
   const option = marketOptionTitle(market);
   const tradeTarget = tradeTargetForOutcome(market, event);
+  const eliminated = marketOutcomeEliminated(market);
   const binary = isBinaryEvent(event);
   const yesButtonMarket = binary ? binaryMarketForSide(event, "yes") : market;
   const noButtonMarket = binary ? binaryMarketForSide(event, "no") : market;
@@ -4442,12 +4484,12 @@ function eventOutcomeRow(market, event) {
     || resolvedOutcome.label.toLowerCase() === option.toLowerCase()
   );
   return `
-    <div class="event-outcome-row ${market.status === "resolved" ? (rowIsWinner ? "is-winner" : "is-loser") : ""}" data-market-id="${tradeTarget.marketId}">
+    <div class="event-outcome-row ${market.status === "resolved" ? (rowIsWinner ? "is-winner" : "is-loser") : ""} ${eliminated ? "is-eliminated" : ""}" data-market-id="${tradeTarget.marketId}">
       <div class="event-outcome-main">
         <span class="event-outcome-name">${outcomeTitleHtml(option)}</span>
         <strong>${yesPct}%</strong>
       </div>
-      ${market.status === "open" ? `
+      ${eliminated ? `<span class="event-result-pill lost">Eliminated</span>` : market.status === "open" ? `
         <div class="event-trade-actions">
           <button class="event-side yes" type="button" data-buy="yes" aria-label="Buy YES on ${option} at ${yesButtonPct} cents"><span>Yes</span><em>${yesButtonPct}¢</em></button>
           <button class="event-side no" type="button" data-buy="no" aria-label="Buy NO on ${option} at ${noButtonPct} cents"><span>No</span><em>${noButtonPct}¢</em></button>
@@ -4712,6 +4754,20 @@ function resolutionOutcomes(market) {
     { id: "yes", title: "Yes" },
     { id: "no", title: "No" },
   ];
+}
+
+function outcomeEliminated(outcome) {
+  return String(outcome?.status || outcome?.outcomeStatus || "").trim().toLowerCase() === "eliminated";
+}
+
+function activeResolutionOutcomes(market) {
+  return resolutionOutcomes(market).filter(outcome => !outcomeEliminated(outcome));
+}
+
+function marketOutcomeEliminated(market) {
+  if (outcomeEliminated(market)) return true;
+  const outcomeId = market?.outcomeId || market?.id;
+  return outcomeEliminated((market?.outcomes || []).find(outcome => outcome.id === outcomeId));
 }
 
 function resolutionOutcomeLabel(market, outcome) {
@@ -5346,6 +5402,9 @@ function tradeContextFromPanel(panel, form, market) {
   if (!outcomeBelongsToMarket(market, outcomeId)) {
     return { valid: false, error: "Selected outcome does not belong to this market." };
   }
+  if (!outcomeActiveInMarket(market, outcomeId)) {
+    return { valid: false, error: "That outcome has been eliminated." };
+  }
   if (action === "sell" && !tradeSellState(market, side).canSellSelected) {
     return { valid: false, error: "You do not own this side yet." };
   }
@@ -5371,6 +5430,13 @@ function outcomeBelongsToMarket(market, outcomeId) {
   const outcomes = market.outcomes || [];
   if (!outcomes.length) return outcomeId === (market.outcomeId || market.id);
   return outcomes.some(outcome => outcome.id === outcomeId);
+}
+
+function outcomeActiveInMarket(market, outcomeId) {
+  const outcomes = market.outcomes || [];
+  if (!outcomes.length) return !marketOutcomeEliminated(market);
+  const outcome = outcomes.find(item => item.id === outcomeId);
+  return Boolean(outcome) && !outcomeEliminated(outcome);
 }
 
 function syncTradePanelDataset(panel, market, side, mode) {
@@ -5399,11 +5465,18 @@ function isElementVisible(element) {
 }
 
 function isComplementNoTrade(market, side = state.trade.side || "yes") {
-  return side === "no" && (market.outcomes?.length || 0) > 2;
+  return side === "no" && (market.outcomes?.length || 0) > 2 && activeOutcomesForMarket(market).length > 1;
+}
+
+function activeOutcomesForMarket(market) {
+  const outcomes = market.outcomes?.length
+    ? market.outcomes
+    : [{ id: market.outcomeId || market.id, price: market.probability, quantity: 0 }];
+  return outcomes.filter(outcome => !outcomeEliminated(outcome));
 }
 
 function complementOutcomes(market, outcomeId = tradeOutcomeId(market, "yes")) {
-  return (market.outcomes || []).filter(outcome => outcome.id !== outcomeId);
+  return activeOutcomesForMarket(market).filter(outcome => outcome.id !== outcomeId);
 }
 
 function complementShareState(market, outcomeId = tradeOutcomeId(market, "yes")) {
@@ -5430,9 +5503,10 @@ function binaryOutcomeForSide(market, side) {
 }
 
 function lmsrPreview(market, outcomeId, mode, amount) {
-  const outcomes = market.outcomes?.length ? market.outcomes : [{ id: market.outcomeId || market.id, price: market.probability, quantity: 0 }];
+  const outcomes = activeOutcomesForMarket(market);
   const b = Number(market.initialLiquidity || market.liquidity || DEFAULT_MARKET_LIQUIDITY);
   const target = outcomes.find(item => item.id === outcomeId) || outcomes[0];
+  if (!target) return { shares: 0, maxCash: 0, held: 0, oversell: false };
   const sumExp = outcomes.reduce((sum, item) => sum + Math.exp(Number(item.quantity || 0) / b), 0);
   const targetExp = Math.exp(Number(target.quantity || 0) / b);
   if (mode === "sell") {
@@ -5452,7 +5526,7 @@ function lmsrPreview(market, outcomeId, mode, amount) {
 }
 
 function lmsrStateForMarket(market) {
-  const outcomes = market.outcomes?.length ? market.outcomes : [{ id: market.outcomeId || market.id, price: market.probability, quantity: 0 }];
+  const outcomes = activeOutcomesForMarket(market);
   const b = Number(market.initialLiquidity || market.liquidity || DEFAULT_MARKET_LIQUIDITY);
   const values = outcomes.map(item => ({
     ...item,
@@ -6385,7 +6459,9 @@ function adminGroupHtml({ group, events }) {
 function adminEventCard(group, event) {
   const market = event.markets[0];
   const outcomes = resolutionOutcomes(market);
-  const showAllCorrect = outcomes.length > 2;
+  const activeOutcomes = activeResolutionOutcomes(market);
+  const multiOutcome = outcomes.length > 2;
+  const showAllCorrect = activeOutcomes.length > 2;
   const source = market.resolutionSource || event.resolutionSource || "";
   const edgeCases = market.edgeCases || event.edgeCases || "";
   const rules = market.description || event.description || "No resolution rules saved.";
@@ -6414,12 +6490,28 @@ function adminEventCard(group, event) {
           <textarea data-resolution-reasoning maxlength="1200" placeholder="Optional: FotMob shows Wirtz finished with 2 G/A, so No resolves."></textarea>
         </label>
         <div class="admin-outcome-grid">
-          ${outcomes.map((outcome, index) => {
+          ${activeOutcomes.map((outcome, index) => {
             const cls = resolutionOutcomeClass(market, outcome.id, index);
             return `<button class="admin-outcome-btn ${cls}" type="button" data-resolve="${esc(outcome.id)}" ${pending ? "disabled" : ""}>${esc(outcome.title)}</button>`;
           }).join("")}
           ${showAllCorrect ? `<button class="admin-outcome-btn draw" type="button" data-resolve="${ALL_OUTCOMES_RESOLUTION}" ${pending ? "disabled" : ""}>Draw · all correct</button>` : ""}
         </div>
+        ${multiOutcome ? `
+          <div class="admin-eliminate-block">
+            <div>
+              <span>Remove impossible outcome</span>
+              <em>Keeps the market open and reprices the remaining active outcomes.</em>
+            </div>
+            <div class="admin-eliminate-grid">
+              ${outcomes.map(outcome => {
+                const eliminated = outcomeEliminated(outcome);
+                return `
+                  <button class="admin-eliminate-btn ${eliminated ? "is-eliminated" : ""}" type="button" data-eliminate-outcome="${esc(outcome.id)}" ${pending || eliminated ? "disabled" : ""}>
+                    ${esc(outcome.title)}${eliminated ? " · eliminated" : ""}
+                  </button>`;
+              }).join("")}
+            </div>
+          </div>` : ""}
       </div>
     </article>`;
 }
