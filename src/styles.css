@@ -7312,3 +7312,65 @@ html {
     min-height: 210px;
   }
 }
+
+/* Bracket grid final layout overrides. Keep the table picker narrow, but let
+   the grid view own a real centered canvas instead of escaping a 760px parent. */
+.bracket-page {
+  width: min(1380px, calc(100vw - 32px));
+  margin: 0 auto;
+}
+.bracket-toolbar,
+.bracket-view-toggle,
+.bracket-progress-bar,
+.bracket-stage-nav,
+.bracket-board {
+  width: min(860px, 100%);
+}
+.bracket-view-toggle {
+  justify-content: center;
+  margin: 18px auto 18px;
+}
+.bracket-wide-preview {
+  width: 100%;
+  margin: 0 auto;
+  transform: none;
+  border-top: 1px solid rgba(157, 171, 181, 0.12);
+  padding-top: 22px;
+}
+.bracket-wide-head {
+  width: min(1260px, 100%);
+  margin: 0 auto 14px;
+  padding: 0 4px;
+}
+.bracket-wide-scroll {
+  width: min(1260px, 100%);
+  margin: 0 auto;
+}
+.bracket-wide-grid {
+  min-width: 1220px;
+}
+
+@media (max-width: 900px) {
+  .bracket-page {
+    width: calc(100vw - 20px);
+  }
+  .bracket-toolbar,
+  .bracket-view-toggle,
+  .bracket-progress-bar,
+  .bracket-stage-nav,
+  .bracket-board,
+  .bracket-wide-head,
+  .bracket-wide-scroll {
+    width: 100%;
+  }
+  .bracket-view-toggle {
+    justify-content: stretch;
+  }
+  .bracket-view-toggle button {
+    flex: 1;
+  }
+  .bracket-wide-preview {
+    margin: 0 auto;
+    transform: none;
+  }
+}
