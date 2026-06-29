@@ -389,7 +389,7 @@ const BRACKET_CHALLENGE = {
     { id: "m73", matchNo: 73, teams: ["South Africa", "Canada"], winner: "Canada", completed: true },
     { id: "m74", matchNo: 74, teams: ["Germany", "Paraguay"] },
     { id: "m75", matchNo: 75, teams: ["Netherlands", "Morocco"] },
-    { id: "m76", matchNo: 76, teams: ["Brazil", "Japan"] },
+    { id: "m76", matchNo: 76, teams: ["Brazil", "Japan"], winner: "Brazil", completed: true },
     { id: "m77", matchNo: 77, teams: ["France", "Sweden"] },
     { id: "m78", matchNo: 78, teams: ["Ivory Coast", "Norway"] },
     { id: "m79", matchNo: 79, teams: ["Mexico", "Ecuador"] },
@@ -1301,6 +1301,12 @@ async function onGlobalClick(e) {
 
   if (e.target.closest("[data-submit-bracket]")) {
     void submitBracketEntry();
+    return;
+  }
+
+  if (e.target.closest("[data-share-bracket]")) {
+    e.preventDefault();
+    void shareBracketLink();
     return;
   }
 
@@ -2894,6 +2900,10 @@ function marketUrl(marketId) {
   return `${shareBaseUrl()}/market/${encodeURIComponent(marketId)}`;
 }
 
+function bracketShareUrl() {
+  return `${shareBaseUrl()}/bracket`;
+}
+
 function shareBaseUrl() {
   const configured = import.meta.env.VITE_PUBLIC_SHARE_BASE_URL;
   if (configured) return configured.replace(/\/$/, "");
@@ -3029,6 +3039,27 @@ async function shareMarketLink(marketId) {
   } catch {
     toast(url);
   }
+}
+
+async function copyBracketLink() {
+  const link = bracketShareUrl();
+  const copied = await writeClipboardText(link);
+  toast(copied ? "Bracket link copied." : link);
+}
+
+async function shareBracketLink() {
+  const url = bracketShareUrl();
+  const title = `${BRACKET_CHALLENGE.title} · ${BRACKET_CHALLENGE.prize} prize`;
+  const text = "Build your World Cup bracket on Probable.";
+  if (navigator.share) {
+    try {
+      await navigator.share({ title, text, url });
+      return;
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+    }
+  }
+  await copyBracketLink();
 }
 
 function openMarketEmbedModal(marketId) {
@@ -6660,6 +6691,124 @@ function bracketSvgHtml(rounds, champion) {
   `;
 }
 
+function bracketMobileSvgHtml(rounds, champion) {
+  const stageX = [12, 194, 274, 336, 382];
+  const widths = [166, 64, 46, 34, 36];
+  const rowH = 38;
+  const cardH = rowH * 2;
+  const gap = 6;
+  const y0 = 40;
+  const lookup = bracketSvgRoundMap(rounds);
+  const mobileRoundIds = [
+    ["m74", "m77", "m73", "m75", "m81", "m82", "m83", "m84", "m76", "m78", "m79", "m80", "m86", "m88", "m85", "m87"],
+    ["m89", "m90", "m93", "m94", "m91", "m92", "m95", "m96"],
+    ["m97", "m98", "m99", "m100"],
+    ["m101", "m102"],
+    ["final"],
+  ];
+  const mobileRounds = mobileRoundIds.map((ids, index) => ({
+    ...rounds[index],
+    matchups: ids.map(id => lookup.get(id)).filter(Boolean),
+  }));
+  const centers = [];
+  const cards = [];
+  const lines = [];
+  const mobileConnector = (fromY, toY, fromX, toX) => {
+    if (!Number.isFinite(fromY) || !Number.isFinite(toY)) return "";
+    const midX = fromX + (toX - fromX) * 0.58;
+    return `
+      <g class="bracket-svg-lines bracket-mobile-row-lines">
+        <path d="M ${fromX} ${fromY} H ${midX} V ${toY} H ${toX}" />
+      </g>
+    `;
+  };
+  const mobileAdvanceCenter = (matchup, y) => {
+    const winner = bracketWinner(matchup.id);
+    const teams = [...(matchup.teams || []), "", ""].slice(0, 2);
+    const winnerIndex = teams.findIndex(team => team && team === winner);
+    return winnerIndex >= 0 ? y + winnerIndex * rowH + rowH / 2 : y + cardH / 2;
+  };
+  const flagOnlyRow = (matchup, team, x, y, width, height, active) => {
+    if (!team) {
+      return `
+        <g class="bracket-svg-team empty bracket-mobile-flag-row">
+          <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" />
+          <text x="${x + width / 2}" y="${y + height / 2 + 4}" text-anchor="middle">·</text>
+        </g>
+      `;
+    }
+    const flagCode = teamFlagCode(team);
+    const flag = flagCode
+      ? `<image href="https://flagcdn.com/${esc(flagCode)}.svg" x="${x + Math.max(4, (width - 24) / 2)}" y="${y + 8}" width="24" height="18" preserveAspectRatio="xMidYMid slice" />`
+      : `<text class="bracket-svg-flag-text" x="${x + width / 2}" y="${y + height / 2 + 4}" text-anchor="middle">${esc(teamFlag(team))}</text>`;
+    const data = BRACKET_LOCKED_WINNERS[matchup.id] ? "" : `data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}"`;
+    return `
+      <g class="bracket-svg-team bracket-mobile-flag-row ${active ? "active" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
+        <title>${esc(team)}</title>
+        <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" />
+        ${flag}
+      </g>
+    `;
+  };
+  const mobileMatch = (matchup, stage, x, y, width) => {
+    if (stage === 0) {
+      return bracketSvgMatch(matchup, x, y, width, { rowH, compact: false });
+    }
+    const winner = bracketWinner(matchup.id);
+    const teams = [...(matchup.teams || []), "", ""].slice(0, 2);
+    if (teams.every(team => !team)) {
+      return `
+        <g class="bracket-svg-match waiting bracket-mobile-flag-match" data-matchup-id="${esc(matchup.id)}">
+          <rect x="${x}" y="${y}" width="${width}" height="${cardH}" rx="10" />
+          <text x="${x + width / 2}" y="${y + cardH / 2 + 4}" text-anchor="middle">·</text>
+        </g>
+      `;
+    }
+    return `
+      <g class="bracket-svg-match ${winner ? "picked" : ""} bracket-mobile-flag-match" data-matchup-id="${esc(matchup.id)}">
+        <rect class="bracket-svg-shell-rect" x="${x}" y="${y}" width="${width}" height="${cardH}" rx="10" />
+        ${teams.map((team, index) => flagOnlyRow(matchup, team, x, y + index * rowH, width, rowH, winner === team)).join("")}
+      </g>
+    `;
+  };
+
+  mobileRounds.forEach((round, stage) => {
+    centers[stage] = [];
+    round.matchups.forEach((matchup, index) => {
+      let y;
+      if (stage === 0) {
+        y = y0 + index * (cardH + gap);
+      } else {
+        const parentA = centers[stage - 1]?.[index * 2];
+        const parentB = centers[stage - 1]?.[index * 2 + 1];
+        if (Number.isFinite(parentA) && Number.isFinite(parentB)) {
+          y = ((parentA + parentB) / 2) - cardH / 2;
+          lines.push(mobileConnector(parentA, y + rowH / 2, stageX[stage - 1] + widths[stage - 1], stageX[stage]));
+          lines.push(mobileConnector(parentB, y + rowH * 1.5, stageX[stage - 1] + widths[stage - 1], stageX[stage]));
+        } else {
+          y = y0 + index * (cardH + gap);
+        }
+      }
+      centers[stage][index] = mobileAdvanceCenter(matchup, y);
+      cards.push(mobileMatch(matchup, stage, stageX[stage], y, widths[stage]));
+    });
+  });
+
+  return `
+    <div class="bracket-mobile-svg-shell">
+      <svg class="bracket-svg bracket-mobile-svg" viewBox="0 0 430 1375" role="img" aria-label="One-sided World Cup bracket path">
+        <text class="bracket-svg-title" x="95" y="24" text-anchor="middle">ROUND OF 32</text>
+        <text class="bracket-svg-title" x="226" y="24" text-anchor="middle">R16</text>
+        <text class="bracket-svg-title" x="297" y="24" text-anchor="middle">QF</text>
+        <text class="bracket-svg-title" x="353" y="24" text-anchor="middle">SF</text>
+        <text class="bracket-svg-title" x="400" y="24" text-anchor="middle">FINAL</text>
+        ${lines.join("")}
+        ${cards.join("")}
+      </svg>
+    </div>
+  `;
+}
+
 function bracketWideStageHtml(stage, side) {
   const readyMatchups = bracketStageReadyMatchups(stage);
   const picked = stage.matchups.filter(matchup => Boolean(bracketWinner(matchup.id))).length;
@@ -6712,37 +6861,13 @@ function bracketMobileStageHtml(stage) {
 }
 
 function bracketMobilePathHtml(rounds, champion) {
-  const leftStages = bracketSideStages(rounds, "left");
   return `
-    <div class="bracket-mobile-path" aria-label="Mobile bracket path">
+    <div class="bracket-mobile-path" aria-label="Mobile one-sided bracket path">
       <div class="bracket-mobile-path-head">
-        <p class="eyebrow">Left path</p>
-        <h3>Round of 32 to final</h3>
-        <span>${champion ? `${teamFlag(champion)} ${esc(champion)}` : "Pick through the path"}</span>
+        <p class="eyebrow">Bracket path</p>
+        <span>${champion ? `${teamFlag(champion)} ${esc(champion)} selected` : "Round of 32 to final"}</span>
       </div>
-      ${leftStages.map(stage => bracketMobileStageHtml(stage)).join("")}
-      <section class="bracket-mobile-stage final-stage">
-        <header>
-          <span>Final</span>
-          <em>${bracketWinner("final") ? "1/1" : "0/1"}</em>
-        </header>
-        <div class="bracket-mobile-list">
-          ${bracketMiniCellHtml(rounds[4].matchups[0], { mobile: true, depth: 4 })}
-          <article class="bracket-mini-match champion">
-            ${champion ? `
-              <div class="bracket-mini-team active champion">
-                ${teamFlagHtml(champion)}
-                <strong>${esc(champion)}</strong>
-              </div>
-            ` : `
-              <div class="bracket-mini-team placeholder champion">
-                <span>🏆</span>
-                <strong>Pick final winner</strong>
-              </div>
-            `}
-          </article>
-        </div>
-      </section>
+      ${bracketMobileSvgHtml(rounds, champion)}
     </div>
   `;
 }
@@ -6771,6 +6896,7 @@ function bracketActionControlsHtml(champion) {
         <span>Champion</span>
         <strong>${champion ? `${teamFlag(champion)} ${esc(champion)}` : "TBD"}</strong>
       </div>
+      <button class="btn btn-ghost btn-sm bracket-share-btn" type="button" data-share-bracket>${shareArrowIconSvg()}<span>Share</span></button>
       <button class="btn btn-ghost btn-sm" type="button" data-reset-bracket>Reset</button>
       <button class="btn btn-primary btn-sm" type="button" data-submit-bracket>${state.bracketSubmitted ? "Update entry" : "Submit bracket"}</button>
     </div>

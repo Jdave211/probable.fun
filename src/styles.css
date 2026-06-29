@@ -8137,7 +8137,7 @@ html {
 .bracket-connector::after {
   content: "";
   position: absolute;
-  background: rgba(78, 126, 70, 0.48);
+  background: rgba(45, 156, 255, 0.48);
 }
 
 .bracket-connector::before {
@@ -8183,13 +8183,13 @@ html {
   width: calc(var(--bracket-side-gap) + 2px);
   right: calc(-1 * var(--bracket-side-gap));
   border-top-width: 2px;
-  border-color: rgba(78, 126, 70, 0.48);
+  border-color: rgba(45, 156, 255, 0.48);
 }
 
 .bracket-wide-right .bracket-mini-match::after {
   left: calc(-1 * var(--bracket-side-gap));
   width: calc(var(--bracket-side-gap) + 2px);
-  border-color: rgba(78, 126, 70, 0.48);
+  border-color: rgba(45, 156, 255, 0.48);
 }
 
 .bracket-mini-match.compact {
@@ -8237,7 +8237,7 @@ html {
 }
 
 .bracket-mini-match.compact .bracket-mini-team + .bracket-mini-team {
-  border-top-color: rgba(78, 126, 70, 0.26);
+  border-top-color: rgba(45, 156, 255, 0.26);
 }
 
 .bracket-mini-match.waiting.compact {
@@ -8267,7 +8267,7 @@ html {
 }
 
 .bracket-mini-match.waiting.has-pending {
-  border-color: rgba(78, 126, 70, 0.16);
+  border-color: rgba(45, 156, 255, 0.16);
 }
 
 .bracket-mini-match.waiting.compact .bracket-mini-team.placeholder {
@@ -8279,7 +8279,7 @@ html {
   min-width: 10px;
   height: 10px;
   border-radius: 999px;
-  background: rgba(78, 126, 70, 0.42);
+  background: rgba(45, 156, 255, 0.42);
   color: transparent;
 }
 
@@ -8413,7 +8413,7 @@ html {
     left: 5px;
     width: 2px;
     border-radius: 999px;
-    background: linear-gradient(180deg, rgba(78, 126, 70, 0.68), rgba(78, 126, 70, 0.14));
+    background: linear-gradient(180deg, rgba(45, 156, 255, 0.68), rgba(45, 156, 255, 0.14));
   }
 
   .bracket-mobile-stage:last-child::before {
@@ -8442,7 +8442,7 @@ html {
     height: 10px;
     border-radius: 999px;
     background: #4e7e46;
-    box-shadow: 0 0 0 4px rgba(78, 126, 70, 0.14);
+    box-shadow: 0 0 0 4px rgba(45, 156, 255, 0.14);
   }
 
   .bracket-mobile-stage header em {
@@ -8518,7 +8518,7 @@ html {
     width: 18px;
     height: 2px;
     border-radius: 999px;
-    background: rgba(78, 126, 70, 0.6);
+    background: rgba(45, 156, 255, 0.6);
   }
 
   .bracket-mobile-locked strong {
@@ -8752,7 +8752,7 @@ html {
 
 .bracket-svg-lines path {
   fill: none;
-  stroke: rgba(78, 126, 70, 0.62);
+  stroke: rgba(45, 156, 255, 0.62);
   stroke-width: 2.4;
   vector-effect: non-scaling-stroke;
 }
@@ -9090,4 +9090,91 @@ html {
   padding-left: clamp(16px, 3vw, 52px) !important;
   padding-right: clamp(16px, 3vw, 52px) !important;
   box-sizing: border-box !important;
+}
+
+.bracket-share-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.bracket-share-btn svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (max-width: 760px) {
+  .bracket-share-btn span {
+    display: none;
+  }
+}
+
+/* Phone bracket is intentionally one-sided: hide the full SVG canvas and show the progressive path only. */
+@media (max-width: 760px) {
+  .bracket-wide-preview .bracket-svg-shell {
+    display: none !important;
+  }
+
+  .bracket-wide-preview .bracket-mobile-path {
+    display: block !important;
+    width: 100%;
+    padding: 8px 0 18px;
+    box-sizing: border-box;
+  }
+
+  .bracket-mobile-path-head {
+    padding: 0 16px 8px !important;
+  }
+
+  .bracket-mobile-svg-shell {
+    display: block;
+    width: 100%;
+    overflow: visible;
+  }
+
+  .bracket-mobile-svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+  }
+
+  .bracket-mobile-svg .bracket-svg-lines path {
+    stroke-width: 1.8;
+  }
+
+  .bracket-mobile-svg .bracket-svg-team-name,
+  .bracket-mobile-svg .bracket-svg-match.waiting text {
+    font-size: 12px;
+  }
+
+  .bracket-mobile-svg .bracket-svg-team.active rect {
+    filter: none;
+  }
+
+  .bracket-mobile-svg .bracket-svg-match {
+    filter: drop-shadow(0 7px 10px rgba(0, 0, 0, 0.16));
+  }
+
+  .bracket-mobile-svg .bracket-mobile-flag-match {
+    filter: drop-shadow(0 6px 8px rgba(0, 0, 0, 0.14));
+  }
+
+  .bracket-mobile-svg .bracket-mobile-flag-row image {
+    pointer-events: none;
+  }
+
+  .bracket-mobile-svg .bracket-mobile-flag-row rect {
+    stroke-width: 1.2;
+  }
+
+  .bracket-mobile-stage header::before {
+    background: #2d9cff !important;
+    box-shadow: 0 0 0 4px rgba(45, 156, 255, 0.16) !important;
+  }
 }

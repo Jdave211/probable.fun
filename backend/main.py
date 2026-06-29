@@ -2568,6 +2568,166 @@ def save_bracket_entry(challenge_id: str, payload: BracketEntrySave) -> dict:
     return {"entry": assemble_bracket_entry(saved)}
 
 
+BRACKET_CHALLENGE_META = {
+    "id": "wc26-bracket-r32",
+    "prize": "$100",
+    "title": "World Cup Bracket Challenge",
+    "subtitle": "Free to enter. Submit the cleanest knockout bracket from the Round of 32 onward.",
+}
+
+
+def bracket_entry_count(challenge_id: str) -> int:
+    db = get_db()
+    try:
+        result = (
+            db.table("bracket_entries")
+            .select("id", count="exact")
+            .eq("challenge_id", challenge_id)
+            .not_.is_("submitted_at", "null")
+            .execute()
+        )
+        return int(result.count or 0)
+    except Exception:
+        return 0
+
+
+def bracket_card_payload(challenge_id: str, request: Request | None = None) -> dict:
+    share_base = share_base_url(request)
+    app_base = frontend_base_url(request)
+    meta = BRACKET_CHALLENGE_META
+    entries = bracket_entry_count(challenge_id)
+    joined = f"{entries:,} bracket{'s' if entries != 1 else ''} submitted" if entries else "Be the first to submit a bracket"
+    return {
+        "title": f"{meta['title']} · {meta['prize']} prize",
+        "description": f"{meta['subtitle']} {joined}.",
+        "entries": entries,
+        "url": f"{share_base}/bracket",
+        "appUrl": f"{app_base}/bracket",
+        "imageUrl": f"{share_base}/api/brackets/{challenge_id}/share-card.png",
+    }
+
+
+@app.get("/api/brackets/{challenge_id}/share-card.png")
+def bracket_share_card_png(challenge_id: str) -> Response:
+    try:
+        from PIL import Image, ImageDraw, ImageFont, ImageOps
+    except Exception as exc:
+        raise HTTPException(503, "PNG share cards require Pillow. Run pip install -r requirements.txt") from exc
+
+    meta = BRACKET_CHALLENGE_META
+    entries = bracket_entry_count(challenge_id)
+
+    def font(size: int, bold: bool = False):
+        candidates = [
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/Library/Fonts/Arial Bold.ttf" if bold else "/Library/Fonts/Arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
+        for path in candidates:
+            try:
+                if path and Path(path).exists():
+                    return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    def wrap_lines(draw, text: str, max_width: int, fnt, max_lines: int = 2) -> list[str]:
+        words = str(text or "").split()
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if not current or draw.textlength(candidate, font=fnt) <= max_width:
+                current = candidate
+                continue
+            lines.append(current)
+            current = word
+            if len(lines) >= max_lines:
+                break
+        if current and len(lines) < max_lines:
+            lines.append(current)
+        return lines or [""]
+
+    image = Image.new("RGB", (1200, 630), "#071018")
+    draw = ImageDraw.Draw(image)
+    for y in range(630):
+        shade = int(9 + y / 630 * 18)
+        draw.line((0, y, 1200, y), fill=(4, shade, min(36, shade + 14)))
+
+    card_x, card_y, card_w, card_h = 90, 70, 1020, 490
+    draw.rounded_rectangle((card_x + 12, card_y + 18, card_x + card_w + 12, card_y + card_h + 18), radius=34, fill="#03070a")
+    draw.rounded_rectangle((card_x, card_y, card_x + card_w, card_y + card_h), radius=32, fill="#101820", outline="#2b3944", width=3)
+
+    left = card_x + 56
+    right = card_x + card_w - 56
+    draw.text((left, card_y + 48), "probable.", fill="#f3f7fa", font=font(30, True))
+
+    thumb_size = 96
+    thumb_x, thumb_y = left, card_y + 124
+    ball_path = BASE_DIR / "public" / "ball.png"
+    if ball_path.exists():
+        try:
+            ball = Image.open(ball_path).convert("RGBA")
+            inset = 14
+            ball_resized = ImageOps.fit(ball, (thumb_size - inset * 2, thumb_size - inset * 2), method=Image.Resampling.LANCZOS)
+            thumb_bg = Image.new("RGBA", (thumb_size, thumb_size), "#f4f7fa")
+            thumb_bg.paste(ball_resized, (inset, inset), ball_resized)
+            mask = Image.new("L", (thumb_size, thumb_size), 0)
+            ImageDraw.Draw(mask).rounded_rectangle((0, 0, thumb_size, thumb_size), radius=20, fill=255)
+            draw.rounded_rectangle((thumb_x - 3, thumb_y - 3, thumb_x + thumb_size + 3, thumb_y + thumb_size + 3), radius=22, fill="#1c2a34")
+            image.paste(thumb_bg.convert("RGB"), (thumb_x, thumb_y), mask)
+        except Exception:
+            pass
+
+    text_x = thumb_x + thumb_size + 28
+    draw.rounded_rectangle((text_x, thumb_y + 4, text_x + 110, thumb_y + 40), radius=14, fill="#143f2b")
+    draw.text((text_x + 18, thumb_y + 10), f"{meta['prize']} PRIZE", fill="#38d274", font=font(16, True))
+    title_font = font(46, True)
+    title_lines = wrap_lines(draw, meta["title"], right - text_x, title_font, max_lines=2)
+    for index, line in enumerate(title_lines):
+        draw.text((text_x, thumb_y + 50 + index * 54), line, fill="#f5f8fb", font=title_font)
+
+    subtitle_y = thumb_y + thumb_size + 46
+    subtitle_lines = wrap_lines(draw, meta["subtitle"], card_w - 112, font(24, False), max_lines=2)
+    for index, line in enumerate(subtitle_lines):
+        draw.text((left, subtitle_y + index * 32), line, fill="#9fb0bd", font=font(24, False))
+
+    stat_y = subtitle_y + len(subtitle_lines) * 32 + 28
+    draw.line((left, stat_y, right, stat_y), fill="#26343d", width=1)
+    stat_text = f"{entries:,} bracket{'s' if entries != 1 else ''} submitted" if entries else "Be the first to submit a bracket"
+    draw.text((left, stat_y + 18), stat_text, fill="#8fa0ad", font=font(22, False))
+
+    button_w, button_h = 260, 56
+    button_x, button_y = right - button_w, stat_y + 18
+    draw.rounded_rectangle((button_x, button_y, button_x + button_w, button_y + button_h), radius=14, fill="#145ca8")
+    cta = "Enter free →"
+    draw.text((button_x + button_w / 2 - draw.textlength(cta, font=font(22, True)) / 2, button_y + 16), cta, fill="#fff", font=font(22, True))
+
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return Response(output.getvalue(), media_type="image/png")
+
+
+@app.get("/bracket", response_class=HTMLResponse)
+def bracket_open_graph_page(request: Request) -> str:
+    challenge_id = BRACKET_CHALLENGE_META["id"]
+    card = bracket_card_payload(challenge_id, request)
+    return f"""<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>{esc_html(card['title'])} · Probable</title>
+<meta name="description" content="{esc_html(card['description'])}"/>
+<meta property="og:type" content="website"/><meta property="og:site_name" content="Probable"/>
+<meta property="og:title" content="{esc_html(card['title'])}"/>
+<meta property="og:description" content="{esc_html(card['description'])}"/>
+<meta property="og:image" content="{esc_html(card['imageUrl'])}"/>
+<meta property="og:image:width" content="1200"/><meta property="og:image:height" content="630"/>
+<meta property="og:url" content="{esc_html(card['url'])}"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="{esc_html(card['title'])}"/>
+<meta name="twitter:description" content="{esc_html(card['description'])}"/>
+<meta name="twitter:image" content="{esc_html(card['imageUrl'])}"/>
+<style>body{{margin:0;background:#0d1216;color:#f4f7fa;font-family:Arial,sans-serif;display:grid;place-items:center;min-height:100vh}}a{{background:#145ca8;color:white;text-decoration:none;padding:14px 18px;border-radius:12px;font-weight:800}}main{{max-width:560px;padding:28px;text-align:center}}img{{width:100%;border-radius:18px;border:1px solid #2b3944}}</style></head><body><main><img src="{esc_html(card['imageUrl'])}" alt="World Cup bracket challenge preview"/><h1>{esc_html(card['title'])}</h1><p>{esc_html(card['description'])}</p><a href="{esc_html(card['appUrl'])}">Open bracket</a></main></body></html>"""
+
+
 @app.post("/api/groups/{group_id}/join")
 def join_group(group_id: str, payload: JoinGroup) -> dict:
     require_group(group_id)
