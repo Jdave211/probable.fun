@@ -6160,6 +6160,80 @@ function bracketRoundShellHtml(rounds, champion) {
         </div>
       </aside>
     </div>
+    ${bracketWideGridHtml(rounds, champion)}
+  `;
+}
+
+function bracketMiniCellHtml(matchup) {
+  const winner = bracketWinner(matchup.id);
+  const teams = matchup.teams.length
+    ? [...matchup.teams, ...Array(Math.max(0, 2 - matchup.teams.length)).fill("")]
+    : ["", ""];
+  const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
+  return `
+    <article class="bracket-mini-match ${winner ? "picked" : ""} ${locked ? "locked" : ""}">
+      ${teams.slice(0, 2).map(team => team ? `
+        <button class="bracket-mini-team ${winner === team ? "active" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
+          ${teamFlagHtml(team)}
+          <strong>${esc(team)}</strong>
+        </button>
+      ` : `
+        <button class="bracket-mini-team placeholder" type="button" disabled>
+          <span>•</span>
+          <strong>Pick to advance</strong>
+        </button>
+      `).join("")}
+    </article>
+  `;
+}
+
+function bracketWideGridHtml(rounds, champion) {
+  return `
+    <section class="bracket-wide-preview motion-item" aria-label="Full bracket preview">
+      <div class="bracket-wide-head">
+        <div>
+          <p class="eyebrow">Full bracket</p>
+          <h2>See the whole path</h2>
+        </div>
+        <span>${champion ? `${teamFlag(champion)} ${esc(champion)}` : "No winner yet"}</span>
+      </div>
+      <div class="bracket-wide-scroll">
+        <div class="bracket-wide-grid">
+          ${rounds.map(round => `
+            <section class="bracket-wide-round" style="--match-count:${round.matchups.length}">
+              <header>
+                <span>${esc(round.name)}</span>
+                <em>${bracketRoundPickCount(round)}/${round.matchups.length}</em>
+              </header>
+              <div class="bracket-wide-list">
+                ${round.matchups.map(bracketMiniCellHtml).join("")}
+              </div>
+            </section>
+          `).join("")}
+          <section class="bracket-wide-round bracket-wide-champ" style="--match-count:1">
+            <header>
+              <span>Champion</span>
+              <em>${BRACKET_CHALLENGE.prize}</em>
+            </header>
+            <div class="bracket-wide-list">
+              <article class="bracket-mini-match champion">
+                ${champion ? `
+                  <div class="bracket-mini-team active champion">
+                    ${teamFlagHtml(champion)}
+                    <strong>${esc(champion)}</strong>
+                  </div>
+                ` : `
+                  <div class="bracket-mini-team placeholder champion">
+                    <span>🏆</span>
+                    <strong>Pick final winner</strong>
+                  </div>
+                `}
+              </article>
+            </div>
+          </section>
+        </div>
+      </div>
+    </section>
   `;
 }
 

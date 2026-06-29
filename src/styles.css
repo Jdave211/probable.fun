@@ -4044,6 +4044,152 @@ button { color: inherit; }
 .bracket-faq-card p {
   color: var(--text-2);
 }
+.bracket-wide-preview {
+  width: min(1220px, calc(100vw - 24px));
+  margin: 8px 50% 0;
+  transform: translateX(-50%);
+  border-top: 1px solid rgba(157, 171, 181, 0.12);
+  padding-top: 18px;
+}
+.bracket-wide-head {
+  width: min(760px, 100%);
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 auto 14px;
+}
+.bracket-wide-head h2 {
+  font-size: 1.42rem;
+  line-height: 1.05;
+}
+.bracket-wide-head span {
+  color: var(--text-2);
+  font-weight: 900;
+}
+.bracket-wide-scroll {
+  overflow-x: auto;
+  border: 1px solid rgba(157, 171, 181, 0.1);
+  border-radius: 24px;
+  background:
+    linear-gradient(90deg, rgba(18, 79, 143, 0.08), transparent 16%, transparent 84%, rgba(18, 79, 143, 0.08)),
+    rgba(8, 12, 15, 0.22);
+  padding: 14px;
+  scrollbar-width: thin;
+}
+.bracket-wide-grid {
+  min-width: 1080px;
+  display: grid;
+  grid-template-columns: 1.24fr 1fr 0.86fr 0.76fr 0.66fr 0.58fr;
+  gap: 14px;
+  align-items: stretch;
+}
+.bracket-wide-round {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.bracket-wide-round header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-2);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.bracket-wide-round header em {
+  color: var(--text-3);
+  font-style: normal;
+}
+.bracket-wide-list {
+  min-height: calc(var(--match-count) * 42px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  gap: 8px;
+}
+.bracket-mini-match {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  border: 1px solid rgba(157, 171, 181, 0.12);
+  border-radius: 12px;
+  background: rgba(18, 24, 28, 0.72);
+  padding: 3px;
+}
+.bracket-mini-match::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -15px;
+  width: 14px;
+  border-top: 1px solid rgba(157, 171, 181, 0.18);
+}
+.bracket-wide-champ .bracket-mini-match::after,
+.bracket-mini-match.champion::after {
+  display: none;
+}
+.bracket-mini-match.locked {
+  border-color: rgba(45, 156, 255, 0.24);
+}
+.bracket-mini-team {
+  width: 100%;
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(10, 15, 18, 0.35);
+  color: var(--text-2);
+  padding: 3px 6px;
+  cursor: pointer;
+  text-align: left;
+}
+.bracket-mini-team:hover:not(:disabled),
+.bracket-mini-team.active {
+  background: rgba(18, 79, 143, 0.24);
+  color: var(--text);
+}
+.bracket-mini-team:disabled {
+  cursor: default;
+}
+.bracket-mini-team.placeholder {
+  cursor: not-allowed;
+  opacity: 0.54;
+}
+.bracket-mini-team span,
+.bracket-mini-team .outcome-flag {
+  width: 16px;
+  min-width: 16px;
+  height: 11px;
+  margin-right: 0;
+  display: grid;
+  place-items: center;
+  font-size: 0.8rem;
+}
+.bracket-mini-team strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.66rem;
+}
+.bracket-mini-team.champion {
+  min-height: 54px;
+  justify-content: center;
+  flex-direction: column;
+  text-align: center;
+}
+.bracket-mini-team.champion span,
+.bracket-mini-team.champion .outcome-flag {
+  width: 30px;
+  height: 20px;
+  font-size: 1.4rem;
+}
 
 .leaderboard-controls {
   display: flex;
@@ -6215,6 +6361,21 @@ html {
   }
   .bracket-side-summary {
     grid-template-columns: 1fr;
+  }
+  .bracket-wide-preview {
+    width: calc(100vw - 20px);
+    margin-top: 14px;
+  }
+  .bracket-wide-scroll {
+    padding: 12px;
+  }
+  .bracket-wide-grid {
+    min-width: 1040px;
+  }
+  .bracket-wide-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
   }
   .bracket-current-pick {
     width: 100%;
