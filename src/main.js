@@ -6300,14 +6300,30 @@ function bracketGridRowForMatch(matchCount, index) {
   return 8;
 }
 
+function bracketMatchupsByIds(round, ids) {
+  const lookup = new Map((round?.matchups || []).map(matchup => [matchup.id, matchup]));
+  return ids.map(id => lookup.get(id)).filter(Boolean);
+}
+
 function bracketSideStages(rounds, side) {
   const left = side === "left";
-  const source = [
-    { round: rounds[0], matchups: rounds[0].matchups.slice(left ? 0 : 8, left ? 8 : 16) },
-    { round: rounds[1], matchups: rounds[1].matchups.slice(left ? 0 : 4, left ? 4 : 8) },
-    { round: rounds[2], matchups: rounds[2].matchups.slice(left ? 0 : 2, left ? 2 : 4) },
-    { round: rounds[3], matchups: rounds[3].matchups.slice(left ? 0 : 1, left ? 1 : 2) },
-  ];
+  const sideIds = left
+    ? [
+        ["m74", "m77", "m73", "m75", "m81", "m82", "m83", "m84"],
+        ["m89", "m90", "m93", "m94"],
+        ["m97", "m98"],
+        ["m101"],
+      ]
+    : [
+        ["m76", "m78", "m79", "m80", "m86", "m88", "m85", "m87"],
+        ["m91", "m92", "m95", "m96"],
+        ["m99", "m100"],
+        ["m102"],
+      ];
+  const source = sideIds.map((ids, index) => ({
+    round: rounds[index],
+    matchups: bracketMatchupsByIds(rounds[index], ids),
+  }));
   return left ? source : source.reverse();
 }
 
