@@ -370,6 +370,9 @@ const state = {
   bracketSubmitted: false,
   bracketRoundIndex: 0,
   bracketView: "grid",
+  bracketRemoteLoaded: false,
+  bracketLastPickedId: "",
+  bracketSaving: false,
   pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, tradeMarketId: null, resolveMarketId: null },
   loaded: false,
 };
@@ -828,6 +831,7 @@ async function loadInitialAppData() {
   state.marketLinkError = "";
   if (state.view === "bracket" && !state.sharedMarketId && !state.inviteToken) {
     loadBracketEntryIntoState();
+    await loadRemoteBracketEntry();
     return;
   }
   if (state.sharedMarketId) {
@@ -1251,6 +1255,7 @@ async function onGlobalClick(e) {
     state.sharedMarketId = null;
     state.bracketView = "grid";
     loadBracketEntryIntoState();
+    void loadRemoteBracketEntry({ refresh: true });
     routeToBracket();
     render();
     return;
@@ -1286,15 +1291,16 @@ async function onGlobalClick(e) {
     e.preventDefault();
     state.bracketPicks = {};
     state.bracketSubmitted = false;
+    state.bracketLastPickedId = "";
     state.bracketRoundIndex = 0;
-    persistBracketEntry({ submitted: false });
+    void saveBracketEntry({ submitted: false, silent: true }).catch(() => {});
     refreshBracketChallenge();
     toast("Bracket reset.");
     return;
   }
 
   if (e.target.closest("[data-submit-bracket]")) {
-    submitBracketEntry();
+    void submitBracketEntry();
     return;
   }
 
@@ -1972,7 +1978,7 @@ function runPendingAuthAction() {
     state.view = "bracket";
     routeToBracket();
     render();
-    submitBracketEntry();
+    void submitBracketEntry();
     return;
   }
   if (action === "trade-shared-market") {
@@ -3247,7 +3253,7 @@ async function createGroup({ name, emoji, members, activeMember, form }) {
   try {
     const data = await api("/api/groups", {
       method: "POST",
-      body: JSON.stringify({ name, emoji, members, mode: "fake" }),
+      body: JSON.stringify({ name, emoji, members, mode: "fake", createdBy: activeMember || authDisplayName() }),
     });
     setGroups(data.groups);
     state.currentGroupId = data.groupId ?? state.currentGroupId;
@@ -3292,6 +3298,7 @@ async function ensureMarketGroup() {
       emoji: "PB",
       members: [member],
       mode: "fake",
+      createdBy: member,
     }),
   });
   setGroups(data.groups);
@@ -3485,13 +3492,23 @@ async function onResolve(market, outcome, options = {}) {
         outcome,
         reasoning: reasoning || null,
         resolvedBy: authDisplayName() || state.activeMember || "manual",
+        resolverAliases: currentMemberAliases(),
       }),
     });
     setGroups(data.groups);
     delete state.oracleErrors[market.id];
     normalizeSelection();
     render();
-    toastSettlement(data.settlement, `Resolved ${resolutionOutcomeLabel(market, outcome)}.`);
+    if (data.settlement) {
+      toastSettlement(data.settlement, `Resolved ${resolutionOutcomeLabel(market, outcome)}.`);
+    } else if (data.resolutionApproval) {
+      const approval = data.resolutionApproval;
+      const missing = approval.missingResolvers?.length ? ` Waiting on ${approval.missingResolvers.join(" + ")}.` : "";
+      const prefix = approval.status === "needs_review" ? "Approval conflict." : "Approval recorded.";
+      toast(`${prefix}${missing}`);
+    } else {
+      toast("Approval recorded.");
+    }
   } catch (err) {
     toast(err.message || "Resolve failed.");
   } finally {
@@ -5966,8 +5983,12 @@ function renderLeaderboard() {
 }
 
 function bracketStorageKey() {
-  const owner = authDisplayName() || state.authUser?.email || localStorage.getItem(STORAGE_KEYS.user) || "guest";
+  const owner = bracketParticipantName();
   return `probable_bracket_${BRACKET_CHALLENGE.id}_${slug(owner) || "guest"}`;
+}
+
+function bracketParticipantName() {
+  return authDisplayName() || state.activeMember || state.authUser?.email || localStorage.getItem(STORAGE_KEYS.user) || "Guest";
 }
 
 function loadBracketEntry() {
@@ -5996,18 +6017,73 @@ function loadBracketEntryIntoState() {
   normalizeBracketPicks();
 }
 
-function persistBracketEntry({ submitted = state.bracketSubmitted } = {}) {
+function persistBracketEntry({ submitted = state.bracketSubmitted, submittedAt = null } = {}) {
+  const previous = loadBracketEntry();
   const payload = {
     challengeId: BRACKET_CHALLENGE.id,
-    name: authDisplayName() || state.activeMember || "Guest",
+    name: bracketParticipantName(),
     prize: BRACKET_CHALLENGE.prize,
     picks: { ...state.bracketPicks },
-    submittedAt: submitted ? (loadBracketEntry()?.submittedAt || new Date().toISOString()) : null,
+    submittedAt: submitted ? (submittedAt || previous?.submittedAt || new Date().toISOString()) : null,
     updatedAt: new Date().toISOString(),
   };
   localStorage.setItem(bracketStorageKey(), JSON.stringify(payload));
   state.bracketSubmitted = Boolean(payload.submittedAt);
   return payload;
+}
+
+function applyRemoteBracketEntry(entry) {
+  if (!entry) return false;
+  state.bracketPicks = entry.picks && typeof entry.picks === "object" ? { ...entry.picks } : {};
+  state.bracketSubmitted = Boolean(entry.submittedAt);
+  normalizeBracketPicks();
+  persistBracketEntry({ submitted: state.bracketSubmitted, submittedAt: entry.submittedAt });
+  return true;
+}
+
+async function loadRemoteBracketEntry({ refresh = false } = {}) {
+  if (!isLoggedIn()) return null;
+  const participant = bracketParticipantName();
+  if (!participant) return null;
+  try {
+    const data = await api(`/api/brackets/${encodeURIComponent(BRACKET_CHALLENGE.id)}/entry?participant=${encodeURIComponent(participant)}`, {
+      timeoutMs: API_TIMEOUT_MS,
+    });
+    state.bracketRemoteLoaded = true;
+    if (applyRemoteBracketEntry(data.entry) && refresh) refreshBracketChallenge();
+    return data.entry || null;
+  } catch (err) {
+    state.bracketRemoteLoaded = false;
+    console.warn("Bracket entry load failed", err);
+    return null;
+  }
+}
+
+async function saveBracketEntry({ submitted = state.bracketSubmitted, silent = true } = {}) {
+  const local = persistBracketEntry({ submitted });
+  if (!isLoggedIn()) return local;
+  state.bracketSaving = true;
+  try {
+    const data = await api(`/api/brackets/${encodeURIComponent(BRACKET_CHALLENGE.id)}/entry`, {
+      method: "POST",
+      body: JSON.stringify({
+        participant: bracketParticipantName(),
+        userEmail: state.authUser?.email || null,
+        picks: state.bracketPicks,
+        submitted,
+      }),
+    });
+    if (data.entry) {
+      state.bracketSubmitted = Boolean(data.entry.submittedAt);
+      persistBracketEntry({ submitted: state.bracketSubmitted, submittedAt: data.entry.submittedAt });
+    }
+    return data.entry || local;
+  } catch (err) {
+    if (!silent) toast(err.message || "Could not save bracket.");
+    throw err;
+  } finally {
+    state.bracketSaving = false;
+  }
 }
 
 function bracketWinner(id) {
@@ -6078,7 +6154,8 @@ function pickBracketTeam(matchupId, team) {
   state.bracketPicks[matchupId] = team;
   normalizeBracketPicks();
   state.bracketSubmitted = false;
-  persistBracketEntry({ submitted: false });
+  state.bracketLastPickedId = matchupId;
+  void saveBracketEntry({ submitted: false, silent: true }).catch(() => {});
 }
 
 function bracketComplete() {
@@ -6102,7 +6179,7 @@ function bracketProgress(rounds) {
   return { picked, total, pct: total ? Math.round((picked / total) * 100) : 0 };
 }
 
-function submitBracketEntry() {
+async function submitBracketEntry() {
   if (!bracketComplete()) {
     toast("Finish the bracket before submitting.");
     return;
@@ -6113,9 +6190,13 @@ function submitBracketEntry() {
     return;
   }
   sessionStorage.removeItem("probable_pending_bracket");
-  persistBracketEntry({ submitted: true });
-  refreshBracketChallenge();
-  toast(`Bracket submitted for the ${BRACKET_CHALLENGE.prize} prize.`);
+  try {
+    await saveBracketEntry({ submitted: true, silent: false });
+    refreshBracketChallenge();
+    toast(`Bracket submitted for the ${BRACKET_CHALLENGE.prize} prize.`);
+  } catch {
+    // saveBracketEntry already surfaced the useful message.
+  }
 }
 
 function refreshBracketChallenge({ preserveScroll = true } = {}) {
@@ -6132,7 +6213,23 @@ function refreshBracketChallenge({ preserveScroll = true } = {}) {
     window.scrollTo(scrollX, scrollY);
     const nextWide = document.querySelector(".bracket-wide-scroll");
     if (nextWide) nextWide.scrollLeft = wideScroll;
+    animateBracketAdvance();
   });
+}
+
+function animateBracketAdvance() {
+  if (!state.bracketLastPickedId) return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const targets = document.querySelectorAll(".bracket-mini-match.just-picked, .bracket-matchup.just-picked");
+  if (!targets.length) return;
+  animate(targets, { scale: [0.985, 1.012, 1], opacity: [0.92, 1] }, { duration: 0.38, easing: "ease-out" });
+  const activeRows = document.querySelectorAll(".bracket-mini-match.just-picked .active, .bracket-matchup.just-picked .active");
+  if (activeRows.length) {
+    animate(activeRows, { boxShadow: ["inset 4px 0 0 #169bff", "inset 4px 0 0 #2d9cff"] }, { duration: 0.42 });
+  }
+  window.setTimeout(() => {
+    state.bracketLastPickedId = "";
+  }, 650);
 }
 
 function teamFlag(team) {
@@ -6181,8 +6278,8 @@ function teamFlag(team) {
 function teamFlagHtml(team) {
   const flagClass = regionalFlagClass(team);
   return flagClass
-    ? `<span class="outcome-flag ${flagClass} bracket-flag" aria-hidden="true"></span>`
-    : `<span>${esc(teamFlag(team))}</span>`;
+    ? `<span class="bracket-flag-token" aria-hidden="true"><span class="outcome-flag ${flagClass} bracket-flag"></span></span>`
+    : `<span class="bracket-flag-token" aria-hidden="true"><span class="bracket-emoji-flag">${esc(teamFlag(team))}</span></span>`;
 }
 
 function bracketChanceText(team) {
@@ -6201,9 +6298,15 @@ function bracketMatchupHtml(matchup, index = 0) {
   const teams = empty ? [...matchup.teams, ...Array(2 - matchup.teams.length).fill("")] : matchup.teams.slice(0, 2);
   const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
   const missing = teams.every(team => !team);
+  const waiting = empty || missing;
   return `
-    <article class="bracket-matchup ${winner ? "picked" : ""} ${locked ? "locked" : ""} ${missing ? "empty" : ""}">
-      ${!locked && !winner && !missing ? `
+    <article class="bracket-matchup ${winner ? "picked" : ""} ${locked ? "locked" : ""} ${waiting ? "waiting empty" : ""} ${state.bracketLastPickedId === matchup.id ? "just-picked" : ""}">
+      ${waiting ? `
+        <div class="bracket-pick-slot waiting">
+          <span>·</span>
+          <strong>Unlocks after previous picks</strong>
+        </div>
+      ` : !locked && !winner ? `
         <div class="bracket-pick-slot">
           <span>+</span>
           <strong>Pick to advance</strong>
@@ -6211,7 +6314,7 @@ function bracketMatchupHtml(matchup, index = 0) {
         </div>
       ` : ""}
       ${locked ? `<span class="bracket-match-tag">Final: ${esc(winner)} advanced</span>` : ""}
-      ${teams.map(team => team ? `
+      ${waiting ? "" : teams.map(team => team ? `
         <button class="bracket-team ${winner === team ? "active" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
           <span class="bracket-team-main">
             ${teamFlagHtml(team)}
@@ -6220,12 +6323,7 @@ function bracketMatchupHtml(matchup, index = 0) {
           <span class="bracket-team-chance">${bracketChanceText(team)}</span>
           <span class="bracket-team-bar" style="--bar-width:${bracketChanceWidth(team)}%"></span>
         </button>
-      ` : `
-        <button class="bracket-team placeholder" type="button" disabled>
-          <span>•</span>
-          <strong>Pick previous round</strong>
-        </button>
-      `).join("")}
+      ` : "").join("")}
     </article>
   `;
 }
@@ -6269,28 +6367,29 @@ function bracketRoundShellHtml(rounds, champion) {
 
 function bracketMiniCellHtml(matchup, options = {}) {
   const winner = bracketWinner(matchup.id);
-  const teams = matchup.teams.length
-    ? [...matchup.teams, ...Array(Math.max(0, 2 - matchup.teams.length)).fill("")]
-    : ["", ""];
+  const hasChoices = matchup.teams.length >= 2;
+  const teams = hasChoices ? matchup.teams.slice(0, 2) : [];
   const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
   const row = typeof options === "object" && Number.isFinite(Number(options.row))
     ? ` style="--bracket-row:${Number(options.row)}"`
     : "";
+  if (!hasChoices) {
+    return "";
+  }
   return `
-    <article class="bracket-mini-match ${winner ? "picked" : ""} ${locked ? "locked" : ""}"${row}>
+    <article class="bracket-mini-match ready ${winner ? "picked" : ""} ${locked ? "locked" : ""} ${state.bracketLastPickedId === matchup.id ? "just-picked" : ""}" data-matchup-id="${esc(matchup.id)}"${row}>
       ${teams.slice(0, 2).map(team => team ? `
         <button class="bracket-mini-team ${winner === team ? "active" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
           ${teamFlagHtml(team)}
           <strong>${esc(team)}</strong>
         </button>
-      ` : `
-        <button class="bracket-mini-team placeholder" type="button" disabled>
-          <span>•</span>
-          <strong>Pick to advance</strong>
-        </button>
-      `).join("")}
+      ` : "").join("")}
     </article>
   `;
+}
+
+function bracketStageReadyMatchups(stage) {
+  return (stage?.matchups || []).filter(matchup => matchup.teams.length >= 2);
 }
 
 function bracketGridRowForMatch(matchCount, index) {
@@ -6323,20 +6422,33 @@ function bracketSideStages(rounds, side) {
   const source = sideIds.map((ids, index) => ({
     round: rounds[index],
     matchups: bracketMatchupsByIds(rounds[index], ids),
+    depth: index,
   }));
   return left ? source : source.reverse();
 }
 
+function bracketGridRoundLabel(name) {
+  if (name === "Round of 16") return "R16";
+  if (name === "Quarterfinals") return "QF";
+  if (name === "Semifinals") return "SF";
+  return name;
+}
+
 function bracketWideStageHtml(stage, side) {
-  const picked = stage.matchups.filter(matchup => Boolean(bracketWinner(matchup.id))).length;
+  const readyMatchups = bracketStageReadyMatchups(stage);
+  const picked = readyMatchups.filter(matchup => Boolean(bracketWinner(matchup.id))).length;
+  const ready = readyMatchups.length;
+  const empty = ready === 0;
   return `
-    <section class="bracket-wide-round bracket-wide-${side}" style="--match-count:${stage.matchups.length}" data-match-count="${stage.matchups.length}">
+    <section class="bracket-wide-round bracket-wide-${side} bracket-depth-${stage.depth} ${empty ? "stage-empty" : "stage-ready"}" style="--match-count:${stage.matchups.length}; --stage-depth:${stage.depth}" data-match-count="${stage.matchups.length}" data-ready-count="${ready}">
       <header>
-        <span>${esc(stage.round.name)}</span>
-        <em>${picked}/${stage.matchups.length}</em>
+        <span>${esc(bracketGridRoundLabel(stage.round.name))}</span>
+        <em>${empty ? "" : `${picked}/${ready}`}</em>
       </header>
       <div class="bracket-wide-list">
-        ${stage.matchups.map((matchup, index) => bracketMiniCellHtml(matchup, {
+        ${empty ? `
+          <div class="bracket-stage-rail" aria-hidden="true"><span></span></div>
+        ` : stage.matchups.map((matchup, index) => bracketMiniCellHtml(matchup, {
           row: bracketGridRowForMatch(stage.matchups.length, index),
         })).join("")}
       </div>
@@ -6347,19 +6459,26 @@ function bracketWideStageHtml(stage, side) {
 function bracketWideGridHtml(rounds, champion) {
   const leftStages = bracketSideStages(rounds, "left");
   const rightStages = bracketSideStages(rounds, "right");
+  const progress = bracketProgress(rounds);
   return `
     <section class="bracket-wide-preview motion-item" aria-label="Full bracket preview">
+      <div class="bracket-progress-bar bracket-progress-wide" aria-hidden="true">
+        <span style="width:${progress.pct}%"></span>
+      </div>
       <div class="bracket-wide-head">
         <div>
-          <p class="eyebrow">Full bracket</p>
+          <p class="eyebrow">Progressive bracket</p>
           <h2>See the whole path</h2>
+          <small>Future cards stay compressed until both teams are known.</small>
         </div>
         <span>${champion ? `${teamFlag(champion)} ${esc(champion)}` : "No winner yet"}</span>
       </div>
       <div class="bracket-wide-scroll">
-        <div class="bracket-wide-grid">
-          ${leftStages.map(stage => bracketWideStageHtml(stage, "left")).join("")}
-          <section class="bracket-wide-round bracket-wide-champ" style="--match-count:1">
+        <div class="bracket-wide-grid bracket-progressive-grid">
+          <div class="bracket-side-tree bracket-side-left">
+            ${leftStages.map(stage => bracketWideStageHtml(stage, "left")).join("")}
+          </div>
+          <section class="bracket-wide-round bracket-wide-champ bracket-final-column" style="--match-count:1">
             <header>
               <span>Final</span>
               <em>${bracketWinner("final") ? "1/1" : "0/1"}</em>
@@ -6381,7 +6500,9 @@ function bracketWideGridHtml(rounds, champion) {
               </article>
             </div>
           </section>
-          ${rightStages.map(stage => bracketWideStageHtml(stage, "right")).join("")}
+          <div class="bracket-side-tree bracket-side-right">
+            ${rightStages.map(stage => bracketWideStageHtml(stage, "right")).join("")}
+          </div>
         </div>
       </div>
     </section>
@@ -6389,7 +6510,6 @@ function bracketWideGridHtml(rounds, champion) {
 }
 
 function renderBracketChallenge() {
-  loadBracketEntryIntoState();
   const rounds = bracketRounds();
   const champion = bracketWinner("final");
   const complete = bracketComplete();
@@ -6517,6 +6637,7 @@ function adminEventCard(group, event) {
   const pending = state.pendingUi.resolveMarketId === market.id;
   const status = eventStatus(event);
   const isLive = status === "open";
+  const approvalNotice = adminApprovalNoticeHtml(market);
   const closeLabel = isLive ? `Live override · closes ${fmtDate(event.closesAt)}` : fmtClose({ closesAt: event.closesAt, status: "closed" });
   return `
     <article class="admin-resolve-card" data-market-id="${esc(market.id)}">
@@ -6529,6 +6650,7 @@ function adminEventCard(group, event) {
           </div>
         </div>
         ${isLive ? `<div class="admin-live-note">Resolve now only if the result is already knowable. This closes trading immediately.</div>` : ""}
+        ${approvalNotice}
         <div class="admin-rules">
           ${richRulesHtml({ rules, source, edgeCases, compact: true })}
         </div>
@@ -6563,6 +6685,19 @@ function adminEventCard(group, event) {
           </div>` : ""}
       </div>
     </article>`;
+}
+
+function adminApprovalNoticeHtml(market) {
+  const attempts = Array.isArray(market.verificationAttempts) ? market.verificationAttempts : [];
+  const latest = [...attempts].reverse().find(item => item?.type === "manual_approval" && item.status && item.status !== "ready_to_resolve");
+  if (!latest) return "";
+  const cls = latest.status === "needs_review" ? "error" : "pending";
+  const missing = latest.missingResolvers?.length ? `Waiting on ${latest.missingResolvers.join(" + ")}.` : "Needs review before payout.";
+  return `
+    <div class="admin-approval-notice ${cls}">
+      <strong>${latest.status === "needs_review" ? "Approval conflict" : "Approval pending"}</strong>
+      <span>${esc(latest.outcomeTitle || "Outcome")} · ${esc(missing)}</span>
+    </div>`;
 }
 
 function adminEmptyHtml() {
@@ -8742,6 +8877,9 @@ function applyAuthSession(session, { renderNow = true } = {}) {
   if (renderNow) {
     normalizeSelection();
     render();
+    if (state.authUser && state.view === "bracket") {
+      void loadRemoteBracketEntry({ refresh: true });
+    }
   }
 }
 

@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS groups (
   name        text        NOT NULL,
   emoji       text        NOT NULL DEFAULT '📣',
   mode        text        NOT NULL DEFAULT 'fake',
+  created_by  text,
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
@@ -142,15 +143,44 @@ CREATE TABLE IF NOT EXISTS event_trades (
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 
+-- Submitted seasonal bracket entries. LocalStorage is only a draft cache;
+-- signed-in entries should persist here.
+CREATE TABLE IF NOT EXISTS bracket_entries (
+  id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  challenge_id text       NOT NULL,
+  participant  text       NOT NULL,
+  user_email   text,
+  picks        jsonb      NOT NULL DEFAULT '{}',
+  submitted_at timestamptz,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (challenge_id, participant)
+);
+
+-- Market settlement approvals. Founder + creator must agree before payout when
+-- they are different people.
+CREATE TABLE IF NOT EXISTS market_resolution_approvals (
+  id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_id   text       NOT NULL REFERENCES market_events(id) ON DELETE CASCADE,
+  outcome_id text       NOT NULL,
+  resolver   text       NOT NULL,
+  role       text       NOT NULL DEFAULT 'admin',
+  notes      text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (event_id, resolver)
+);
+
 ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_group_id text;
 ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_outcome_id text;
 ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_side text;
 ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_shares numeric;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS created_by text;
 
 -- Indexes for common lookups
 CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id);
 CREATE INDEX IF NOT EXISTS idx_group_invites_group ON group_invites(group_id);
 CREATE INDEX IF NOT EXISTS idx_group_invites_active ON group_invites(group_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_groups_created_by ON groups(created_by);
 CREATE INDEX IF NOT EXISTS idx_markets_group       ON markets(group_id);
 CREATE INDEX IF NOT EXISTS idx_trades_market       ON trades(market_id);
 CREATE INDEX IF NOT EXISTS idx_market_events_group ON market_events(group_id);
@@ -159,7 +189,8 @@ CREATE INDEX IF NOT EXISTS idx_market_outcomes_event ON market_outcomes(event_id
 CREATE INDEX IF NOT EXISTS idx_market_outcomes_legacy ON market_outcomes(legacy_market_id);
 CREATE INDEX IF NOT EXISTS idx_event_positions_event_participant ON event_positions(event_id, participant);
 CREATE INDEX IF NOT EXISTS idx_event_trades_event ON event_trades(event_id, created_at);
-
+CREATE INDEX IF NOT EXISTS idx_bracket_entries_challenge ON bracket_entries(challenge_id, submitted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_market_resolution_approvals_event ON market_resolution_approvals(event_id, created_at);
 ALTER TABLE market_events ADD COLUMN IF NOT EXISTS image_url text;
 ALTER TABLE market_events ADD COLUMN IF NOT EXISTS created_by text;
 ALTER TABLE market_events ADD COLUMN IF NOT EXISTS slug text;
@@ -186,6 +217,8 @@ ALTER TABLE market_events DISABLE ROW LEVEL SECURITY;
 ALTER TABLE market_outcomes DISABLE ROW LEVEL SECURITY;
 ALTER TABLE event_positions DISABLE ROW LEVEL SECURITY;
 ALTER TABLE event_trades DISABLE ROW LEVEL SECURITY;
+ALTER TABLE bracket_entries DISABLE ROW LEVEL SECURITY;
+ALTER TABLE market_resolution_approvals DISABLE ROW LEVEL SECURITY;
 
 -- Grant full access to the anon/publishable key role
 GRANT ALL ON groups        TO anon;
@@ -197,6 +230,8 @@ GRANT ALL ON market_events TO anon;
 GRANT ALL ON market_outcomes TO anon;
 GRANT ALL ON event_positions TO anon;
 GRANT ALL ON event_trades TO anon;
+GRANT ALL ON bracket_entries TO anon;
+GRANT ALL ON market_resolution_approvals TO anon;
 
 CREATE OR REPLACE FUNCTION probable_reprice_event(p_event_id text)
 RETURNS void

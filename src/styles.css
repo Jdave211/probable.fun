@@ -4306,6 +4306,32 @@ button { color: inherit; }
   place-items: center;
   font-size: 0.9rem;
 }
+.bracket-flag-token {
+  width: 24px;
+  min-width: 24px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.bracket-flag-token .outcome-flag {
+  width: 18px;
+  min-width: 18px;
+  height: 12px;
+  margin: 0;
+  border-radius: 2px;
+}
+.bracket-emoji-flag {
+  display: block;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  line-height: 1;
+  font-size: 0.94rem;
+}
 .bracket-mini-team strong {
   min-width: 0;
   overflow: hidden;
@@ -7581,5 +7607,438 @@ html {
   }
   .bracket-wide-grid {
     min-width: 1080px;
+  }
+}
+
+/* Progressive bracket UX: real picks get full weight, future rounds collapse into rails. */
+.bracket-progress-wide {
+  width: min(1120px, 100%);
+  margin: 0 auto 18px;
+}
+
+.bracket-wide-head small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-3);
+  font-size: 0.82rem;
+}
+
+.bracket-wide-grid {
+  grid-template-columns: 1.12fr 0.88fr 0.68fr 0.54fr 0.72fr 0.54fr 0.68fr 0.88fr 1.12fr;
+  gap: 14px;
+  align-items: center;
+}
+
+.bracket-wide-list,
+.bracket-wide-champ .bracket-wide-list {
+  min-height: 620px;
+  grid-template-rows: repeat(16, minmax(22px, 1fr));
+}
+
+.bracket-mini-match {
+  min-height: 72px;
+  isolation: isolate;
+}
+
+.bracket-mini-match.ready {
+  border-color: rgba(157, 171, 181, 0.18);
+  background: linear-gradient(180deg, rgba(20, 30, 36, 0.92), rgba(10, 16, 20, 0.9));
+}
+
+.bracket-mini-match.waiting {
+  min-height: 18px;
+  align-self: center;
+  grid-row: var(--bracket-row, auto) / span 1;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+  opacity: 0.42;
+}
+
+.bracket-mini-match.waiting::after {
+  opacity: 0.35;
+}
+
+.bracket-mini-rail {
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bracket-mini-rail span {
+  width: 100%;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(157, 171, 181, 0.42), transparent);
+}
+
+.bracket-mini-team {
+  position: relative;
+  min-height: 36px;
+  background: rgba(11, 17, 21, 0.72);
+  font-weight: 850;
+}
+
+.bracket-mini-team:hover:not(:disabled) {
+  background: rgba(18, 79, 143, 0.28);
+}
+
+.bracket-mini-team.active {
+  background: linear-gradient(90deg, rgba(20, 92, 168, 0.72), rgba(18, 79, 143, 0.42));
+  box-shadow: inset 4px 0 0 #2d9cff;
+  color: #f7fbff;
+}
+
+.bracket-mini-match.just-picked .bracket-mini-team.active::after,
+.bracket-matchup.just-picked .bracket-team.active::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+  transform: translateX(-120%);
+  animation: bracket-sweep 520ms ease-out forwards;
+}
+
+.bracket-matchup.waiting {
+  min-height: 74px;
+  display: grid;
+  place-items: center;
+  border-style: dashed;
+  background: rgba(10, 15, 18, 0.26);
+}
+
+.bracket-pick-slot.waiting {
+  opacity: 0.64;
+  background: transparent;
+}
+
+.bracket-final-list {
+  justify-content: center;
+}
+
+.bracket-final-list .bracket-mini-match.champion {
+  min-height: 66px;
+}
+
+@keyframes bracket-sweep {
+  to { transform: translateX(120%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bracket-mini-match.just-picked .bracket-mini-team.active::after,
+  .bracket-matchup.just-picked .bracket-team.active::after {
+    animation: none;
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .bracket-wide-scroll {
+    padding: 10px;
+    scroll-snap-type: x proximity;
+  }
+  .bracket-wide-grid {
+    min-width: 980px;
+    gap: 10px;
+  }
+  .bracket-wide-list,
+  .bracket-wide-champ .bracket-wide-list {
+    min-height: 560px;
+  }
+  .bracket-wide-head small {
+    display: none;
+  }
+}
+
+.admin-approval-notice {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(157, 171, 181, 0.16);
+  border-radius: 14px;
+  background: rgba(18, 24, 28, 0.68);
+  color: var(--text-2);
+  display: grid;
+  gap: 2px;
+}
+.admin-approval-notice strong {
+  color: var(--text);
+  font-size: 0.86rem;
+}
+.admin-approval-notice span {
+  color: var(--text-3);
+  font-size: 0.82rem;
+}
+.admin-approval-notice.pending {
+  border-color: rgba(45, 156, 255, 0.24);
+  background: rgba(18, 79, 143, 0.1);
+}
+.admin-approval-notice.error {
+  border-color: rgba(255, 84, 96, 0.26);
+  background: rgba(255, 84, 96, 0.08);
+}
+
+/* Bracket progressive grid v2. This intentionally overrides the older full-wall
+   bracket rules above: future rounds keep layout space but stop rendering cards
+   until their inputs exist. */
+.bracket-page {
+  width: min(1600px, calc(100vw - 48px));
+  margin-left: 50%;
+  transform: translateX(-50%);
+  gap: 18px;
+}
+
+.bracket-toolbar {
+  width: min(1280px, 100%);
+  grid-template-columns: minmax(0, 1fr) minmax(130px, auto) auto;
+  padding-top: 12px;
+}
+
+.bracket-view-toggle {
+  margin: 8px auto 10px;
+}
+
+.bracket-wide-preview {
+  padding-top: 12px;
+}
+
+.bracket-wide-head {
+  width: min(1480px, 100%);
+  margin-bottom: 10px;
+}
+
+.bracket-wide-head h2 {
+  font-size: clamp(1.18rem, 1.8vw, 1.62rem);
+}
+
+.bracket-wide-head small {
+  display: none;
+}
+
+.bracket-wide-scroll {
+  width: min(1480px, 100%);
+  padding: 18px 20px 22px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-color: rgba(157, 171, 181, 0.14);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(18, 79, 143, 0.08), transparent 42%),
+    linear-gradient(90deg, rgba(18, 79, 143, 0.06), transparent 18%, transparent 82%, rgba(18, 79, 143, 0.06)),
+    rgba(8, 12, 15, 0.34);
+}
+
+.bracket-wide-grid.bracket-progressive-grid {
+  width: 100%;
+  min-width: 1180px;
+  display: grid;
+  grid-template-columns: minmax(560px, 1fr) clamp(170px, 13vw, 230px) minmax(560px, 1fr);
+  gap: clamp(14px, 1.5vw, 24px);
+  align-items: center;
+}
+
+.bracket-side-tree {
+  display: grid;
+  gap: clamp(8px, 0.9vw, 14px);
+  min-height: 590px;
+  align-items: stretch;
+}
+
+.bracket-side-left {
+  grid-template-columns:
+    minmax(190px, 1.2fr)
+    minmax(140px, 0.9fr)
+    minmax(106px, 0.68fr)
+    minmax(84px, 0.54fr);
+}
+
+.bracket-side-right {
+  grid-template-columns:
+    minmax(84px, 0.54fr)
+    minmax(106px, 0.68fr)
+    minmax(140px, 0.9fr)
+    minmax(190px, 1.2fr);
+}
+
+.bracket-wide-round {
+  min-width: 0;
+}
+
+.bracket-wide-round header {
+  min-height: 18px;
+  align-items: center;
+  overflow: hidden;
+}
+
+.bracket-wide-round header span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bracket-wide-list,
+.bracket-wide-champ .bracket-wide-list {
+  min-height: 560px;
+  display: grid;
+  grid-template-rows: repeat(16, minmax(22px, 1fr));
+}
+
+.bracket-wide-round.stage-empty header {
+  visibility: hidden;
+}
+
+.bracket-wide-round.stage-empty .bracket-wide-list {
+  pointer-events: none;
+}
+
+.bracket-stage-rail {
+  grid-row: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.18;
+}
+
+.bracket-stage-rail span {
+  width: 1px;
+  height: 70%;
+  border-radius: 999px;
+  background: linear-gradient(180deg, transparent, rgba(157, 171, 181, 0.52), transparent);
+}
+
+.bracket-mini-match {
+  min-height: 62px;
+  border-radius: 15px;
+  transition: transform 180ms ease, min-height 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.bracket-mini-match.ready {
+  background:
+    linear-gradient(180deg, rgba(20, 30, 36, 0.94), rgba(9, 14, 17, 0.92));
+}
+
+.bracket-depth-1 .bracket-mini-match.ready {
+  min-height: 70px;
+  transform: scale(1.04);
+}
+
+.bracket-depth-2 .bracket-mini-match.ready {
+  min-height: 80px;
+  transform: scale(1.09);
+  border-color: rgba(45, 156, 255, 0.24);
+}
+
+.bracket-depth-3 .bracket-mini-match.ready {
+  min-height: 92px;
+  transform: scale(1.16);
+  border-color: rgba(45, 156, 255, 0.32);
+  box-shadow:
+    0 20px 42px rgba(0, 0, 0, 0.24),
+    0 0 0 1px rgba(45, 156, 255, 0.05);
+}
+
+.bracket-mini-match.picked {
+  border-color: rgba(45, 156, 255, 0.34);
+  box-shadow:
+    0 16px 34px rgba(0, 0, 0, 0.22),
+    0 0 26px rgba(18, 79, 143, 0.08);
+}
+
+.bracket-mini-team {
+  min-height: 31px;
+  gap: 8px;
+  padding: 6px 9px;
+}
+
+.bracket-depth-1 .bracket-mini-team {
+  min-height: 35px;
+}
+
+.bracket-depth-2 .bracket-mini-team {
+  min-height: 40px;
+}
+
+.bracket-depth-3 .bracket-mini-team {
+  min-height: 46px;
+}
+
+.bracket-mini-team strong {
+  font-size: clamp(0.72rem, 0.8vw, 0.86rem);
+}
+
+.bracket-side-left .bracket-wide-round:first-child .bracket-mini-team strong,
+.bracket-side-right .bracket-wide-round:last-child .bracket-mini-team strong {
+  font-size: clamp(0.82rem, 0.92vw, 0.98rem);
+}
+
+.bracket-depth-1 .bracket-mini-team strong {
+  font-size: clamp(0.78rem, 0.86vw, 0.95rem);
+}
+
+.bracket-depth-2 .bracket-mini-team strong {
+  font-size: clamp(0.86rem, 0.96vw, 1.05rem);
+}
+
+.bracket-depth-3 .bracket-mini-team strong {
+  font-size: clamp(0.95rem, 1.08vw, 1.16rem);
+}
+
+.bracket-final-column {
+  align-self: stretch;
+}
+
+.bracket-final-column header {
+  justify-content: center;
+  text-align: center;
+}
+
+.bracket-wide-champ .bracket-final-list {
+  min-height: 560px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+}
+
+.bracket-wide-champ .bracket-final-list .bracket-mini-match {
+  width: 100%;
+  grid-row: auto;
+}
+
+.bracket-wide-champ .bracket-final-list .bracket-mini-match.champion {
+  min-height: 96px;
+  transform: scale(1.08);
+}
+
+@media (min-width: 1500px) {
+  .bracket-wide-grid.bracket-progressive-grid {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .bracket-page {
+    width: calc(100vw - 20px);
+    margin-left: 50%;
+    transform: translateX(-50%);
+  }
+
+  .bracket-wide-scroll {
+    padding: 12px;
+  }
+
+  .bracket-wide-grid.bracket-progressive-grid {
+    min-width: 1080px;
+    grid-template-columns: 455px 160px 455px;
+  }
+
+  .bracket-side-tree,
+  .bracket-wide-list,
+  .bracket-wide-champ .bracket-wide-list,
+  .bracket-final-list {
+    min-height: 560px;
   }
 }

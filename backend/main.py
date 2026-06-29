@@ -42,6 +42,7 @@ class GroupCreate(BaseModel):
     emoji: str = Field(default="📣", max_length=4)
     members: list[str] = Field(min_length=1)
     mode: Literal["fake", "real"] = "fake"
+    createdBy: str | None = Field(default=None, max_length=80)
 
 
 class JoinGroup(BaseModel):
@@ -111,11 +112,19 @@ class ResolveMarket(BaseModel):
     outcome: str = Field(min_length=1, max_length=80)
     reasoning: str | None = Field(default=None, max_length=1200)
     resolvedBy: str | None = Field(default=None, max_length=80)
+    resolverAliases: list[str] | None = None
 
 
 class EliminateOutcome(BaseModel):
     reasoning: str | None = Field(default=None, max_length=1200)
     eliminatedBy: str | None = Field(default=None, max_length=80)
+
+
+class BracketEntrySave(BaseModel):
+    participant: str = Field(min_length=1, max_length=80)
+    userEmail: str | None = Field(default=None, max_length=240)
+    picks: dict[str, str] = Field(default_factory=dict)
+    submitted: bool = False
 
 
 class OracleVote(BaseModel):
@@ -655,6 +664,40 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def clean_person(value: str | None, fallback: str = "") -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())[:80]
+    return text or fallback
+
+
+def person_key(value: str | None) -> str:
+    return clean_person(value).casefold()
+
+
+def clean_bracket_picks(picks: dict[str, str] | None) -> dict[str, str]:
+    cleaned: dict[str, str] = {}
+    for key, value in (picks or {}).items():
+        clean_key = re.sub(r"[^a-zA-Z0-9_-]", "", str(key or ""))[:64]
+        clean_value = re.sub(r"\s+", " ", str(value or "").strip())[:80]
+        if clean_key and clean_value:
+            cleaned[clean_key] = clean_value
+    return cleaned
+
+
+def assemble_bracket_entry(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    return {
+        "id": row.get("id"),
+        "challengeId": row.get("challenge_id"),
+        "participant": row.get("participant"),
+        "userEmail": row.get("user_email"),
+        "picks": row.get("picks") or {},
+        "submittedAt": row.get("submitted_at"),
+        "createdAt": row.get("created_at"),
+        "updatedAt": row.get("updated_at"),
+    }
+
+
 def parse_iso_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -1059,6 +1102,7 @@ def assemble_group(g: dict) -> dict:
         "name":      g["name"],
         "emoji":     g["emoji"],
         "mode":      g["mode"],
+        "createdBy": g.get("created_by"),
         "createdAt": g["created_at"],
         "members":   [m["name"] for m in members_raw],
         "balances":  {m["name"]: m["balance"] for m in members_raw},
@@ -1084,7 +1128,7 @@ EVENT_SELECT_CONTEXT = (
     "market_outcomes(*),event_trades(*),event_positions(*)"
 )
 GROUPS_SELECT_COMPACT = (
-    "id,name,emoji,mode,created_at,"
+    "id,name,emoji,mode,created_by,created_at,"
     "group_members(*),"
     f"market_events({EVENT_SELECT_COMPACT}),"
     "markets(*)"
@@ -1137,7 +1181,7 @@ def load_market_context_group(market_id: str) -> dict:
     try:
         event, _route_outcome = require_event_or_outcome(market_id)
         group_id = event["group_id"]
-        group_rows = db.table("groups").select("id,name,emoji,mode,created_at,group_members(*)").eq("id", group_id).execute().data or []
+        group_rows = db.table("groups").select("id,name,emoji,mode,created_by,created_at,group_members(*)").eq("id", group_id).execute().data or []
         event_rows = db.table("market_events").select(EVENT_SELECT_CONTEXT).eq("id", event["id"]).execute().data or []
         if not group_rows or not event_rows:
             raise HTTPException(404, "Market group not found")
@@ -1152,7 +1196,7 @@ def load_market_context_group(market_id: str) -> dict:
         if not legacy_rows:
             raise
         group_id = legacy_rows[0]["group_id"]
-        group_rows = db.table("groups").select("id,name,emoji,mode,created_at,group_members(*)").eq("id", group_id).execute().data or []
+        group_rows = db.table("groups").select("id,name,emoji,mode,created_by,created_at,group_members(*)").eq("id", group_id).execute().data or []
         if not group_rows:
             raise HTTPException(404, "Market group not found")
         group = deepcopy(group_rows[0])
@@ -2128,6 +2172,145 @@ def resolve_event_market_all_outcomes(
     }
 
 
+def group_founder_for_event(db, event: dict) -> str:
+    group_rows = db.table("groups").select("created_by").eq("id", event["group_id"]).limit(1).execute().data or []
+    founder = clean_person(group_rows[0].get("created_by") if group_rows else None)
+    if founder:
+        return founder
+    members = (
+        db.table("group_members")
+        .select("name")
+        .eq("group_id", event["group_id"])
+        .order("joined_at")
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return clean_person(members[0].get("name") if members else None, clean_person(event.get("created_by"), "manual"))
+
+
+def event_admins(db, event: dict) -> list[str]:
+    founder = group_founder_for_event(db, event)
+    creator = clean_person(event.get("created_by"), founder)
+    admins: list[str] = []
+    seen: set[str] = set()
+    for person in [founder, creator]:
+        key = person_key(person)
+        if person and key not in seen:
+            admins.append(person)
+            seen.add(key)
+    return admins or ["manual"]
+
+
+def approval_role(resolver: str, founder: str, creator: str) -> str:
+    key = person_key(resolver)
+    founder_key = person_key(founder)
+    creator_key = person_key(creator)
+    if key and key == founder_key and key == creator_key:
+        return "founder_creator"
+    if key and key == founder_key:
+        return "founder"
+    if key and key == creator_key:
+        return "creator"
+    return "admin"
+
+
+def append_event_verification_attempt(db, event: dict, attempt: dict) -> None:
+    attempts = event.get("verification_attempts") or []
+    if not isinstance(attempts, list):
+        attempts = []
+    attempts.append(attempt)
+    db.table("market_events").update({
+        "verification_attempts": attempts[-20:],
+        "verification_status": attempt.get("status") or "approval_pending",
+    }).eq("id", event["id"]).execute()
+    event["verification_attempts"] = attempts[-20:]
+    event["verification_status"] = attempt.get("status") or "approval_pending"
+
+
+def record_resolution_approval(
+    db,
+    event: dict,
+    *,
+    outcome_id: str,
+    outcome_title: str,
+    resolver: str,
+    resolver_aliases: list[str] | None = None,
+    notes: str | None = None,
+) -> dict:
+    resolver_clean = clean_person(resolver, "manual")
+    founder = group_founder_for_event(db, event)
+    creator = clean_person(event.get("created_by"), founder)
+    admins = event_admins(db, event)
+    admin_keys = {person_key(item) for item in admins}
+    resolver_keys = {person_key(resolver_clean)}
+    resolver_keys.update(person_key(alias) for alias in (resolver_aliases or []) if clean_person(alias))
+    matched_admin = next((admin for admin in admins if person_key(admin) in resolver_keys), "")
+    if not matched_admin:
+        raise HTTPException(403, "Only the group founder or market creator can resolve this market.")
+
+    role = approval_role(matched_admin, founder, creator)
+    note = (notes or "").strip()[:1200] or None
+    db.table("market_resolution_approvals").upsert({
+        "event_id": event["id"],
+        "outcome_id": outcome_id,
+        "resolver": matched_admin,
+        "role": role,
+        "notes": note,
+    }, on_conflict="event_id,resolver").execute()
+
+    rows = (
+        db.table("market_resolution_approvals")
+        .select("*")
+        .eq("event_id", event["id"])
+        .execute()
+        .data
+        or []
+    )
+    relevant = [row for row in rows if person_key(row.get("resolver")) in admin_keys]
+    approval_by_key = {person_key(row.get("resolver")): row for row in relevant}
+    missing = [person for person in admins if person_key(person) not in approval_by_key]
+    approved_outcomes = {str(row.get("outcome_id") or "") for row in relevant if str(row.get("outcome_id") or "")}
+    ready = not missing and len(approved_outcomes) == 1 and outcome_id in approved_outcomes
+    mismatch = len(approved_outcomes) > 1
+    status = "ready_to_resolve" if ready else "needs_review" if mismatch else "approval_pending"
+    approval = {
+        "eventId": event["id"],
+        "outcomeId": outcome_id,
+        "outcomeTitle": outcome_title,
+        "resolver": resolver_clean,
+        "approver": matched_admin,
+        "role": role,
+        "status": status,
+        "requiredResolvers": admins,
+        "missingResolvers": missing,
+        "approvals": [
+            {
+                "resolver": row.get("resolver"),
+                "role": row.get("role"),
+                "outcomeId": row.get("outcome_id"),
+                "notes": row.get("notes"),
+                "createdAt": row.get("created_at"),
+            }
+            for row in relevant
+        ],
+    }
+    append_event_verification_attempt(db, event, {
+        "type": "manual_approval",
+        "status": status,
+        "outcomeId": outcome_id,
+        "outcomeTitle": outcome_title,
+        "resolvedBy": resolver_clean,
+        "approver": matched_admin,
+        "notes": note,
+        "createdAt": now_iso(),
+        "requiredResolvers": admins,
+        "missingResolvers": missing,
+    })
+    return approval
+
+
 def eliminate_event_outcome(
     db,
     event: dict,
@@ -2302,12 +2485,22 @@ def create_group(payload: GroupCreate) -> dict:
         raise HTTPException(400, "At least one member is required")
 
     group_id = create_id()
-    db.table("groups").insert({
+    founder = (payload.createdBy or cleaned[0]).strip()[:80] or cleaned[0]
+    group_row = {
         "id":    group_id,
         "name":  payload.name.strip(),
         "emoji": payload.emoji.strip() or "📣",
         "mode":  payload.mode,
-    }).execute()
+        "created_by": founder,
+    }
+    try:
+        db.table("groups").insert(group_row).execute()
+    except Exception:
+        # Older live databases may not have groups.created_by until the migration
+        # is applied. Creation should still work; admin hardening uses the first
+        # member as founder fallback in that case.
+        group_row.pop("created_by", None)
+        db.table("groups").insert(group_row).execute()
 
     db.table("group_members").insert([
         {"group_id": group_id, "name": m, "balance": DEFAULT_FAKE_BALANCE}
@@ -2315,6 +2508,64 @@ def create_group(payload: GroupCreate) -> dict:
     ]).execute()
 
     return groups_response(groupId=group_id)
+
+
+@app.get("/api/brackets/{challenge_id}/entry")
+def get_bracket_entry(challenge_id: str, participant: str) -> dict:
+    db = get_db()
+    clean_challenge = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id)[:80]
+    clean_participant = clean_person(participant)
+    if not clean_challenge or not clean_participant:
+        raise HTTPException(400, "Bracket entry identity is missing")
+    rows = (
+        db.table("bracket_entries")
+        .select("*")
+        .eq("challenge_id", clean_challenge)
+        .eq("participant", clean_participant)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return {"entry": assemble_bracket_entry(rows[0] if rows else None)}
+
+
+@app.post("/api/brackets/{challenge_id}/entry", status_code=201)
+def save_bracket_entry(challenge_id: str, payload: BracketEntrySave) -> dict:
+    db = get_db()
+    clean_challenge = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id)[:80]
+    participant = clean_person(payload.participant)
+    if not clean_challenge or not participant:
+        raise HTTPException(400, "Bracket entry identity is missing")
+    row = {
+        "challenge_id": clean_challenge,
+        "participant": participant,
+        "user_email": clean_person(payload.userEmail, "") or None,
+        "picks": clean_bracket_picks(payload.picks),
+        "submitted_at": now_iso() if payload.submitted else None,
+        "updated_at": now_iso(),
+    }
+    result = (
+        db.table("bracket_entries")
+        .upsert(row, on_conflict="challenge_id,participant")
+        .execute()
+    )
+    saved = None
+    if result.data:
+        saved = result.data[0]
+    else:
+        saved_rows = (
+            db.table("bracket_entries")
+            .select("*")
+            .eq("challenge_id", clean_challenge)
+            .eq("participant", participant)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        saved = saved_rows[0] if saved_rows else row
+    return {"entry": assemble_bracket_entry(saved)}
 
 
 @app.post("/api/groups/{group_id}/join")
@@ -3068,13 +3319,24 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
             if event["status"] == "open":
                 db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
                 event["status"] = "closed"
+            approval = record_resolution_approval(
+                db,
+                event,
+                outcome_id=ALL_OUTCOMES_RESOLUTION,
+                outcome_title="Draw / all outcomes correct",
+                resolver=resolver,
+                resolver_aliases=payload.resolverAliases,
+                notes=note,
+            )
+            if approval["status"] != "ready_to_resolve":
+                return groups_response(resolutionApproval=approval)
             settlement = resolve_event_market_all_outcomes(
                 db,
                 event,
                 resolved_by=resolver,
                 notes=note,
             )
-            return groups_response(settlement=settlement)
+            return groups_response(settlement=settlement, resolutionApproval=approval)
 
         outcome = (
             next((item for item in outcomes if item["id"] == payload.outcome), None)
@@ -3094,6 +3356,18 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
             # Manual admin override: if an outcome is already knowable before
             # maturity, close trading immediately and let the settlement RPC pay.
             db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
+            event["status"] = "closed"
+        approval = record_resolution_approval(
+            db,
+            event,
+            outcome_id=outcome["id"],
+            outcome_title=outcome["title"],
+            resolver=resolver,
+            resolver_aliases=payload.resolverAliases,
+            notes=note,
+        )
+        if approval["status"] != "ready_to_resolve":
+            return groups_response(resolutionApproval=approval)
         settlement = resolve_event_market_rpc(
             db,
             event["id"],
@@ -3101,7 +3375,7 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
             resolved_by=resolver,
             notes=note,
         )
-        return groups_response(settlement=settlement)
+        return groups_response(settlement=settlement, resolutionApproval=approval)
     except HTTPException as exc:
         if exc.status_code != 404:
             raise
