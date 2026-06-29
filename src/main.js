@@ -6036,8 +6036,8 @@ function bracketRounds() {
   ];
   const qf = [
     bracketMatchup("m97", () => bracketWinner("m89"), () => bracketWinner("m90")),
-    bracketMatchup("m98", () => bracketWinner("m91"), () => bracketWinner("m92")),
-    bracketMatchup("m99", () => bracketWinner("m93"), () => bracketWinner("m94")),
+    bracketMatchup("m98", () => bracketWinner("m93"), () => bracketWinner("m94")),
+    bracketMatchup("m99", () => bracketWinner("m91"), () => bracketWinner("m92")),
     bracketMatchup("m100", () => bracketWinner("m95"), () => bracketWinner("m96")),
   ];
   const sf = [
