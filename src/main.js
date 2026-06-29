@@ -1258,33 +1258,37 @@ async function onGlobalClick(e) {
 
   const bracketViewBtn = e.target.closest("[data-bracket-view]");
   if (bracketViewBtn) {
+    e.preventDefault();
     state.bracketView = bracketViewBtn.dataset.bracketView === "table" ? "table" : "grid";
-    render();
+    refreshBracketChallenge();
     return;
   }
 
   const bracketPickBtn = e.target.closest("[data-bracket-pick]");
   if (bracketPickBtn) {
+    e.preventDefault();
     const matchupId = bracketPickBtn.dataset.bracketPick;
     const team = bracketPickBtn.dataset.team;
     pickBracketTeam(matchupId, team);
-    render();
+    refreshBracketChallenge();
     return;
   }
 
   const bracketNavBtn = e.target.closest("[data-bracket-round-nav]");
   if (bracketNavBtn) {
+    e.preventDefault();
     moveBracketRound(Number(bracketNavBtn.dataset.bracketRoundNav || 0));
-    render();
+    refreshBracketChallenge();
     return;
   }
 
   if (e.target.closest("[data-reset-bracket]")) {
+    e.preventDefault();
     state.bracketPicks = {};
     state.bracketSubmitted = false;
     state.bracketRoundIndex = 0;
     persistBracketEntry({ submitted: false });
-    render();
+    refreshBracketChallenge();
     toast("Bracket reset.");
     return;
   }
@@ -6110,8 +6114,25 @@ function submitBracketEntry() {
   }
   sessionStorage.removeItem("probable_pending_bracket");
   persistBracketEntry({ submitted: true });
-  render();
+  refreshBracketChallenge();
   toast(`Bracket submitted for the ${BRACKET_CHALLENGE.prize} prize.`);
+}
+
+function refreshBracketChallenge({ preserveScroll = true } = {}) {
+  if (state.view !== "bracket") {
+    render();
+    return;
+  }
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+  const wideScroll = document.querySelector(".bracket-wide-scroll")?.scrollLeft ?? 0;
+  renderBracketChallenge();
+  if (!preserveScroll) return;
+  requestAnimationFrame(() => {
+    window.scrollTo(scrollX, scrollY);
+    const nextWide = document.querySelector(".bracket-wide-scroll");
+    if (nextWide) nextWide.scrollLeft = wideScroll;
+  });
 }
 
 function teamFlag(team) {
@@ -6246,14 +6267,17 @@ function bracketRoundShellHtml(rounds, champion) {
   `;
 }
 
-function bracketMiniCellHtml(matchup) {
+function bracketMiniCellHtml(matchup, options = {}) {
   const winner = bracketWinner(matchup.id);
   const teams = matchup.teams.length
     ? [...matchup.teams, ...Array(Math.max(0, 2 - matchup.teams.length)).fill("")]
     : ["", ""];
   const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
+  const row = typeof options === "object" && Number.isFinite(Number(options.row))
+    ? ` style="--bracket-row:${Number(options.row)}"`
+    : "";
   return `
-    <article class="bracket-mini-match ${winner ? "picked" : ""} ${locked ? "locked" : ""}">
+    <article class="bracket-mini-match ${winner ? "picked" : ""} ${locked ? "locked" : ""}"${row}>
       ${teams.slice(0, 2).map(team => team ? `
         <button class="bracket-mini-team ${winner === team ? "active" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
           ${teamFlagHtml(team)}
@@ -6267,6 +6291,13 @@ function bracketMiniCellHtml(matchup) {
       `).join("")}
     </article>
   `;
+}
+
+function bracketGridRowForMatch(matchCount, index) {
+  if (matchCount >= 8) return index * 2 + 1;
+  if (matchCount === 4) return index * 4 + 2;
+  if (matchCount === 2) return index * 8 + 4;
+  return 8;
 }
 
 function bracketSideStages(rounds, side) {
@@ -6283,13 +6314,15 @@ function bracketSideStages(rounds, side) {
 function bracketWideStageHtml(stage, side) {
   const picked = stage.matchups.filter(matchup => Boolean(bracketWinner(matchup.id))).length;
   return `
-    <section class="bracket-wide-round bracket-wide-${side}" style="--match-count:${stage.matchups.length}">
+    <section class="bracket-wide-round bracket-wide-${side}" style="--match-count:${stage.matchups.length}" data-match-count="${stage.matchups.length}">
       <header>
         <span>${esc(stage.round.name)}</span>
         <em>${picked}/${stage.matchups.length}</em>
       </header>
       <div class="bracket-wide-list">
-        ${stage.matchups.map(bracketMiniCellHtml).join("")}
+        ${stage.matchups.map((matchup, index) => bracketMiniCellHtml(matchup, {
+          row: bracketGridRowForMatch(stage.matchups.length, index),
+        })).join("")}
       </div>
     </section>
   `;
@@ -6316,8 +6349,8 @@ function bracketWideGridHtml(rounds, champion) {
               <em>${bracketWinner("final") ? "1/1" : "0/1"}</em>
             </header>
             <div class="bracket-wide-list">
-              ${bracketMiniCellHtml(rounds[4].matchups[0])}
-              <article class="bracket-mini-match champion">
+              ${bracketMiniCellHtml(rounds[4].matchups[0], { row: 7 })}
+              <article class="bracket-mini-match champion" style="--bracket-row:9">
                 ${champion ? `
                   <div class="bracket-mini-team active champion">
                     ${teamFlagHtml(champion)}

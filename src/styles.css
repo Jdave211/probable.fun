@@ -4179,7 +4179,7 @@ button { color: inherit; }
   min-width: 1260px;
   display: grid;
   grid-template-columns: 1.22fr 1fr 0.82fr 0.68fr 0.82fr 0.68fr 0.82fr 1fr 1.22fr;
-  gap: 10px;
+  gap: 12px;
   align-items: stretch;
 }
 .bracket-wide-round {
@@ -4203,27 +4203,31 @@ button { color: inherit; }
   font-style: normal;
 }
 .bracket-wide-list {
-  min-height: calc(var(--match-count) * 42px);
-  display: flex;
-  flex-direction: column;
-  justify-content: space-around;
-  gap: 8px;
+  min-height: 700px;
+  display: grid;
+  grid-template-rows: repeat(16, minmax(28px, 1fr));
+  gap: 0;
+  align-items: stretch;
 }
 .bracket-mini-match {
   position: relative;
   display: grid;
-  gap: 2px;
+  grid-row: var(--bracket-row, auto) / span 2;
+  align-self: center;
+  gap: 0;
   border: 1px solid rgba(157, 171, 181, 0.12);
-  border-radius: 12px;
-  background: rgba(18, 24, 28, 0.72);
-  padding: 3px;
+  border-radius: 16px;
+  background: rgba(18, 24, 28, 0.78);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.16);
+  overflow: hidden;
+  padding: 0;
 }
 .bracket-mini-match::after {
   content: "";
   position: absolute;
   top: 50%;
-  right: -15px;
-  width: 14px;
+  right: -13px;
+  width: 12px;
   border-top: 1px solid rgba(157, 171, 181, 0.18);
 }
 .bracket-wide-right .bracket-mini-match::after {
@@ -4242,8 +4246,7 @@ button { color: inherit; }
   color: #dfe8ef;
 }
 .bracket-wide-champ .bracket-wide-list {
-  min-height: 100%;
-  justify-content: center;
+  min-height: 700px;
   gap: 12px;
 }
 .bracket-wide-champ .bracket-mini-match {
@@ -4262,22 +4265,29 @@ button { color: inherit; }
 }
 .bracket-mini-team {
   width: 100%;
-  min-height: 22px;
+  min-height: 34px;
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 9px;
   border: 0;
-  border-radius: 8px;
-  background: rgba(10, 15, 18, 0.35);
+  border-radius: 0;
+  background: rgba(10, 15, 18, 0.2);
   color: var(--text-2);
-  padding: 3px 6px;
+  padding: 7px 10px;
   cursor: pointer;
   text-align: left;
+  transition: background 140ms ease, color 140ms ease, opacity 140ms ease;
+}
+.bracket-mini-team + .bracket-mini-team {
+  border-top: 1px solid rgba(157, 171, 181, 0.12);
 }
 .bracket-mini-team:hover:not(:disabled),
 .bracket-mini-team.active {
-  background: rgba(18, 79, 143, 0.24);
+  background: rgba(18, 79, 143, 0.36);
   color: var(--text);
+}
+.bracket-mini-team.active {
+  box-shadow: inset 3px 0 0 #169bff;
 }
 .bracket-mini-team:disabled {
   cursor: default;
@@ -4288,20 +4298,21 @@ button { color: inherit; }
 }
 .bracket-mini-team span,
 .bracket-mini-team .outcome-flag {
-  width: 16px;
-  min-width: 16px;
-  height: 11px;
+  width: 22px;
+  min-width: 22px;
+  height: 15px;
   margin-right: 0;
   display: grid;
   place-items: center;
-  font-size: 0.8rem;
+  font-size: 0.9rem;
 }
 .bracket-mini-team strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.66rem;
+  font-size: 0.78rem;
+  letter-spacing: -0.01em;
 }
 .bracket-mini-team.champion {
   min-height: 54px;
