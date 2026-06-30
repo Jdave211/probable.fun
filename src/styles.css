@@ -9467,8 +9467,8 @@ html {
 
 .bracket-svg-team.user-pick rect,
 .bracket-svg-team.active.user-pick rect {
-  fill: rgba(18, 79, 143, 0.56);
-  stroke: rgba(45, 156, 255, 0.76);
+  fill: rgba(18, 79, 143, 0.56) !important;
+  stroke: rgba(45, 156, 255, 0.76) !important;
   filter: drop-shadow(0 0 10px rgba(45, 156, 255, 0.16));
 }
 
@@ -9483,8 +9483,8 @@ html {
 
 .bracket-svg-team.correct-pick rect,
 .bracket-svg-team.active.correct-pick.preset rect {
-  fill: rgba(21, 111, 76, 0.78);
-  stroke: rgba(53, 196, 111, 0.74);
+  fill: rgba(21, 111, 76, 0.78) !important;
+  stroke: rgba(53, 196, 111, 0.74) !important;
   filter: drop-shadow(0 0 10px rgba(53, 196, 111, 0.16));
 }
 
@@ -9508,8 +9508,8 @@ html {
 .bracket-svg-team.official-loser rect,
 .bracket-svg-team.locked-loser rect,
 .bracket-svg-team.active.auto-advance.preset rect {
-  fill: rgba(100, 116, 139, 0.22);
-  stroke: rgba(148, 163, 184, 0.56);
+  fill: rgba(100, 116, 139, 0.22) !important;
+  stroke: rgba(148, 163, 184, 0.56) !important;
   filter: none;
 }
 
@@ -9538,8 +9538,8 @@ html {
 
 .bracket-svg-team.wrong-pick rect,
 .bracket-svg-team.dead-pick rect {
-  fill: rgba(239, 68, 68, 0.14);
-  stroke: rgba(239, 68, 68, 0.36);
+  fill: rgba(239, 68, 68, 0.14) !important;
+  stroke: rgba(239, 68, 68, 0.36) !important;
   filter: none;
 }
 
