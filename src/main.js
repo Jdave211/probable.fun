@@ -3599,7 +3599,7 @@ function pickReusableGroup() {
     const saved = state.groups.find(group => group.id === savedGroupId);
     if (saved && groupHasCurrentMember(saved)) return saved;
   }
-  return state.groups.find(group => isPbMyMarketsGroup(group) && groupHasCurrentMember(group))
+  return state.groups.find(group => groupHasCurrentMember(group) && !isPbMyMarketsGroup(group))
     ?? state.groups.find(groupHasCurrentMember)
     ?? null;
 }
@@ -3992,7 +3992,7 @@ function visibleNavGroups() {
   if (state.shell !== "app" || !isLoggedIn()) return [];
   const activeId = state.currentGroupId;
   const byLabel = new Map();
-  state.groups.filter(groupHasCurrentMember).forEach(group => {
+  state.groups.filter(group => groupHasCurrentMember(group) && !isPbMyMarketsGroup(group)).forEach(group => {
     const key = `${String(group.emoji || "").trim().toLowerCase()}::${String(group.name || "").trim().toLowerCase()}`;
     const current = byLabel.get(key);
     if (!current || group.id === activeId) byLabel.set(key, group);
@@ -9514,10 +9514,22 @@ function ammPreview(poolYes, poolNo, side, amount) {
 }
 
 function setGroups(groups, { persist = true } = {}) {
-  state.groups = groups ?? [];
+  state.groups = reconcileGroups(groups ?? []);
   tradeQuoteCache.clear();
   tradeQuoteInflight.clear();
   if (persist) persistBootCache();
+}
+
+function reconcileGroups(incomingGroups) {
+  const incoming = Array.isArray(incomingGroups) ? incomingGroups.filter(Boolean) : [];
+  const byId = new Map(incoming.map(group => [group.id, group]));
+  for (const existing of state.groups ?? []) {
+    if (!existing?.id || byId.has(existing.id)) continue;
+    if (existing.id === state.currentGroupId || groupHasCurrentMember(existing)) {
+      byId.set(existing.id, existing);
+    }
+  }
+  return [...byId.values()];
 }
 
 function upsertGroup(group) {
@@ -9663,7 +9675,15 @@ function normalizeSelection() {
   if (state.currentGroupId && !state.groups.some(g => g.id === state.currentGroupId)) {
     state.currentGroupId = null;
   }
-  const group = getCurrentGroup();
+  let group = getCurrentGroup();
+  if (group && isPbMyMarketsGroup(group)) {
+    const replacement = state.groups.find(item => item.id !== group.id && groupHasCurrentMember(item) && !isPbMyMarketsGroup(item));
+    if (replacement) {
+      state.currentGroupId = replacement.id;
+      localStorage.setItem(STORAGE_KEYS.groupId, replacement.id);
+      group = replacement;
+    }
+  }
   if (group) {
     const resolved = memberAliasForGroup(group);
     if (resolved && resolved !== state.activeMember) {
