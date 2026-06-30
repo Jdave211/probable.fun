@@ -6866,7 +6866,7 @@ function bracketMatchupHtml(matchup, index = 0) {
       ` : ""}
       ${locked ? `<span class="bracket-match-tag">Final: ${esc(winner)} advanced</span>` : ""}
       ${waiting ? "" : teams.map(team => team ? `
-        <button class="bracket-team ${winner === team ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && winner === team ? "preset" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
+        <button class="bracket-team ${winner === team ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && !bracketUserPick(matchup.id) && winner === team ? "preset" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
           <span class="bracket-team-main">
             ${teamFlagHtml(team)}
             <strong>${esc(team)}</strong>
@@ -6948,7 +6948,7 @@ function bracketMiniCellHtml(matchup, options = {}) {
   return `
     <article class="bracket-mini-match ready ${compact ? "compact" : ""} ${winner ? "picked" : ""} ${locked ? "locked" : ""} ${state.bracketLastPickedId === matchup.id ? "just-picked" : ""}" data-matchup-id="${esc(matchup.id)}"${row}>
       ${teams.slice(0, 2).map(team => team ? `
-        <button class="bracket-mini-team ${winner === team ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && winner === team ? "preset" : ""} ${locked && winner !== team ? "locked-loser" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" aria-label="${esc(team)}" title="${esc(team)}" ${locked ? "disabled" : ""}>
+        <button class="bracket-mini-team ${winner === team ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && !bracketUserPick(matchup.id) && winner === team ? "preset" : ""} ${locked && winner !== team ? "locked-loser" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" aria-label="${esc(team)}" title="${esc(team)}" ${locked ? "disabled" : ""}>
           ${teamFlagHtml(team)}
           ${compact ? `<strong class="sr-only">${esc(team)}</strong>` : `<strong>${esc(team)}</strong>`}
         </button>
@@ -7026,7 +7026,7 @@ function bracketSvgTeamRow(matchup, team, x, y, width, height, active, compact =
   const label = compact && width < 130 ? team.slice(0, 3).toUpperCase() : team;
   const data = BRACKET_LOCKED_WINNERS[matchup.id] ? "" : `data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}"`;
   return `
-    <g class="bracket-svg-team ${active ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && active ? "preset" : ""} ${locked && !active ? "locked-loser" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
+    <g class="bracket-svg-team ${active ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && !bracketUserPick(matchup.id) && active ? "preset" : ""} ${locked && !active ? "locked-loser" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
       <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" />
       ${flag}
       <text class="bracket-svg-team-name" x="${x + 40}" y="${y + height / 2 + 4}">${esc(label)}</text>
@@ -7224,7 +7224,7 @@ function bracketMobileSvgHtml(rounds, champion) {
     const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
     const data = locked ? "" : `data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}"`;
     return `
-      <g class="bracket-svg-team bracket-mobile-flag-row ${active ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && active ? "preset" : ""} ${locked && !active ? "locked-loser" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
+      <g class="bracket-svg-team bracket-mobile-flag-row ${active ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && !bracketUserPick(matchup.id) && active ? "preset" : ""} ${locked && !active ? "locked-loser" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
         <title>${esc(team)}</title>
         <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" />
         ${flag}
