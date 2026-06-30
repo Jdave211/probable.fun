@@ -1439,7 +1439,7 @@ async function onGlobalClick(e) {
   if (groupBtn) {
     const gid = groupBtn.dataset.groupId;
     if (gid === "__new") {
-      if (requireLogin("general-pool")) openGeneralMarketPoolModal();
+      if (requireLogin("add-menu")) openGeneralMarketStartModal();
       return;
     }
     if (gid === "__leaderboard") {
@@ -1471,6 +1471,17 @@ async function onGlobalClick(e) {
     if (!requireLogin("create-group")) return;
     closeModal("generalMarket");
     openModal("group");
+    return;
+  }
+
+  if (e.target.closest("[data-show-general-market-pool]")) {
+    if (!requireLogin("general-pool")) return;
+    renderGeneralMarketPoolModal();
+    return;
+  }
+
+  if (e.target.closest("[data-add-menu-back]")) {
+    renderGeneralMarketStartModal();
     return;
   }
 
@@ -4031,9 +4042,45 @@ function openGeneralMarketPoolModal() {
   openModal("generalMarket");
 }
 
+function openGeneralMarketStartModal() {
+  renderGeneralMarketStartModal();
+  openModal("generalMarket");
+}
+
+function renderGeneralMarketStartModal() {
+  const group = getCurrentGroup();
+  const groupLabel = group ? `${group.emoji || ""} ${group.name}`.trim() : "your group";
+  dom.generalMarketModalOverlay.querySelector(".modal-title").textContent = "Add";
+  dom.generalMarketModalBody.innerHTML = `
+    <div class="general-market-intro">
+      <p class="eyebrow">Add to ${esc(groupLabel)}</p>
+      <h2>What are we adding?</h2>
+      <p>Start a custom market, add a shared market, or create another group.</p>
+    </div>
+    <div class="general-market-choice-grid">
+      <button class="general-market-choice" type="button" data-new-market>
+        <span aria-hidden="true">✦</span>
+        <strong>Custom market</strong>
+        <em>Write your own question.</em>
+      </button>
+      <button class="general-market-choice" type="button" data-show-general-market-pool>
+        <span aria-hidden="true">🏆</span>
+        <strong>General markets</strong>
+        <em>Bracket and shared contests.</em>
+      </button>
+      <button class="general-market-choice" type="button" data-create-group>
+        <span aria-hidden="true">＋</span>
+        <strong>New group</strong>
+        <em>Spin up a new room.</em>
+      </button>
+    </div>
+  `;
+}
+
 function renderGeneralMarketPoolModal() {
   const group = getCurrentGroup();
   const groupLabel = group ? `${group.emoji || ""} ${group.name}`.trim() : "your group";
+  dom.generalMarketModalOverlay.querySelector(".modal-title").textContent = "General markets";
   dom.generalMarketModalBody.innerHTML = `
     <div class="general-market-intro">
       <p class="eyebrow">Reusable markets</p>
@@ -4044,6 +4091,7 @@ function renderGeneralMarketPoolModal() {
       ${GENERAL_MARKET_POOL.map(item => generalMarketPoolRow(item, group)).join("")}
     </div>
     <div class="general-market-footer">
+      <button class="btn btn-ghost" type="button" data-add-menu-back>Back</button>
       <button class="btn btn-ghost" type="button" data-create-group>Create new group</button>
       <button class="btn btn-ghost" type="button" data-new-market>Custom market</button>
     </div>
