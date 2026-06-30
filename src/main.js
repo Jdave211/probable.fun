@@ -393,7 +393,7 @@ const BRACKET_CHALLENGE = {
   matchups: [
     { id: "m73", matchNo: 73, teams: ["South Africa", "Canada"], winner: "Canada", completed: true },
     { id: "m74", matchNo: 74, teams: ["Germany", "Paraguay"], winner: "Paraguay", completed: true },
-    { id: "m75", matchNo: 75, teams: ["Netherlands", "Morocco"] },
+    { id: "m75", matchNo: 75, teams: ["Netherlands", "Morocco"], winner: "Morocco", completed: true },
     { id: "m76", matchNo: 76, teams: ["Brazil", "Japan"], winner: "Brazil", completed: true },
     { id: "m77", matchNo: 77, teams: ["France", "Sweden"] },
     { id: "m78", matchNo: 78, teams: ["Ivory Coast", "Norway"] },
