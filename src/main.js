@@ -7599,12 +7599,14 @@ function portfolioSnapshot() {
       const owner = positionOwnerForGroup(group);
       const open = positionRowsForGroup(group, "open", owner);
       const closed = positionRowsForGroup(group, "closed", owner);
-      const cash = owner ? Number(group.balances?.[owner] ?? DEFAULT_BALANCE) : 0;
       const markValue = owner ? currentMarkValue(group, owner) : 0;
       const cashOutValue = owner ? currentPositionValue(group, owner) : 0;
       const activity = owner ? portfolioActivityForGroup(group, owner) : [];
+      const rawCash = owner ? Number(group.balances?.[owner] ?? DEFAULT_BALANCE) : 0;
+      const hasLedgerActivity = activity.some(item => item.action !== "resolved") || markValue > 0.0001 || cashOutValue > 0.0001 || open.length || closed.length;
+      const cash = owner ? (hasLedgerActivity ? rawCash : DEFAULT_BALANCE) : 0;
       const cashFlow = owner ? portfolioCashFlowForGroup(group, owner) : { buys: 0, sells: 0, payouts: 0 };
-      const startingValue = owner ? inferredGroupStartingValue(cash, cashFlow) : 0;
+      const startingValue = owner ? DEFAULT_BALANCE : 0;
       return { group, owner, open, closed, cash, markValue, cashOutValue, activity, cashFlow, startingValue };
     })
     .filter(item => item.owner || item.open.length || item.closed.length || item.activity.length);
@@ -7697,6 +7699,37 @@ function inferredGroupStartingValue(cash, flow) {
 
 function tradeCashAmount(trade) {
   return Math.abs(Number(trade?.amount ?? trade?.cashAmount ?? 0));
+}
+
+function participantTradeRowsForGroup(group, participant) {
+  const rows = [];
+  const seenEvents = new Set();
+  for (const market of group.markets ?? []) {
+    if (market.eventId && Array.isArray(market.outcomes)) {
+      if (seenEvents.has(market.eventId)) continue;
+      seenEvents.add(market.eventId);
+      for (const trade of market.eventTrades ?? []) {
+        if (trade.participant !== participant) continue;
+        rows.push({
+          ...trade,
+          amount: tradeCashAmount(trade),
+          action: trade.action || "buy",
+          market,
+        });
+      }
+      continue;
+    }
+    for (const trade of market.trades ?? []) {
+      if (trade.participant !== participant) continue;
+      rows.push({
+        ...trade,
+        amount: tradeCashAmount(trade),
+        action: trade.action || "buy",
+        market,
+      });
+    }
+  }
+  return rows;
 }
 
 function portfolioActivityForGroup(group, participant) {
@@ -8662,18 +8695,15 @@ function leaderboardChart(entries) {
 
 function leaderboardEntries(group) {
   return (group.members ?? []).map(name => {
-    const cash = Number(group.balances?.[name] ?? DEFAULT_BALANCE);
-    const cashFlow = portfolioCashFlowForGroup(group, name);
-    const startingValue = inferredGroupStartingValue(cash, cashFlow);
-    const trades = (group.markets ?? []).flatMap(market =>
-      (market.trades ?? [])
-        .filter(t => t.participant === name)
-        .map(trade => ({ ...trade, market }))
-    );
-    const volume = trades.reduce((sum, t) => sum + Math.abs(Number(t.amount || 0)), 0);
-    const deployed = trades.reduce((sum, t) => sum + (isBuyTrade(t) ? Math.abs(Number(t.amount || 0)) : 0), 0);
+    const rawCash = Number(group.balances?.[name] ?? DEFAULT_BALANCE);
+    const startingValue = DEFAULT_BALANCE;
+    const trades = participantTradeRowsForGroup(group, name);
+    const volume = trades.reduce((sum, t) => sum + tradeCashAmount(t), 0);
+    const deployed = trades.reduce((sum, t) => sum + (isBuyTrade(t) ? tradeCashAmount(t) : 0), 0);
     const markValue = currentMarkValue(group, name);
     const cashOutValue = currentPositionValue(group, name);
+    const hasLedgerActivity = trades.length > 0 || markValue > 0.0001 || cashOutValue > 0.0001;
+    const cash = hasLedgerActivity ? rawCash : DEFAULT_BALANCE;
     const positionValue = markValue;
     const bal = cash + markValue;
     const cashOutPortfolio = cash + cashOutValue;
