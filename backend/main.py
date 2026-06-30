@@ -2652,12 +2652,12 @@ def bracket_card_payload(challenge_id: str, request: Request | None = None) -> d
 
 
 BRACKET_BASE_MATCHUPS = [
-    {"id": "m73", "teams": ["South Africa", "Canada"], "winner": "South Africa", "completed": True},
-    {"id": "m74", "teams": ["Germany", "Paraguay"], "winner": "Germany", "completed": True},
+    {"id": "m73", "teams": ["South Africa", "Canada"], "winner": "Canada", "completed": True},
+    {"id": "m74", "teams": ["Germany", "Paraguay"], "winner": "Paraguay", "completed": True},
     {"id": "m75", "teams": ["Netherlands", "Morocco"], "winner": "Morocco", "completed": True},
     {"id": "m76", "teams": ["Brazil", "Japan"], "winner": "Brazil", "completed": True},
     {"id": "m77", "teams": ["France", "Sweden"]},
-    {"id": "m78", "teams": ["Ivory Coast", "Norway"]},
+    {"id": "m78", "teams": ["Ivory Coast", "Norway"], "winner": "Norway", "completed": True},
     {"id": "m79", "teams": ["Mexico", "Ecuador"]},
     {"id": "m80", "teams": ["England", "DR Congo"]},
     {"id": "m81", "teams": ["USA", "Bosnia and Herzegovina"]},

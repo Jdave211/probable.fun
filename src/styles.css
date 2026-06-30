@@ -9454,3 +9454,67 @@ html {
     box-shadow: 0 0 0 4px rgba(45, 156, 255, 0.16) !important;
   }
 }
+
+/* Bracket result colors:
+   blue = user's pending pick, green = official advance, red/grey = officially out. */
+.bracket-team.user-pick,
+.bracket-mini-team.user-pick {
+  background: rgba(18, 79, 143, 0.36);
+  box-shadow: inset 3px 0 0 #169bff;
+  color: var(--text);
+}
+
+.bracket-svg-team.user-pick rect,
+.bracket-svg-team.active:not(.official-winner):not(.official-loser) rect {
+  fill: rgba(18, 79, 143, 0.56);
+  stroke: rgba(45, 156, 255, 0.76);
+  filter: drop-shadow(0 0 10px rgba(45, 156, 255, 0.16));
+}
+
+.bracket-team.official-winner,
+.bracket-mini-team.official-winner,
+.bracket-team.active.official-winner.preset,
+.bracket-mini-team.active.official-winner.preset {
+  background: linear-gradient(90deg, rgba(21, 111, 76, 0.82), rgba(20, 96, 70, 0.54));
+  box-shadow: inset 3px 0 0 #35c46f;
+  color: #ecfff5;
+}
+
+.bracket-svg-team.official-winner rect,
+.bracket-svg-team.active.official-winner.preset rect {
+  fill: rgba(21, 111, 76, 0.78);
+  stroke: rgba(53, 196, 111, 0.74);
+  filter: drop-shadow(0 0 10px rgba(53, 196, 111, 0.16));
+}
+
+.bracket-svg-team.official-winner .bracket-svg-team-name {
+  fill: #ecfff5;
+}
+
+.bracket-team.official-loser,
+.bracket-mini-team.official-loser,
+.bracket-mini-team.locked-loser {
+  background: rgba(239, 68, 68, 0.12);
+  box-shadow: inset 3px 0 0 rgba(239, 68, 68, 0.6);
+  color: #ff9aa2;
+  opacity: 0.78;
+  filter: grayscale(0.22);
+}
+
+.bracket-svg-team.official-loser,
+.bracket-svg-team.locked-loser {
+  cursor: default;
+  opacity: 0.78;
+}
+
+.bracket-svg-team.official-loser rect,
+.bracket-svg-team.locked-loser rect {
+  fill: rgba(239, 68, 68, 0.14);
+  stroke: rgba(239, 68, 68, 0.36);
+  filter: none;
+}
+
+.bracket-svg-team.official-loser .bracket-svg-team-name,
+.bracket-svg-team.locked-loser .bracket-svg-team-name {
+  fill: #a8757b;
+}

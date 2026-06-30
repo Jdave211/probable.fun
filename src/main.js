@@ -391,12 +391,12 @@ const BRACKET_CHALLENGE = {
   title: "World Cup Bracket Challenge",
   subtitle: "Free to enter. Submit the cleanest knockout bracket from the Round of 32 onward.",
   matchups: [
-    { id: "m73", matchNo: 73, teams: ["South Africa", "Canada"], winner: "South Africa", completed: true },
-    { id: "m74", matchNo: 74, teams: ["Germany", "Paraguay"], winner: "Germany", completed: true },
+    { id: "m73", matchNo: 73, teams: ["South Africa", "Canada"], winner: "Canada", completed: true },
+    { id: "m74", matchNo: 74, teams: ["Germany", "Paraguay"], winner: "Paraguay", completed: true },
     { id: "m75", matchNo: 75, teams: ["Netherlands", "Morocco"], winner: "Morocco", completed: true },
     { id: "m76", matchNo: 76, teams: ["Brazil", "Japan"], winner: "Brazil", completed: true },
     { id: "m77", matchNo: 77, teams: ["France", "Sweden"] },
-    { id: "m78", matchNo: 78, teams: ["Ivory Coast", "Norway"] },
+    { id: "m78", matchNo: 78, teams: ["Ivory Coast", "Norway"], winner: "Norway", completed: true },
     { id: "m79", matchNo: 79, teams: ["Mexico", "Ecuador"] },
     { id: "m80", matchNo: 80, teams: ["England", "DR Congo"] },
     { id: "m81", matchNo: 81, teams: ["USA", "Bosnia and Herzegovina"] },
@@ -6554,6 +6554,18 @@ function bracketWinner(id) {
   return BRACKET_LOCKED_WINNERS[id] || state.bracketPicks[id] || "";
 }
 
+function bracketOfficialWinner(id) {
+  return BRACKET_LOCKED_WINNERS[id] || "";
+}
+
+function bracketTeamStatusClass(matchup, team) {
+  const officialWinner = bracketOfficialWinner(matchup?.id);
+  if (officialWinner) {
+    return team === officialWinner ? "official-winner" : "official-loser";
+  }
+  return bracketWinner(matchup?.id) === team ? "user-pick" : "";
+}
+
 function bracketMatchup(id, sourceA, sourceB) {
   const teams = [
     typeof sourceA === "function" ? sourceA() : sourceA,
@@ -6824,7 +6836,7 @@ function bracketMatchupHtml(matchup, index = 0) {
       ` : ""}
       ${locked ? `<span class="bracket-match-tag">Final: ${esc(winner)} advanced</span>` : ""}
       ${waiting ? "" : teams.map(team => team ? `
-        <button class="bracket-team ${winner === team ? "active" : ""} ${locked && winner === team ? "preset" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
+        <button class="bracket-team ${winner === team ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && winner === team ? "preset" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
           <span class="bracket-team-main">
             ${teamFlagHtml(team)}
             <strong>${esc(team)}</strong>
@@ -6906,7 +6918,7 @@ function bracketMiniCellHtml(matchup, options = {}) {
   return `
     <article class="bracket-mini-match ready ${compact ? "compact" : ""} ${winner ? "picked" : ""} ${locked ? "locked" : ""} ${state.bracketLastPickedId === matchup.id ? "just-picked" : ""}" data-matchup-id="${esc(matchup.id)}"${row}>
       ${teams.slice(0, 2).map(team => team ? `
-        <button class="bracket-mini-team ${winner === team ? "active" : ""} ${locked && winner === team ? "preset" : ""} ${locked && winner !== team ? "locked-loser" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" aria-label="${esc(team)}" title="${esc(team)}" ${locked ? "disabled" : ""}>
+        <button class="bracket-mini-team ${winner === team ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && winner === team ? "preset" : ""} ${locked && winner !== team ? "locked-loser" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" aria-label="${esc(team)}" title="${esc(team)}" ${locked ? "disabled" : ""}>
           ${teamFlagHtml(team)}
           ${compact ? `<strong class="sr-only">${esc(team)}</strong>` : `<strong>${esc(team)}</strong>`}
         </button>
@@ -6984,7 +6996,7 @@ function bracketSvgTeamRow(matchup, team, x, y, width, height, active, compact =
   const label = compact && width < 130 ? team.slice(0, 3).toUpperCase() : team;
   const data = BRACKET_LOCKED_WINNERS[matchup.id] ? "" : `data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}"`;
   return `
-    <g class="bracket-svg-team ${active ? "active" : ""} ${locked && active ? "preset" : ""} ${locked && !active ? "locked-loser" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
+    <g class="bracket-svg-team ${active ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && active ? "preset" : ""} ${locked && !active ? "locked-loser" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
       <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" />
       ${flag}
       <text class="bracket-svg-team-name" x="${x + 40}" y="${y + height / 2 + 4}">${esc(label)}</text>
@@ -7182,7 +7194,7 @@ function bracketMobileSvgHtml(rounds, champion) {
     const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
     const data = locked ? "" : `data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}"`;
     return `
-      <g class="bracket-svg-team bracket-mobile-flag-row ${active ? "active" : ""} ${locked && active ? "preset" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
+      <g class="bracket-svg-team bracket-mobile-flag-row ${active ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && active ? "preset" : ""} ${locked && !active ? "locked-loser" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
         <title>${esc(team)}</title>
         <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" />
         ${flag}
