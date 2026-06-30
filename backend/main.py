@@ -2819,6 +2819,7 @@ def bracket_render_payload(
     return {}, "World Cup Bracket", "TBD"
 
 
+@app.head("/api/brackets/{challenge_id}/share-card.png")
 @app.get("/api/brackets/{challenge_id}/share-card.png")
 def bracket_share_card_png(
     challenge_id: str,
@@ -3118,11 +3119,13 @@ def bracket_share_card_png(
     return Response(output.getvalue(), media_type="image/png")
 
 
+@app.head("/b/{entry_id}", response_class=HTMLResponse)
 @app.get("/b/{entry_id}", response_class=HTMLResponse)
 def short_bracket_open_graph_page(request: Request, entry_id: str) -> str:
     return bracket_open_graph_page(request=request, entry=entry_id)
 
 
+@app.head("/bracket", response_class=HTMLResponse)
 @app.get("/bracket", response_class=HTMLResponse)
 def bracket_open_graph_page(
     request: Request,
@@ -3574,11 +3577,13 @@ def market_share_card_svg(market_id: str, request: Request) -> Response:
     return Response(svg, media_type="image/svg+xml")
 
 
+@app.head("/api/markets/{market_id}/share-card")
 @app.get("/api/markets/{market_id}/share-card")
 def market_share_card(market_id: str, request: Request) -> Response:
     return market_share_card_svg(market_id, request)
 
 
+@app.head("/api/markets/{market_id}/share-card.png")
 @app.get("/api/markets/{market_id}/share-card.png")
 def market_share_card_png(market_id: str, request: Request) -> Response:
     try:

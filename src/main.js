@@ -3034,7 +3034,7 @@ function bracketShareCardUrl({ sample = false, preview = false } = {}) {
   if (participant && participant !== "Guest") params.set("participant", participant);
   if (sample) params.set("sample", "1");
   const query = params.toString();
-  const base = preview ? apiOriginForAssets() : shareBaseUrl();
+  const base = preview ? shareAssetBaseUrl() : shareBaseUrl();
   return `${base}/api/brackets/${encodeURIComponent(BRACKET_CHALLENGE.id)}/share-card.png${query ? `?${query}` : ""}`;
 }
 
@@ -3064,6 +3064,12 @@ function sharePageBaseUrl() {
   const configuredApp = import.meta.env.VITE_PUBLIC_APP_BASE_URL;
   if (configuredApp) return configuredApp.replace(/\/$/, "");
   return location.origin.replace(/\/$/, "");
+}
+
+function shareAssetBaseUrl() {
+  const configuredApp = import.meta.env.VITE_PUBLIC_APP_BASE_URL;
+  if (configuredApp) return configuredApp.replace(/\/$/, "");
+  return apiOriginForAssets();
 }
 
 function apiOriginForAssets() {
