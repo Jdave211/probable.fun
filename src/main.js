@@ -391,8 +391,8 @@ const BRACKET_CHALLENGE = {
   title: "World Cup Bracket Challenge",
   subtitle: "Free to enter. Submit the cleanest knockout bracket from the Round of 32 onward.",
   matchups: [
-    { id: "m73", matchNo: 73, teams: ["South Africa", "Canada"], winner: "Canada", completed: true },
-    { id: "m74", matchNo: 74, teams: ["Germany", "Paraguay"], winner: "Paraguay", completed: true },
+    { id: "m73", matchNo: 73, teams: ["South Africa", "Canada"], winner: "South Africa", completed: true },
+    { id: "m74", matchNo: 74, teams: ["Germany", "Paraguay"], winner: "Germany", completed: true },
     { id: "m75", matchNo: 75, teams: ["Netherlands", "Morocco"], winner: "Morocco", completed: true },
     { id: "m76", matchNo: 76, teams: ["Brazil", "Japan"], winner: "Brazil", completed: true },
     { id: "m77", matchNo: 77, teams: ["France", "Sweden"] },
@@ -6472,6 +6472,9 @@ async function loadRemoteBracketEntry({ refresh = false } = {}) {
 }
 
 async function saveBracketEntry({ submitted = state.bracketSubmitted, silent = true } = {}) {
+  if (state.bracketSubmitted && !submitted) {
+    return loadBracketEntry();
+  }
   const local = persistBracketEntry({ submitted });
   if (!isLoggedIn()) return local;
   state.bracketSaving = true;
