@@ -989,6 +989,11 @@ function routeFromLocation() {
   if (parts[0] === "admin") return { name: "admin" };
   if (parts[0] === "portfolio") return { name: "positions" };
   if (parts[0] === "positions") return { name: "positions", legacyPath: "/portfolio" };
+  if (parts[0] === "b" && parts[1]) return {
+    name: "bracket",
+    entry: parts[1],
+    legacyPath: `/bracket?entry=${encodeURIComponent(parts[1])}`,
+  };
   if (parts[0] === "bracket") return {
     name: "bracket",
     entry: url.searchParams.get("entry") || "",
@@ -3022,7 +3027,7 @@ function marketUrl(marketId) {
 
 function bracketShareUrl() {
   if (state.bracketEntryId) {
-    return `${sharePageBaseUrl()}/b/${encodeURIComponent(state.bracketEntryId)}`;
+    return `${sharePageBaseUrl()}/bracket?entry=${encodeURIComponent(state.bracketEntryId)}`;
   }
   return `${sharePageBaseUrl()}/bracket`;
 }

@@ -7842,20 +7842,20 @@ html {
 }
 
 .bracket-mini-team:hover:not(:disabled) {
-  background: rgba(18, 79, 143, 0.28);
+  background: rgba(24, 111, 76, 0.28);
 }
 
 .bracket-mini-team.active {
-  background: linear-gradient(90deg, rgba(20, 92, 168, 0.72), rgba(18, 79, 143, 0.42));
-  box-shadow: inset 4px 0 0 #2d9cff;
-  color: #f7fbff;
+  background: linear-gradient(90deg, rgba(24, 111, 76, 0.72), rgba(15, 29, 23, 0.42));
+  box-shadow: inset 4px 0 0 #35c46f;
+  color: #f3fff7;
 }
 
 .bracket-mini-team.active.preset,
 .bracket-team.active.preset {
-  background: linear-gradient(90deg, rgba(87, 99, 108, 0.54), rgba(20, 27, 32, 0.58));
-  box-shadow: inset 4px 0 0 #87939d;
-  color: #dce4ea;
+  background: linear-gradient(90deg, rgba(24, 111, 76, 0.44), rgba(15, 29, 23, 0.58));
+  box-shadow: inset 4px 0 0 #35c46f;
+  color: #e8f7ef;
 }
 
 .bracket-mini-match.just-picked .bracket-mini-team.active::after,
@@ -8433,7 +8433,7 @@ html {
 }
 
 .bracket-mini-match.waiting.has-pending {
-  border-color: rgba(45, 156, 255, 0.16);
+  border-color: rgba(157, 171, 181, 0.18);
 }
 
 .bracket-mini-match.waiting.compact .bracket-mini-team.placeholder {
@@ -8445,7 +8445,7 @@ html {
   min-width: 10px;
   height: 10px;
   border-radius: 999px;
-  background: rgba(45, 156, 255, 0.42);
+  background: rgba(157, 171, 181, 0.42);
   color: transparent;
 }
 
@@ -8950,22 +8950,22 @@ html {
 
 .bracket-svg-team:hover rect,
 .bracket-svg-team.active rect {
-  fill: rgba(18, 79, 143, 0.78);
-  stroke: rgba(45, 156, 255, 0.72);
+  fill: rgba(24, 111, 76, 0.78);
+  stroke: rgba(53, 196, 111, 0.72);
 }
 
 .bracket-svg-team.active rect {
-  filter: drop-shadow(0 0 10px rgba(22, 155, 255, 0.18));
+  filter: drop-shadow(0 0 10px rgba(53, 196, 111, 0.18));
 }
 
 .bracket-svg-team.active.preset rect {
-  fill: rgba(78, 89, 98, 0.62);
-  stroke: rgba(143, 155, 166, 0.62);
+  fill: rgba(24, 111, 76, 0.56);
+  stroke: rgba(53, 196, 111, 0.6);
   filter: none;
 }
 
 .bracket-svg-team.active.preset .bracket-svg-team-name {
-  fill: #d9e1e7;
+  fill: #e7f5ed;
 }
 
 .bracket-svg-team.locked-loser {
@@ -8974,8 +8974,8 @@ html {
 }
 
 .bracket-svg-team.locked-loser rect {
-  fill: rgba(43, 51, 58, 0.34);
-  stroke: rgba(143, 155, 166, 0.16);
+  fill: rgba(239, 68, 68, 0.18);
+  stroke: rgba(239, 68, 68, 0.34);
 }
 
 .bracket-svg-team.empty {
@@ -9295,9 +9295,11 @@ html {
 }
 
 .bracket-mini-team.locked-loser {
-  opacity: 0.42;
+  opacity: 0.8;
   cursor: default;
-  filter: grayscale(0.45);
+  color: #ff8a92;
+  background: rgba(239, 68, 68, 0.12);
+  filter: grayscale(0.12);
 }
 
 .bracket-mini-team.locked-loser:hover {
