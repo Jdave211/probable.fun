@@ -2762,12 +2762,45 @@ def bracket_locked_winners() -> dict[str, str]:
     }
 
 
-def bracket_winner(matchup_id: str, picks: dict[str, str]) -> str | None:
-    locked = bracket_locked_winners()
-    if matchup_id in locked:
-        return locked[matchup_id]
+def bracket_official_winner(matchup_id: str) -> str | None:
+    return bracket_locked_winners().get(matchup_id)
+
+
+def bracket_user_pick(matchup_id: str, picks: dict[str, str]) -> str | None:
     value = clean_person((picks or {}).get(matchup_id))
     return value or None
+
+
+def bracket_winner(matchup_id: str, picks: dict[str, str]) -> str | None:
+    return bracket_user_pick(matchup_id, picks) or bracket_official_winner(matchup_id)
+
+
+def bracket_eliminated_teams() -> set[str]:
+    eliminated: set[str] = set()
+    for item in BRACKET_BASE_MATCHUPS:
+        winner = item.get("winner") if item.get("completed") else None
+        if not winner:
+            continue
+        for team in item.get("teams") or []:
+            if team and team != winner:
+                eliminated.add(team)
+    return eliminated
+
+
+def bracket_team_status(matchup_id: str, team: str, picks: dict[str, str]) -> str:
+    official = bracket_official_winner(matchup_id)
+    user_pick = bracket_user_pick(matchup_id, picks)
+    if official:
+        if user_pick and user_pick == team:
+            return "correct" if team == official else "wrong"
+        if not user_pick and team == official:
+            return "auto"
+        return "official_loser"
+    if team in bracket_eliminated_teams():
+        return "dead"
+    if user_pick == team:
+        return "user"
+    return ""
 
 
 def bracket_matchup_teams(matchup_id: str, picks: dict[str, str]) -> list[str]:
@@ -2981,6 +3014,9 @@ def bracket_share_card_png(
     card_stroke = "#1f4153"
     selected_bg = "#104b82"
     locked_bg = "#37434b"
+    correct_bg = "#156f4c"
+    wrong_bg = "#5a2028"
+    auto_bg = "#303a43"
     text = "#eef5fb"
     muted = "#8e9ca7"
 
@@ -3009,7 +3045,6 @@ def bracket_share_card_png(
     def draw_matchup(matchup_id: str, x: int, cy: int, width: int, side: str, compact: bool = False, record: bool = True) -> None:
         teams = bracket_matchup_teams(matchup_id, picks)
         winner = bracket_winner(matchup_id, picks)
-        locked = matchup_id in bracket_locked_winners()
         height = 54 if not compact else 44
         y = int(cy - height / 2)
         centers[matchup_id] = (x + width // 2, cy)
@@ -3024,17 +3059,35 @@ def bracket_share_card_png(
         for idx, team in enumerate(teams[:2]):
             row_top = y + int(idx * row_h)
             active = bool(winner and winner == team)
+            status = bracket_team_status(matchup_id, team, picks)
             if active:
-                fill = locked_bg if locked else selected_bg
+                fill = selected_bg
+                stripe = "#159cff"
+                if status == "correct":
+                    fill = correct_bg
+                    stripe = "#35c46f"
+                elif status in {"wrong", "dead"}:
+                    fill = wrong_bg
+                    stripe = "#ff5d6c"
+                elif status == "auto":
+                    fill = auto_bg
+                    stripe = "#9aa7af"
                 draw.rounded_rectangle((x + 1, row_top + 1, x + width - 1, row_top + int(row_h) - 1), radius=10 if idx in (0, 1) else 4, fill=fill)
-                draw.rectangle((x + 1, row_top + 4, x + 5, row_top + int(row_h) - 4), fill="#159cff" if not locked else "#9aa7af")
+                draw.rectangle((x + 1, row_top + 4, x + 5, row_top + int(row_h) - 4), fill=stripe)
+            elif status in {"wrong", "dead"}:
+                draw.rounded_rectangle((x + 1, row_top + 1, x + width - 1, row_top + int(row_h) - 1), radius=10 if idx in (0, 1) else 4, fill="#171116")
             badge_w = 31 if compact else 36
             badge_h = 17 if compact else 18
             badge_x = x + 12
             badge_y = row_top + (5 if not compact else 4)
-            draw_flag_badge(team, badge_x, badge_y, badge_w, badge_h, dim=locked and not active)
+            draw_flag_badge(team, badge_x, badge_y, badge_w, badge_h, dim=status in {"official_loser", "wrong", "dead"})
             team_label = fit_text(draw, team if not compact else team_code(team), compact_font if compact else name_font, width - badge_w - 32)
-            draw.text((badge_x + badge_w + 10, row_top + (4 if not compact else 3)), team_label, fill=text if active else muted, font=compact_font if compact else name_font)
+            label_fill = text if active else muted
+            if status in {"wrong", "dead"}:
+                label_fill = "#a8757b"
+            elif status in {"auto", "official_loser"}:
+                label_fill = "#c4ced7"
+            draw.text((badge_x + badge_w + 10, row_top + (4 if not compact else 3)), team_label, fill=label_fill, font=compact_font if compact else name_font)
 
     def edge(matchup_id: str, side: str) -> tuple[int, int]:
         x, y = centers[matchup_id]

@@ -6550,20 +6550,51 @@ async function saveBracketEntry({ submitted = state.bracketSubmitted, silent = t
   }
 }
 
-function bracketWinner(id) {
-  return BRACKET_LOCKED_WINNERS[id] || state.bracketPicks[id] || "";
-}
-
 function bracketOfficialWinner(id) {
   return BRACKET_LOCKED_WINNERS[id] || "";
 }
 
-function bracketTeamStatusClass(matchup, team) {
-  const officialWinner = bracketOfficialWinner(matchup?.id);
-  if (officialWinner) {
-    return team === officialWinner ? "official-winner" : "official-loser";
+function bracketUserPick(id) {
+  return state.bracketPicks?.[id] || "";
+}
+
+function predictedWinner(id) {
+  return bracketUserPick(id) || bracketOfficialWinner(id) || "";
+}
+
+function displayWinner(id) {
+  return predictedWinner(id);
+}
+
+function bracketWinner(id) {
+  return displayWinner(id);
+}
+
+function bracketEliminatedTeams() {
+  const eliminated = new Set();
+  for (const matchup of BRACKET_CHALLENGE.matchups) {
+    const winner = bracketOfficialWinner(matchup.id);
+    if (!winner) continue;
+    for (const team of matchup.teams || []) {
+      if (team && team !== winner) eliminated.add(team);
+    }
   }
-  return bracketWinner(matchup?.id) === team ? "user-pick" : "";
+  return eliminated;
+}
+
+function bracketTeamStatusClass(matchup, team) {
+  if (!matchup?.id || !team) return "";
+  const officialWinner = bracketOfficialWinner(matchup.id);
+  const userPick = bracketUserPick(matchup.id);
+  if (officialWinner) {
+    if (userPick && userPick === team) {
+      return team === officialWinner ? "correct-pick" : "wrong-pick";
+    }
+    if (!userPick && team === officialWinner) return "auto-advance";
+    return team === officialWinner ? "auto-advance" : "official-loser";
+  }
+  if (bracketEliminatedTeams().has(team)) return "dead-pick";
+  return userPick === team ? "user-pick" : "";
 }
 
 function bracketMatchup(id, sourceA, sourceB) {
@@ -6613,14 +6644,13 @@ function normalizeBracketPicks() {
   for (const round of bracketRounds()) {
     for (const matchup of round.matchups) {
       validIds.add(matchup.id);
-      const picked = bracketWinner(matchup.id);
-      if (picked && !matchup.teams.includes(picked)) {
-        delete state.bracketPicks[matchup.id];
-      }
     }
   }
   for (const id of Object.keys(state.bracketPicks)) {
     if (!validIds.has(id)) delete state.bracketPicks[id];
+    if (!state.bracketSubmitted && BRACKET_LOCKED_WINNERS[id]) {
+      delete state.bracketPicks[id];
+    }
   }
 }
 
