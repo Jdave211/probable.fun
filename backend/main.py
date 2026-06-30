@@ -7,12 +7,14 @@ import io
 import math
 import os
 import re
+import threading
+import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote_plus, urlparse, urlunparse
 from uuid import uuid4
 
 import httpx
@@ -711,22 +713,40 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
-def close_expired_markets(db) -> None:
-    now = datetime.now(timezone.utc)
-    r = db.table("markets").select("id, closes_at").eq("status", "open").execute()
-    for market in r.data or []:
-        closes_at = parse_iso_datetime(market.get("closes_at"))
-        if closes_at and closes_at <= now:
-            db.table("markets").update({"status": "closed"}).eq("id", market["id"]).execute()
+_last_close_expired_at = 0.0
+_close_expired_lock = threading.Lock()
+CLOSE_EXPIRED_INTERVAL_SECONDS = int(os.environ.get("CLOSE_EXPIRED_INTERVAL_SECONDS", "60"))
 
-    try:
-        er = db.table("market_events").select("id, closes_at").eq("status", "open").execute()
-    except Exception:
+
+def close_expired_markets(db, *, force: bool = False) -> None:
+    global _last_close_expired_at
+    monotonic_now = time.monotonic()
+    if not force and monotonic_now - _last_close_expired_at < CLOSE_EXPIRED_INTERVAL_SECONDS:
         return
-    for event in er.data or []:
-        closes_at = parse_iso_datetime(event.get("closes_at"))
-        if closes_at and closes_at <= now:
-            db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
+    if not _close_expired_lock.acquire(blocking=False):
+        return
+    try:
+        if not force and monotonic_now - _last_close_expired_at < CLOSE_EXPIRED_INTERVAL_SECONDS:
+            return
+        _last_close_expired_at = monotonic_now
+
+        now = datetime.now(timezone.utc)
+        r = db.table("markets").select("id, closes_at").eq("status", "open").execute()
+        for market in r.data or []:
+            closes_at = parse_iso_datetime(market.get("closes_at"))
+            if closes_at and closes_at <= now:
+                db.table("markets").update({"status": "closed"}).eq("id", market["id"]).execute()
+
+        try:
+            er = db.table("market_events").select("id, closes_at").eq("status", "open").execute()
+        except Exception:
+            return
+        for event in er.data or []:
+            closes_at = parse_iso_datetime(event.get("closes_at"))
+            if closes_at and closes_at <= now:
+                db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
+    finally:
+        _close_expired_lock.release()
 
 
 # ── Supabase client ────────────────────────────────────────────────────
@@ -2384,12 +2404,16 @@ def eliminate_event_outcome(
 
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
-    try:
-        db = get_db()
-        close_expired_markets(db)
-        migrate_legacy_events(db)
-    except Exception as exc:
-        print(f"Startup warning: {exc}")
+    def run_boot_maintenance() -> None:
+        try:
+            db = get_db()
+            close_expired_markets(db, force=True)
+            if os.environ.get("RUN_LEGACY_MIGRATION_ON_BOOT", "").lower() in {"1", "true", "yes"}:
+                migrate_legacy_events(db)
+        except Exception as exc:
+            print(f"Startup maintenance warning: {exc}")
+
+    threading.Thread(target=run_boot_maintenance, daemon=True).start()
     yield
 
 
@@ -2435,7 +2459,8 @@ def list_groups(compact: bool = True, limit: int | None = None, include: str | N
 @app.get("/api/markets/{market_id}/context")
 def get_market_context(market_id: str) -> dict:
     group = load_market_context_group(market_id)
-    return {"group": group, "groups": [group]}
+    groups = groups_response(compact=True, limit=20, include=group["id"]).get("groups", [])
+    return {"group": group, "groups": groups}
 
 
 @app.get("/api/markets/{market_id}/image")
@@ -2511,9 +2536,11 @@ def create_group(payload: GroupCreate) -> dict:
 
 
 @app.get("/api/brackets/{challenge_id}/entry")
-def get_bracket_entry(challenge_id: str, participant: str) -> dict:
+def get_bracket_entry(challenge_id: str, participant: str | None = None, entry: str | None = None) -> dict:
     db = get_db()
     clean_challenge = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id)[:80]
+    if entry:
+        return {"entry": get_bracket_entry_by_id(clean_challenge, entry)}
     clean_participant = clean_person(participant)
     if not clean_challenge or not clean_participant:
         raise HTTPException(400, "Bracket entry identity is missing")
@@ -2537,11 +2564,28 @@ def save_bracket_entry(challenge_id: str, payload: BracketEntrySave) -> dict:
     participant = clean_person(payload.participant)
     if not clean_challenge or not participant:
         raise HTTPException(400, "Bracket entry identity is missing")
+    cleaned_picks = clean_bracket_picks(payload.picks)
+    existing_rows = (
+        db.table("bracket_entries")
+        .select("*")
+        .eq("challenge_id", clean_challenge)
+        .eq("participant", participant)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing_rows and existing_rows[0].get("submitted_at"):
+        existing_entry = assemble_bracket_entry(existing_rows[0])
+        existing_picks = clean_bracket_picks(existing_entry.get("picks") if existing_entry else {})
+        if existing_picks != cleaned_picks or not payload.submitted:
+            raise HTTPException(409, "Bracket already submitted and locked.")
+        return {"entry": existing_entry}
     row = {
         "challenge_id": clean_challenge,
         "participant": participant,
         "user_email": clean_person(payload.userEmail, "") or None,
-        "picks": clean_bracket_picks(payload.picks),
+        "picks": cleaned_picks,
         "submitted_at": now_iso() if payload.submitted else None,
         "updated_at": now_iso(),
     }
@@ -2570,7 +2614,7 @@ def save_bracket_entry(challenge_id: str, payload: BracketEntrySave) -> dict:
 
 BRACKET_CHALLENGE_META = {
     "id": "wc26-bracket-r32",
-    "prize": "$100",
+    "prize": "up to $500",
     "title": "World Cup Bracket Challenge",
     "subtitle": "Free to enter. Submit the cleanest knockout bracket from the Round of 32 onward.",
 }
@@ -2598,7 +2642,7 @@ def bracket_card_payload(challenge_id: str, request: Request | None = None) -> d
     entries = bracket_entry_count(challenge_id)
     joined = f"{entries:,} bracket{'s' if entries != 1 else ''} submitted" if entries else "Be the first to submit a bracket"
     return {
-        "title": f"{meta['title']} · {meta['prize']} prize",
+        "title": f"{meta['title']} · {meta['prize']} for perfect knockouts",
         "description": f"{meta['subtitle']} {joined}.",
         "entries": entries,
         "url": f"{share_base}/bracket",
@@ -2607,15 +2651,189 @@ def bracket_card_payload(challenge_id: str, request: Request | None = None) -> d
     }
 
 
-@app.get("/api/brackets/{challenge_id}/share-card.png")
-def bracket_share_card_png(challenge_id: str) -> Response:
+BRACKET_BASE_MATCHUPS = [
+    {"id": "m73", "teams": ["South Africa", "Canada"], "winner": "Canada", "completed": True},
+    {"id": "m74", "teams": ["Germany", "Paraguay"], "winner": "Paraguay", "completed": True},
+    {"id": "m75", "teams": ["Netherlands", "Morocco"]},
+    {"id": "m76", "teams": ["Brazil", "Japan"], "winner": "Brazil", "completed": True},
+    {"id": "m77", "teams": ["France", "Sweden"]},
+    {"id": "m78", "teams": ["Ivory Coast", "Norway"]},
+    {"id": "m79", "teams": ["Mexico", "Ecuador"]},
+    {"id": "m80", "teams": ["England", "DR Congo"]},
+    {"id": "m81", "teams": ["USA", "Bosnia and Herzegovina"]},
+    {"id": "m82", "teams": ["Belgium", "Senegal"]},
+    {"id": "m83", "teams": ["Portugal", "Croatia"]},
+    {"id": "m84", "teams": ["Spain", "Austria"]},
+    {"id": "m85", "teams": ["Switzerland", "Algeria"]},
+    {"id": "m86", "teams": ["Argentina", "Cabo Verde"]},
+    {"id": "m87", "teams": ["Colombia", "Ghana"]},
+    {"id": "m88", "teams": ["Australia", "Egypt"]},
+]
+
+BRACKET_DERIVED_MATCHUPS = {
+    "m89": ("m74", "m77"),
+    "m90": ("m73", "m75"),
+    "m91": ("m76", "m78"),
+    "m92": ("m79", "m80"),
+    "m93": ("m81", "m82"),
+    "m94": ("m83", "m84"),
+    "m95": ("m86", "m88"),
+    "m96": ("m85", "m87"),
+    "m97": ("m89", "m90"),
+    "m98": ("m93", "m94"),
+    "m99": ("m91", "m92"),
+    "m100": ("m95", "m96"),
+    "m101": ("m97", "m98"),
+    "m102": ("m99", "m100"),
+    "final": ("m101", "m102"),
+}
+
+BRACKET_SAMPLE_PICKS = {
+    "m74": "Germany", "m75": "Morocco", "m77": "France", "m78": "Norway",
+    "m79": "Mexico", "m80": "England", "m81": "USA", "m82": "Senegal",
+    "m83": "Portugal", "m84": "Spain", "m85": "Switzerland", "m86": "Argentina",
+    "m87": "Colombia", "m88": "Australia", "m89": "France", "m90": "Morocco",
+    "m91": "Brazil", "m92": "England", "m93": "USA", "m94": "Spain",
+    "m95": "Argentina", "m96": "Colombia", "m97": "France", "m98": "Spain",
+    "m99": "Brazil", "m100": "Argentina", "m101": "France", "m102": "Argentina", "final": "France",
+}
+
+BRACKET_FLAG = {
+    "Algeria": "🇩🇿", "Argentina": "🇦🇷", "Australia": "🇦🇺", "Austria": "🇦🇹",
+    "Belgium": "🇧🇪", "Bosnia and Herzegovina": "🇧🇦", "Brazil": "🇧🇷", "Cabo Verde": "🇨🇻",
+    "Canada": "🇨🇦", "Colombia": "🇨🇴", "Croatia": "🇭🇷", "DR Congo": "🇨🇩",
+    "Ecuador": "🇪🇨", "Egypt": "🇪🇬", "England": "🏴", "France": "🇫🇷",
+    "Germany": "🇩🇪", "Ghana": "🇬🇭", "Ivory Coast": "🇨🇮", "Japan": "🇯🇵",
+    "Mexico": "🇲🇽", "Morocco": "🇲🇦", "Netherlands": "🇳🇱", "Norway": "🇳🇴",
+    "Paraguay": "🇵🇾", "Portugal": "🇵🇹", "Senegal": "🇸🇳", "South Africa": "🇿🇦",
+    "Spain": "🇪🇸", "Sweden": "🇸🇪", "Switzerland": "🇨🇭", "USA": "🇺🇸",
+}
+
+
+def get_bracket_entry_for_participant(challenge_id: str, participant: str | None) -> dict | None:
+    clean_challenge = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id)[:80]
+    clean_participant = clean_person(participant)
+    if not clean_challenge or not clean_participant:
+        return None
     try:
-        from PIL import Image, ImageDraw, ImageFont, ImageOps
+        rows = (
+            get_db()
+            .table("bracket_entries")
+            .select("*")
+            .eq("challenge_id", clean_challenge)
+            .eq("participant", clean_participant)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return assemble_bracket_entry(rows[0]) if rows else None
+    except Exception:
+        return None
+
+
+def get_bracket_entry_by_id(challenge_id: str, entry_id: str | None) -> dict | None:
+    clean_challenge = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id)[:80]
+    clean_entry_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(entry_id or ""))[:80]
+    if not clean_challenge or not clean_entry_id:
+        return None
+    try:
+        rows = (
+            get_db()
+            .table("bracket_entries")
+            .select("*")
+            .eq("challenge_id", clean_challenge)
+            .eq("id", clean_entry_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return assemble_bracket_entry(rows[0]) if rows else None
+    except Exception:
+        return None
+
+
+def bracket_locked_winners() -> dict[str, str]:
+    return {
+        item["id"]: item["winner"]
+        for item in BRACKET_BASE_MATCHUPS
+        if item.get("completed") and item.get("winner")
+    }
+
+
+def bracket_winner(matchup_id: str, picks: dict[str, str]) -> str | None:
+    locked = bracket_locked_winners()
+    if matchup_id in locked:
+        return locked[matchup_id]
+    value = clean_person((picks or {}).get(matchup_id))
+    return value or None
+
+
+def bracket_matchup_teams(matchup_id: str, picks: dict[str, str]) -> list[str]:
+    base = next((item for item in BRACKET_BASE_MATCHUPS if item["id"] == matchup_id), None)
+    if base:
+        return list(base["teams"])
+    parents = BRACKET_DERIVED_MATCHUPS.get(matchup_id)
+    if not parents:
+        return []
+    return [team for team in (bracket_winner(parents[0], picks), bracket_winner(parents[1], picks)) if team]
+
+
+def decode_bracket_picks_param(value: str | None) -> dict[str, str] | None:
+    if not value:
+        return None
+    try:
+        padded = value + ("=" * (-len(value) % 4))
+        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        decoded = json.loads(raw)
+        if isinstance(decoded, dict):
+            return clean_bracket_picks(decoded)
+    except Exception:
+        return None
+    return None
+
+
+def bracket_render_payload(
+    challenge_id: str,
+    participant: str | None,
+    sample: bool,
+    picks_param: str | None = None,
+    entry_id: str | None = None,
+) -> tuple[dict[str, str], str, str]:
+    if entry_id:
+        entry = get_bracket_entry_by_id(challenge_id, entry_id)
+        if entry:
+            picks = clean_bracket_picks(entry.get("picks") or {})
+            return picks, clean_person(entry.get("participant"), "Bracket"), bracket_winner("final", picks) or "TBD"
+    url_picks = decode_bracket_picks_param(picks_param)
+    if url_picks:
+        owner = clean_person(participant, "Shared Bracket")
+        return url_picks, owner, bracket_winner("final", url_picks) or "TBD"
+    if sample:
+        return dict(BRACKET_SAMPLE_PICKS), "Sample Bracket", "France"
+    entry = get_bracket_entry_for_participant(challenge_id, participant)
+    if entry:
+        picks = clean_bracket_picks(entry.get("picks") or {})
+        return picks, clean_person(entry.get("participant"), "Bracket"), bracket_winner("final", picks) or "TBD"
+    return {}, "World Cup Bracket", "TBD"
+
+
+@app.get("/api/brackets/{challenge_id}/share-card.png")
+def bracket_share_card_png(
+    challenge_id: str,
+    participant: str | None = None,
+    sample: bool = False,
+    picks: str | None = None,
+    entry: str | None = None,
+) -> Response:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
     except Exception as exc:
         raise HTTPException(503, "PNG share cards require Pillow. Run pip install -r requirements.txt") from exc
 
+    picks, owner, champion = bracket_render_payload(challenge_id, participant, sample, picks, entry)
     meta = BRACKET_CHALLENGE_META
-    entries = bracket_entry_count(challenge_id)
 
     def font(size: int, bold: bool = False):
         candidates = [
@@ -2631,77 +2849,269 @@ def bracket_share_card_png(challenge_id: str) -> Response:
                 continue
         return ImageFont.load_default()
 
-    def wrap_lines(draw, text: str, max_width: int, fnt, max_lines: int = 2) -> list[str]:
-        words = str(text or "").split()
-        lines: list[str] = []
-        current = ""
-        for word in words:
-            candidate = f"{current} {word}".strip()
-            if not current or draw.textlength(candidate, font=fnt) <= max_width:
-                current = candidate
-                continue
-            lines.append(current)
-            current = word
-            if len(lines) >= max_lines:
-                break
-        if current and len(lines) < max_lines:
-            lines.append(current)
-        return lines or [""]
+    team_codes = {
+        "South Africa": "RSA", "Canada": "CAN", "Germany": "GER", "Paraguay": "PAR",
+        "France": "FRA", "Sweden": "SWE", "Netherlands": "NED", "Morocco": "MAR",
+        "USA": "USA", "Bosnia and Herzegovina": "BIH", "Belgium": "BEL", "Senegal": "SEN",
+        "Portugal": "POR", "Croatia": "CRO", "Spain": "ESP", "Austria": "AUT",
+        "Brazil": "BRA", "Japan": "JPN", "Ivory Coast": "CIV", "Norway": "NOR",
+        "Mexico": "MEX", "Ecuador": "ECU", "England": "ENG", "DR Congo": "COD",
+        "Argentina": "ARG", "Cabo Verde": "CPV", "Australia": "AUS", "Egypt": "EGY",
+        "Switzerland": "SUI", "Algeria": "ALG", "Colombia": "COL", "Ghana": "GHA",
+    }
+    flag_patterns = {
+        "Algeria": ("vertical", ["#006233", "#ffffff"], "#d21034"),
+        "Argentina": ("horizontal", ["#75aadb", "#ffffff", "#75aadb"], "#f6c343"),
+        "Australia": ("solid", ["#012169"], "#e6eef7"),
+        "Austria": ("horizontal", ["#ed2939", "#ffffff", "#ed2939"], None),
+        "Belgium": ("vertical", ["#000000", "#ffd90c", "#ef3340"], None),
+        "Bosnia and Herzegovina": ("solid", ["#002f6c"], "#f7d117"),
+        "Brazil": ("brazil", ["#009b3a", "#ffdf00", "#002776"], None),
+        "Cabo Verde": ("horizontal", ["#003893", "#003893", "#ffffff", "#cf2027", "#003893"], None),
+        "Canada": ("vertical", ["#ff0000", "#ffffff", "#ff0000"], "#ff0000"),
+        "Colombia": ("horizontal", ["#fcd116", "#003893", "#ce1126"], None),
+        "Croatia": ("horizontal", ["#ff0000", "#ffffff", "#171796"], None),
+        "DR Congo": ("diagonal", ["#00a3e0", "#f7d618", "#ce1021"], None),
+        "Ecuador": ("horizontal", ["#ffdd00", "#034ea2", "#ed1c24"], None),
+        "Egypt": ("horizontal", ["#ce1126", "#ffffff", "#000000"], None),
+        "England": ("england", ["#ffffff", "#cf142b"], None),
+        "France": ("vertical", ["#0055a4", "#ffffff", "#ef4135"], None),
+        "Germany": ("horizontal", ["#000000", "#dd0000", "#ffce00"], None),
+        "Ghana": ("horizontal", ["#ce1126", "#fcd116", "#006b3f"], "#111111"),
+        "Ivory Coast": ("vertical", ["#f77f00", "#ffffff", "#009e60"], None),
+        "Japan": ("solid", ["#ffffff"], "#bc002d"),
+        "Mexico": ("vertical", ["#006847", "#ffffff", "#ce1126"], None),
+        "Morocco": ("solid", ["#c1272d"], "#006233"),
+        "Netherlands": ("horizontal", ["#ae1c28", "#ffffff", "#21468b"], None),
+        "Norway": ("cross", ["#ba0c2f", "#ffffff", "#00205b"], None),
+        "Paraguay": ("horizontal", ["#d52b1e", "#ffffff", "#0038a8"], None),
+        "Portugal": ("vertical", ["#006600", "#ff0000"], "#ffcc00"),
+        "Senegal": ("vertical", ["#00853f", "#fdef42", "#e31b23"], "#00853f"),
+        "South Africa": ("horizontal", ["#007a4d", "#ffb81c", "#de3831", "#002395"], None),
+        "Spain": ("horizontal", ["#aa151b", "#f1bf00", "#aa151b"], None),
+        "Sweden": ("cross", ["#006aa7", "#fecc00", "#fecc00"], None),
+        "Switzerland": ("swiss", ["#ff0000", "#ffffff"], None),
+        "USA": ("usa", ["#b22234", "#ffffff", "#3c3b6e"], None),
+    }
 
-    image = Image.new("RGB", (1200, 630), "#071018")
+    def team_code(team: str) -> str:
+        return team_codes.get(team, re.sub(r"[^A-Z]", "", str(team).upper())[:3] or "---")
+
+    def fit_text(draw, text: str, fnt, max_width: int) -> str:
+        text = str(text or "")
+        if draw.textlength(text, font=fnt) <= max_width:
+            return text
+        while text and draw.textlength(text + "…", font=fnt) > max_width:
+            text = text[:-1]
+        return (text + "…") if text else "…"
+
+    def draw_flag_badge(team: str, x: int, y: int, w: int, h: int, dim: bool = False) -> None:
+        pattern, colors, accent = flag_patterns.get(team, ("solid", ["#17242c"], None))
+        draw.rounded_rectangle((x, y, x + w, y + h), radius=4, fill="#0b1216", outline="#24313a", width=1)
+        inset = 1
+        x1, y1, x2, y2 = x + inset, y + inset, x + w - inset, y + h - inset
+        if pattern == "vertical":
+            stripe_w = max(1, (x2 - x1) / len(colors))
+            for idx, color in enumerate(colors):
+                draw.rectangle((x1 + idx * stripe_w, y1, x1 + (idx + 1) * stripe_w, y2), fill=color)
+        elif pattern == "horizontal":
+            stripe_h = max(1, (y2 - y1) / len(colors))
+            for idx, color in enumerate(colors):
+                draw.rectangle((x1, y1 + idx * stripe_h, x2, y1 + (idx + 1) * stripe_h), fill=color)
+        elif pattern == "cross":
+            draw.rectangle((x1, y1, x2, y2), fill=colors[0])
+            draw.rectangle((x1, y1 + h * 0.38, x2, y1 + h * 0.62), fill=colors[1])
+            draw.rectangle((x1 + w * 0.32, y1, x1 + w * 0.48, y2), fill=colors[1])
+            if len(colors) > 2 and colors[2] != colors[1]:
+                draw.rectangle((x1, y1 + h * 0.44, x2, y1 + h * 0.56), fill=colors[2])
+                draw.rectangle((x1 + w * 0.36, y1, x1 + w * 0.44, y2), fill=colors[2])
+        elif pattern == "england":
+            draw.rectangle((x1, y1, x2, y2), fill=colors[0])
+            draw.rectangle((x1, y1 + h * 0.42, x2, y1 + h * 0.58), fill=colors[1])
+            draw.rectangle((x1 + w * 0.42, y1, x1 + w * 0.58, y2), fill=colors[1])
+        elif pattern == "swiss":
+            draw.rectangle((x1, y1, x2, y2), fill=colors[0])
+            draw.rectangle((x1 + w * 0.38, y1 + h * 0.22, x1 + w * 0.62, y2 - h * 0.22), fill=colors[1])
+            draw.rectangle((x1 + w * 0.24, y1 + h * 0.39, x2 - w * 0.24, y1 + h * 0.61), fill=colors[1])
+        elif pattern == "brazil":
+            draw.rectangle((x1, y1, x2, y2), fill=colors[0])
+            draw.polygon([(x1 + w / 2, y1 + 2), (x2 - 3, y1 + h / 2), (x1 + w / 2, y2 - 2), (x1 + 3, y1 + h / 2)], fill=colors[1])
+            draw.ellipse((x1 + w * 0.38, y1 + h * 0.28, x1 + w * 0.62, y1 + h * 0.72), fill=colors[2])
+        elif pattern == "diagonal":
+            draw.rectangle((x1, y1, x2, y2), fill=colors[0])
+            draw.line((x1 - 2, y2, x2 + 2, y1), fill=colors[1], width=max(2, h // 4))
+            draw.line((x1 - 2, y2, x2 + 2, y1), fill=colors[2], width=max(1, h // 7))
+        elif pattern == "usa":
+            stripe_h = max(1, (y2 - y1) / 7)
+            for idx in range(7):
+                draw.rectangle((x1, y1 + idx * stripe_h, x2, y1 + (idx + 1) * stripe_h), fill=colors[idx % 2])
+            draw.rectangle((x1, y1, x1 + w * 0.45, y1 + h * 0.56), fill=colors[2])
+        else:
+            draw.rectangle((x1, y1, x2, y2), fill=colors[0])
+        if accent:
+            r = max(2, min(w, h) // 5)
+            draw.ellipse((x + w / 2 - r, y + h / 2 - r, x + w / 2 + r, y + h / 2 + r), fill=accent)
+        if dim:
+            draw.rounded_rectangle((x, y, x + w, y + h), radius=4, outline="#3c474f", width=1)
+
+    image = Image.new("RGB", (1600, 900), "#090f13")
     draw = ImageDraw.Draw(image)
-    for y in range(630):
-        shade = int(9 + y / 630 * 18)
-        draw.line((0, y, 1200, y), fill=(4, shade, min(36, shade + 14)))
+    for y in range(900):
+        shade = int(10 + y / 900 * 18)
+        draw.line((0, y, 1600, y), fill=(6, shade, min(42, shade + 18)))
+    draw.rounded_rectangle((1040, -80, 1680, 330), radius=120, fill="#071426")
 
-    card_x, card_y, card_w, card_h = 90, 70, 1020, 490
-    draw.rounded_rectangle((card_x + 12, card_y + 18, card_x + card_w + 12, card_y + card_h + 18), radius=34, fill="#03070a")
-    draw.rounded_rectangle((card_x, card_y, card_x + card_w, card_y + card_h), radius=32, fill="#101820", outline="#2b3944", width=3)
+    logo_font = font(28, True)
+    title_font = font(44, True)
+    label_font = font(18, True)
+    name_font = font(16, True)
+    small_font = font(14, False)
+    compact_font = font(15, True)
 
-    left = card_x + 56
-    right = card_x + card_w - 56
-    draw.text((left, card_y + 48), "probable.", fill="#f3f7fa", font=font(30, True))
+    draw.text((52, 34), "probable.", fill="#f2f7fb", font=logo_font)
+    draw.ellipse((174, 55, 182, 63), fill="#149cff")
+    owner_title = "Sample World Cup bracket" if owner == "Sample Bracket" else (f"{owner}'s World Cup bracket" if owner not in {"World Cup Bracket", "Bracket"} else "World Cup bracket")
+    draw.text((52, 82), owner_title, fill="#f6fbff", font=title_font)
+    draw.text((54, 136), f"{meta['prize']} for perfect knockouts · Champion: {champion}", fill="#a8b5c0", font=font(24, False))
 
-    thumb_size = 96
-    thumb_x, thumb_y = left, card_y + 124
-    ball_path = BASE_DIR / "public" / "ball.png"
-    if ball_path.exists():
-        try:
-            ball = Image.open(ball_path).convert("RGBA")
-            inset = 14
-            ball_resized = ImageOps.fit(ball, (thumb_size - inset * 2, thumb_size - inset * 2), method=Image.Resampling.LANCZOS)
-            thumb_bg = Image.new("RGBA", (thumb_size, thumb_size), "#f4f7fa")
-            thumb_bg.paste(ball_resized, (inset, inset), ball_resized)
-            mask = Image.new("L", (thumb_size, thumb_size), 0)
-            ImageDraw.Draw(mask).rounded_rectangle((0, 0, thumb_size, thumb_size), radius=20, fill=255)
-            draw.rounded_rectangle((thumb_x - 3, thumb_y - 3, thumb_x + thumb_size + 3, thumb_y + thumb_size + 3), radius=22, fill="#1c2a34")
-            image.paste(thumb_bg.convert("RGB"), (thumb_x, thumb_y), mask)
-        except Exception:
-            pass
+    line_color = "#168eea"
+    muted_line = "#24414f"
+    card_bg = "#071114"
+    card_stroke = "#1f4153"
+    selected_bg = "#104b82"
+    locked_bg = "#37434b"
+    text = "#eef5fb"
+    muted = "#8e9ca7"
 
-    text_x = thumb_x + thumb_size + 28
-    draw.rounded_rectangle((text_x, thumb_y + 4, text_x + 110, thumb_y + 40), radius=14, fill="#143f2b")
-    draw.text((text_x + 18, thumb_y + 10), f"{meta['prize']} PRIZE", fill="#38d274", font=font(16, True))
-    title_font = font(46, True)
-    title_lines = wrap_lines(draw, meta["title"], right - text_x, title_font, max_lines=2)
-    for index, line in enumerate(title_lines):
-        draw.text((text_x, thumb_y + 50 + index * 54), line, fill="#f5f8fb", font=title_font)
+    left_ids = ["m74", "m77", "m73", "m75", "m81", "m82", "m83", "m84"]
+    right_ids = ["m76", "m78", "m79", "m80", "m86", "m88", "m85", "m87"]
+    left_r16 = ["m89", "m90", "m93", "m94"]
+    right_r16 = ["m91", "m92", "m95", "m96"]
+    left_qf = ["m97", "m98"]
+    right_qf = ["m99", "m100"]
+    left_sf = ["m101"]
+    right_sf = ["m102"]
 
-    subtitle_y = thumb_y + thumb_size + 46
-    subtitle_lines = wrap_lines(draw, meta["subtitle"], card_w - 112, font(24, False), max_lines=2)
-    for index, line in enumerate(subtitle_lines):
-        draw.text((left, subtitle_y + index * 32), line, fill="#9fb0bd", font=font(24, False))
+    centers: dict[str, tuple[int, int]] = {}
+    sizes: dict[str, tuple[int, int]] = {}
+    rendered_matchups: list[tuple[str, int, int, int, str, bool]] = []
 
-    stat_y = subtitle_y + len(subtitle_lines) * 32 + 28
-    draw.line((left, stat_y, right, stat_y), fill="#26343d", width=1)
-    stat_text = f"{entries:,} bracket{'s' if entries != 1 else ''} submitted" if entries else "Be the first to submit a bracket"
-    draw.text((left, stat_y + 18), stat_text, fill="#8fa0ad", font=font(22, False))
+    def row_y(index: int) -> int:
+        return 205 + index * 78
 
-    button_w, button_h = 260, 56
-    button_x, button_y = right - button_w, stat_y + 18
-    draw.rounded_rectangle((button_x, button_y, button_x + button_w, button_y + button_h), radius=14, fill="#145ca8")
-    cta = "Enter free →"
-    draw.text((button_x + button_w / 2 - draw.textlength(cta, font=font(22, True)) / 2, button_y + 16), cta, fill="#fff", font=font(22, True))
+    def matchup_center(matchup_id: str, default_y: int | None = None) -> int:
+        parents = BRACKET_DERIVED_MATCHUPS.get(matchup_id)
+        if parents and parents[0] in centers and parents[1] in centers:
+            return int((centers[parents[0]][1] + centers[parents[1]][1]) / 2)
+        return int(default_y or 450)
+
+    def draw_matchup(matchup_id: str, x: int, cy: int, width: int, side: str, compact: bool = False, record: bool = True) -> None:
+        teams = bracket_matchup_teams(matchup_id, picks)
+        winner = bracket_winner(matchup_id, picks)
+        locked = matchup_id in bracket_locked_winners()
+        height = 54 if not compact else 44
+        y = int(cy - height / 2)
+        centers[matchup_id] = (x + width // 2, cy)
+        sizes[matchup_id] = (width, height)
+        if record:
+            rendered_matchups.append((matchup_id, x, cy, width, side, compact))
+        draw.rounded_rectangle((x, y, x + width, y + height), radius=13, fill=card_bg, outline=card_stroke, width=2)
+        if len(teams) < 2:
+            draw.text((x + width / 2 - draw.textlength("Awaiting", font=small_font) / 2, y + height / 2 - 8), "Awaiting", fill="#5f6d76", font=small_font)
+            return
+        row_h = height / 2
+        for idx, team in enumerate(teams[:2]):
+            row_top = y + int(idx * row_h)
+            active = bool(winner and winner == team)
+            if active:
+                fill = locked_bg if locked else selected_bg
+                draw.rounded_rectangle((x + 1, row_top + 1, x + width - 1, row_top + int(row_h) - 1), radius=10 if idx in (0, 1) else 4, fill=fill)
+                draw.rectangle((x + 1, row_top + 4, x + 5, row_top + int(row_h) - 4), fill="#159cff" if not locked else "#9aa7af")
+            badge_w = 31 if compact else 36
+            badge_h = 17 if compact else 18
+            badge_x = x + 12
+            badge_y = row_top + (5 if not compact else 4)
+            draw_flag_badge(team, badge_x, badge_y, badge_w, badge_h, dim=locked and not active)
+            team_label = fit_text(draw, team if not compact else team_code(team), compact_font if compact else name_font, width - badge_w - 32)
+            draw.text((badge_x + badge_w + 10, row_top + (4 if not compact else 3)), team_label, fill=text if active else muted, font=compact_font if compact else name_font)
+
+    def edge(matchup_id: str, side: str) -> tuple[int, int]:
+        x, y = centers[matchup_id]
+        w, _ = sizes[matchup_id]
+        return (x + w // 2, y) if side == "left" else (x - w // 2, y)
+
+    def connect(parent: str, child: str, side: str) -> None:
+        if parent not in centers or child not in centers:
+            return
+        p_x, p_y = edge(parent, "right" if side == "left" else "left")
+        c_x, c_y = edge(child, "left" if side == "left" else "right")
+        mid_x = int((p_x + c_x) / 2)
+        color = line_color if bracket_winner(parent, picks) else muted_line
+        draw.line((p_x, p_y, mid_x, p_y), fill=color, width=3)
+        draw.line((mid_x, p_y, mid_x, c_y), fill=color, width=3)
+        draw.line((mid_x, c_y, c_x, c_y), fill=color, width=3)
+
+    # Round labels
+    labels = [(52, "ROUND OF 32"), (350, "R16"), (575, "QF"), (748, "SF"), (795, "FINAL"), (960, "SF"), (1125, "QF"), (1330, "R16"), (1410, "ROUND OF 32")]
+    for x, label in labels:
+        draw.text((x, 178), label, fill="#71808a", font=label_font)
+
+    for index, matchup_id in enumerate(left_ids):
+        draw_matchup(matchup_id, 52, row_y(index), 240, "left")
+    for index, matchup_id in enumerate(right_ids):
+        draw_matchup(matchup_id, 1308, row_y(index), 240, "right")
+    for index, matchup_id in enumerate(left_r16):
+        draw_matchup(matchup_id, 335, matchup_center(matchup_id), 185, "left")
+        for parent in BRACKET_DERIVED_MATCHUPS[matchup_id]:
+            connect(parent, matchup_id, "left")
+    for index, matchup_id in enumerate(right_r16):
+        draw_matchup(matchup_id, 1080, matchup_center(matchup_id), 185, "right")
+        for parent in BRACKET_DERIVED_MATCHUPS[matchup_id]:
+            connect(parent, matchup_id, "right")
+    for matchup_id in left_qf:
+        draw_matchup(matchup_id, 560, matchup_center(matchup_id), 160, "left", compact=True)
+        for parent in BRACKET_DERIVED_MATCHUPS[matchup_id]:
+            connect(parent, matchup_id, "left")
+    for matchup_id in right_qf:
+        draw_matchup(matchup_id, 880, matchup_center(matchup_id), 160, "right", compact=True)
+        for parent in BRACKET_DERIVED_MATCHUPS[matchup_id]:
+            connect(parent, matchup_id, "right")
+    for matchup_id in left_sf:
+        draw_matchup(matchup_id, 660, matchup_center(matchup_id), 125, "left", compact=True)
+        for parent in BRACKET_DERIVED_MATCHUPS[matchup_id]:
+            connect(parent, matchup_id, "left")
+    for matchup_id in right_sf:
+        draw_matchup(matchup_id, 815, matchup_center(matchup_id), 125, "right", compact=True)
+        for parent in BRACKET_DERIVED_MATCHUPS[matchup_id]:
+            connect(parent, matchup_id, "right")
+
+    final_y = max(620, matchup_center("final"))
+    draw_matchup("final", 720, final_y, 160, "left", compact=True)
+    for parent in BRACKET_DERIVED_MATCHUPS["final"]:
+        if parent in centers:
+            parent_is_left = parent == "m101"
+            p_x, p_y = edge(parent, "right" if parent_is_left else "left")
+            f_x, f_y = edge("final", "left" if parent_is_left else "right")
+            color = line_color if bracket_winner(parent, picks) else muted_line
+            mid_x = int((p_x + f_x) / 2)
+            draw.line((p_x, p_y, mid_x, p_y), fill=color, width=3)
+            draw.line((mid_x, p_y, mid_x, f_y), fill=color, width=3)
+            draw.line((mid_x, f_y, f_x, f_y), fill=color, width=3)
+
+    # Keep connector rails behind the actual selections.
+    for matchup_id, x, cy, width, side, compact in rendered_matchups:
+        draw_matchup(matchup_id, x, cy, width, side, compact, record=False)
+
+    if champion and champion != "TBD":
+        trophy_y = min(815, final_y + 78)
+        draw.rounded_rectangle((714, trophy_y - 24, 886, trophy_y + 56), radius=18, fill="#0a2439", outline="#145ca8", width=2)
+        draw.text((800 - draw.textlength("CHAMPION", font=font(14, True)) / 2, trophy_y - 6), "CHAMPION", fill="#f8d56c", font=font(14, True))
+        champ_label = fit_text(draw, champion, font(24, True), 140)
+        draw.text((800 - draw.textlength(champ_label, font=font(24, True)) / 2, trophy_y + 20), champ_label, fill="#f4f8fb", font=font(24, True))
+
+    # Footer CTA
+    draw.rounded_rectangle((1180, 805, 1538, 858), radius=18, fill="#145ca8", outline="#2c9aff", width=1)
+    draw.text((1210, 820), "Build yours on probable.live", fill="#ffffff", font=font(24, True))
 
     output = io.BytesIO()
     image.save(output, format="PNG")
@@ -2709,23 +3119,48 @@ def bracket_share_card_png(challenge_id: str) -> Response:
 
 
 @app.get("/bracket", response_class=HTMLResponse)
-def bracket_open_graph_page(request: Request) -> str:
+def bracket_open_graph_page(
+    request: Request,
+    participant: str | None = None,
+    picks: str | None = None,
+    entry: str | None = None,
+) -> str:
     challenge_id = BRACKET_CHALLENGE_META["id"]
     card = bracket_card_payload(challenge_id, request)
+    safe_participant = clean_person(participant or "", "")
+    image_url = card["imageUrl"]
+    title = card["title"]
+    description = card["description"]
+    query_parts = []
+    if entry:
+        query_parts.append(f"entry={quote_plus(entry)}")
+    if safe_participant:
+        query_parts.append(f"participant={quote_plus(safe_participant)}")
+    if picks:
+        query_parts.append(f"picks={quote_plus(picks)}")
+    if query_parts:
+        image_url = f"{image_url}?{'&'.join(query_parts)}"
+    entry_record = get_bracket_entry_by_id(challenge_id, entry) if entry else None
+    if entry_record and not safe_participant:
+        safe_participant = clean_person(entry_record.get("participant"), "")
+    if safe_participant or picks or entry:
+        display_name = safe_participant or "Shared Bracket"
+        title = f"{display_name}'s World Cup bracket · {BRACKET_CHALLENGE_META['prize']} for perfect knockouts"
+        description = "See their World Cup bracket, then build yours on Probable."
     return f"""<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>{esc_html(card['title'])} · Probable</title>
-<meta name="description" content="{esc_html(card['description'])}"/>
+<title>{esc_html(title)} · Probable</title>
+<meta name="description" content="{esc_html(description)}"/>
 <meta property="og:type" content="website"/><meta property="og:site_name" content="Probable"/>
-<meta property="og:title" content="{esc_html(card['title'])}"/>
-<meta property="og:description" content="{esc_html(card['description'])}"/>
-<meta property="og:image" content="{esc_html(card['imageUrl'])}"/>
-<meta property="og:image:width" content="1200"/><meta property="og:image:height" content="630"/>
+<meta property="og:title" content="{esc_html(title)}"/>
+<meta property="og:description" content="{esc_html(description)}"/>
+<meta property="og:image" content="{esc_html(image_url)}"/>
+<meta property="og:image:width" content="1600"/><meta property="og:image:height" content="900"/>
 <meta property="og:url" content="{esc_html(card['url'])}"/>
 <meta name="twitter:card" content="summary_large_image"/>
-<meta name="twitter:title" content="{esc_html(card['title'])}"/>
-<meta name="twitter:description" content="{esc_html(card['description'])}"/>
-<meta name="twitter:image" content="{esc_html(card['imageUrl'])}"/>
-<style>body{{margin:0;background:#0d1216;color:#f4f7fa;font-family:Arial,sans-serif;display:grid;place-items:center;min-height:100vh}}a{{background:#145ca8;color:white;text-decoration:none;padding:14px 18px;border-radius:12px;font-weight:800}}main{{max-width:560px;padding:28px;text-align:center}}img{{width:100%;border-radius:18px;border:1px solid #2b3944}}</style></head><body><main><img src="{esc_html(card['imageUrl'])}" alt="World Cup bracket challenge preview"/><h1>{esc_html(card['title'])}</h1><p>{esc_html(card['description'])}</p><a href="{esc_html(card['appUrl'])}">Open bracket</a></main></body></html>"""
+<meta name="twitter:title" content="{esc_html(title)}"/>
+<meta name="twitter:description" content="{esc_html(description)}"/>
+<meta name="twitter:image" content="{esc_html(image_url)}"/>
+<style>body{{margin:0;background:#0d1216;color:#f4f7fa;font-family:Arial,sans-serif;display:grid;place-items:center;min-height:100vh}}a{{background:#145ca8;color:white;text-decoration:none;padding:14px 18px;border-radius:12px;font-weight:800}}main{{max-width:720px;padding:28px;text-align:center}}img{{width:100%;border-radius:18px;border:1px solid #2b3944}}</style></head><body><main><img src="{esc_html(image_url)}" alt="World Cup bracket challenge preview"/><h1>{esc_html(title)}</h1><p>{esc_html(description)}</p><a href="{esc_html(card['appUrl'])}">Open bracket</a></main></body></html>"""
 
 
 @app.post("/api/groups/{group_id}/join")

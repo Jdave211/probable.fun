@@ -302,7 +302,7 @@ const DEFAULT_BALANCE = 100000;
 const DEFAULT_MARKET_LIQUIDITY = 20000;
 const MARKET_FEE_RATE = 0.015;
 const API_TIMEOUT_MS = 18000;
-const BOOT_API_TIMEOUT_MS = 45000;
+const BOOT_API_TIMEOUT_MS = 9000;
 const AUTH_TIMEOUT_MS = 8000;
 const ALL_OUTCOMES_RESOLUTION = "__all__";
 
@@ -318,12 +318,14 @@ const EVENT_CHART_COLORS = ["#2d9cff", "#f23645", "#f2c414", "#ff861c", "#8bd450
 const BINARY_CHART_COLORS = { yes: "#2d9cff", no: "#f23645" };
 const charts = new Map();
 let gooeyCleanup = null;
+let bootRetryTimer = null;
 const STORAGE_KEYS = {
   shell: "probable_shell",
   view: "probable_view",
   groupId: "probable_groupId",
   user: "probable_user",
   devAuth: "probable_dev_auth",
+  bootCache: "probable_boot_cache_v1",
 };
 
 const state = {
@@ -370,6 +372,8 @@ const state = {
   bracketSubmitted: false,
   bracketRoundIndex: 0,
   bracketView: "grid",
+  bracketEntryId: "",
+  sharedBracketEntryId: "",
   bracketRemoteLoaded: false,
   bracketLastPickedId: "",
   bracketSaving: false,
@@ -382,12 +386,12 @@ const tradeQuoteInflight = new Map();
 
 const BRACKET_CHALLENGE = {
   id: "wc26-bracket-r32",
-  prize: "$100",
+  prize: "up to $500",
   title: "World Cup Bracket Challenge",
   subtitle: "Free to enter. Submit the cleanest knockout bracket from the Round of 32 onward.",
   matchups: [
     { id: "m73", matchNo: 73, teams: ["South Africa", "Canada"], winner: "Canada", completed: true },
-    { id: "m74", matchNo: 74, teams: ["Germany", "Paraguay"] },
+    { id: "m74", matchNo: 74, teams: ["Germany", "Paraguay"], winner: "Paraguay", completed: true },
     { id: "m75", matchNo: 75, teams: ["Netherlands", "Morocco"] },
     { id: "m76", matchNo: 76, teams: ["Brazil", "Japan"], winner: "Brazil", completed: true },
     { id: "m77", matchNo: 77, teams: ["France", "Sweden"] },
@@ -810,18 +814,35 @@ async function init() {
     runStoredPendingAuthAction();
   });
 
+  const restoredFromCache = restoreBootCacheForRoute(initialRoute);
+  if (restoredFromCache) {
+    state.loaded = true;
+    normalizeSelection();
+  }
   render();
   loadMarketImages().catch(() => {});
-  try {
-    await loadInitialAppData();
-  } catch (err) {
-    state.bootError = err.message || "Could not load groups.";
-    toast(err.message || "Could not load groups.");
-  } finally {
-    state.loaded = true;
-    render();
-    runStoredPendingAuthAction();
-  }
+  let keepInitialLoading = false;
+  loadInitialAppData()
+    .catch(err => {
+      if (!restoredFromCache && isWakeTimeoutError(err)) {
+        state.bootError = "";
+        state.marketLinkError = "";
+        keepInitialLoading = true;
+        scheduleInitialLoadRetry();
+        return;
+      }
+      if (restoredFromCache) {
+        console.warn("Initial refresh deferred", err);
+        return;
+      }
+      state.bootError = err.message || "Could not load groups.";
+      toast(err.message || "Could not load groups.");
+    })
+    .finally(() => {
+      if (!keepInitialLoading) state.loaded = true;
+      render();
+      if (!keepInitialLoading) runStoredPendingAuthAction();
+    });
 }
 
 init();
@@ -831,14 +852,17 @@ async function loadInitialAppData() {
   state.marketLinkError = "";
   if (state.view === "bracket" && !state.sharedMarketId && !state.inviteToken) {
     loadBracketEntryIntoState();
-    await loadRemoteBracketEntry();
+    if (isLoggedIn() || state.sharedBracketEntryId) void loadRemoteBracketEntry({ refresh: true });
     return;
   }
   if (state.sharedMarketId) {
     const data = await loadMarketContextForBoot(state.sharedMarketId);
+    if (Array.isArray(data.groups)) {
+      setGroups(data.groups);
+    }
     if (data.group) {
-      upsertGroup(data.group);
-    } else {
+      mergeFocusedGroupContext(data.group);
+    } else if (!Array.isArray(data.groups)) {
       setGroups(data.groups);
     }
     openSharedMarket(state.sharedMarketId);
@@ -867,7 +891,7 @@ async function loadGroupsForBoot() {
     return await api(path, { timeoutMs: BOOT_API_TIMEOUT_MS });
   } catch (err) {
     if (!/timed out/i.test(err?.message || "")) throw err;
-    return api(path, { timeoutMs: BOOT_API_TIMEOUT_MS });
+    throw new Error("Still waking the server. Showing the last saved view if available.");
   }
 }
 
@@ -877,25 +901,51 @@ async function loadMarketContextForBoot(marketId) {
     return await api(path, { timeoutMs: BOOT_API_TIMEOUT_MS });
   } catch (err) {
     if (!/timed out/i.test(err?.message || "")) throw err;
-    return api(path, { timeoutMs: BOOT_API_TIMEOUT_MS });
+    throw new Error("Still waking the server. Showing the last saved view if available.");
   }
 }
 
-async function retryInitialLoad() {
+async function refreshFocusedMarketContext(marketId) {
+  if (!marketId) return false;
+  const data = await api(`/api/markets/${encodeURIComponent(marketId)}/context`, { timeoutMs: API_TIMEOUT_MS });
+  if (Array.isArray(data.groups)) setGroups(data.groups);
+  if (data.group) mergeFocusedGroupContext(data.group);
+  return Boolean(data.group || data.groups);
+}
+
+function isWakeTimeoutError(err) {
+  return /timed out|still waking|connection timed out|waking the server/i.test(err?.message || "");
+}
+
+function scheduleInitialLoadRetry() {
+  if (bootRetryTimer) window.clearTimeout(bootRetryTimer);
+  bootRetryTimer = window.setTimeout(() => {
+    bootRetryTimer = null;
+    void retryInitialLoad({ auto: true });
+  }, 1800);
+}
+
+async function retryInitialLoad({ auto = false } = {}) {
   state.loaded = false;
   state.bootError = "";
   state.marketLinkError = "";
   render();
   loadMarketImages().catch(() => {});
+  let keepLoading = false;
   try {
     await loadInitialAppData();
   } catch (err) {
+    if (isWakeTimeoutError(err)) {
+      keepLoading = true;
+      scheduleInitialLoadRetry();
+      return;
+    }
     state.bootError = err.message || "Could not load groups.";
-    toast(state.bootError);
+    if (!auto) toast(state.bootError);
   } finally {
-    state.loaded = true;
+    if (!keepLoading) state.loaded = true;
     render();
-    runStoredPendingAuthAction();
+    if (!keepLoading) runStoredPendingAuthAction();
   }
 }
 
@@ -912,7 +962,11 @@ function routeFromLocation() {
   if (parts[0] === "admin") return { name: "admin" };
   if (parts[0] === "portfolio") return { name: "positions" };
   if (parts[0] === "positions") return { name: "positions", legacyPath: "/portfolio" };
-  if (parts[0] === "bracket") return { name: "bracket" };
+  if (parts[0] === "bracket") return {
+    name: "bracket",
+    entry: url.searchParams.get("entry") || "",
+    participant: url.searchParams.get("participant") || "",
+  };
   if (parts[0] === "app") return { name: "app" };
 
   const legacyInvite = url.searchParams.get("invite");
@@ -954,6 +1008,7 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
   state.invitePreview = null;
   state.inviteError = "";
   state.sharedMarketId = null;
+  state.sharedBracketEntryId = "";
   state.joinPreFill = null;
   state.embedRoute = null;
 
@@ -992,6 +1047,7 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
     state.shell = "app";
     state.view = "bracket";
     state.trade = emptyTrade();
+    state.sharedBracketEntryId = route.entry || "";
   } else if (route.name === "app") {
     state.shell = "app";
     state.view = "dashboard";
@@ -1289,6 +1345,10 @@ async function onGlobalClick(e) {
 
   if (e.target.closest("[data-reset-bracket]")) {
     e.preventDefault();
+    if (state.bracketSubmitted) {
+      toast("Submitted brackets are locked.");
+      return;
+    }
     state.bracketPicks = {};
     state.bracketSubmitted = false;
     state.bracketLastPickedId = "";
@@ -1306,7 +1366,7 @@ async function onGlobalClick(e) {
 
   if (e.target.closest("[data-share-bracket]")) {
     e.preventDefault();
-    void shareBracketLink();
+    await openBracketShareModal();
     return;
   }
 
@@ -1454,6 +1514,16 @@ async function onGlobalClick(e) {
 
   if (e.target.closest("[data-native-share-market]")) {
     await nativeShareMarket();
+    return;
+  }
+
+  if (e.target.closest("[data-copy-bracket-link]")) {
+    await copyBracketLink();
+    return;
+  }
+
+  if (e.target.closest("[data-native-share-bracket]")) {
+    await shareBracketLink();
     return;
   }
 
@@ -1907,6 +1977,11 @@ async function onGlobalSubmit(e) {
     state.pendingUi.tradeMarketId = null;
     setButtonPending(submit, false);
     setGroups(data.groups);
+    try {
+      await refreshFocusedMarketContext(market.id);
+    } catch (contextErr) {
+      console.warn("Could not refresh market context after trade", contextErr);
+    }
     state.trade = { marketId: market.id, side, mode: action };
     state.mobileTradeOpen = false;
     normalizeSelection();
@@ -2901,7 +2976,35 @@ function marketUrl(marketId) {
 }
 
 function bracketShareUrl() {
-  return `${shareBaseUrl()}/bracket`;
+  const participant = bracketParticipantName();
+  const params = new URLSearchParams();
+  if (state.bracketEntryId) params.set("entry", state.bracketEntryId);
+  if (participant && participant !== "Guest") params.set("participant", participant);
+  if (!params.toString()) return `${shareBaseUrl()}/bracket`;
+  return `${shareBaseUrl()}/bracket?${params.toString()}`;
+}
+
+function bracketShareCardUrl({ sample = false, preview = false } = {}) {
+  const params = new URLSearchParams();
+  const participant = bracketParticipantName();
+  if (state.bracketEntryId) params.set("entry", state.bracketEntryId);
+  if (participant && participant !== "Guest") params.set("participant", participant);
+  if (sample) params.set("sample", "1");
+  const query = params.toString();
+  const base = preview ? apiOriginForAssets() : shareBaseUrl();
+  return `${base}/api/brackets/${encodeURIComponent(BRACKET_CHALLENGE.id)}/share-card.png${query ? `?${query}` : ""}`;
+}
+
+function encodedBracketPicks() {
+  const picks = state.bracketPicks && typeof state.bracketPicks === "object" ? state.bracketPicks : {};
+  const clean = Object.fromEntries(Object.entries(picks).filter(([, value]) => value));
+  if (!Object.keys(clean).length) return "";
+  try {
+    const json = JSON.stringify(clean);
+    return btoa(unescape(encodeURIComponent(json))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  } catch {
+    return "";
+  }
 }
 
 function shareBaseUrl() {
@@ -2912,6 +3015,14 @@ function shareBaseUrl() {
     return `${location.protocol}//${location.hostname}:8000`;
   }
   return location.origin.replace(/\/$/, "");
+}
+
+function apiOriginForAssets() {
+  if (API) return new URL(API, location.origin).origin.replace(/\/$/, "");
+  if (["5173", "5174", "4173"].includes(location.port)) {
+    return `${location.protocol}//${location.hostname}:8000`;
+  }
+  return shareBaseUrl();
 }
 
 function appBaseUrl() {
@@ -3042,14 +3153,16 @@ async function shareMarketLink(marketId) {
 }
 
 async function copyBracketLink() {
+  await prepareBracketShareEntry();
   const link = bracketShareUrl();
   const copied = await writeClipboardText(link);
   toast(copied ? "Bracket link copied." : link);
 }
 
 async function shareBracketLink() {
+  await prepareBracketShareEntry();
   const url = bracketShareUrl();
-  const title = `${BRACKET_CHALLENGE.title} · ${BRACKET_CHALLENGE.prize} prize`;
+  const title = `${BRACKET_CHALLENGE.title} · ${BRACKET_CHALLENGE.prize} for perfect knockouts`;
   const text = "Build your World Cup bracket on Probable.";
   if (navigator.share) {
     try {
@@ -3060,6 +3173,18 @@ async function shareBracketLink() {
     }
   }
   await copyBracketLink();
+}
+
+async function prepareBracketShareEntry() {
+  if (!isLoggedIn()) return null;
+  const hasPicks = Object.values(state.bracketPicks || {}).some(Boolean);
+  if (!hasPicks) return null;
+  try {
+    return await saveBracketEntry({ submitted: state.bracketSubmitted, silent: true });
+  } catch (err) {
+    console.warn("Could not prepare bracket share entry", err);
+    return null;
+  }
 }
 
 function openMarketEmbedModal(marketId) {
@@ -3074,6 +3199,7 @@ function openMarketEmbedModal(marketId) {
 }
 
 function renderMarketEmbedModal() {
+  dom.embedModalOverlay.querySelector(".modal-title").textContent = "Share market";
   const market = findMarket(state.embedModal.marketId);
   if (!market) {
     dom.embedModalBody.innerHTML = `<p class="muted">Market unavailable.</p>`;
@@ -3104,6 +3230,59 @@ function renderMarketEmbedModal() {
 
       </div>
     </div>`;
+}
+
+async function openBracketShareModal() {
+  openModal("embed");
+  dom.embedModalOverlay.querySelector(".modal-title").textContent = "Share bracket";
+  dom.embedModalBody.innerHTML = `<div class="modal-loading">Preparing share preview...</div>`;
+  await prepareBracketShareEntry();
+  renderBracketShareModal();
+}
+
+function renderBracketShareModal() {
+  const link = bracketShareUrl();
+  const previewImage = bracketShareCardUrl({ preview: true });
+  const fallbackPreviewImage = bracketShareCardUrl();
+  dom.embedModalOverlay.querySelector(".modal-title").textContent = "Share bracket";
+  dom.embedModalBody.innerHTML = `
+    <div class="embed-share-layout bracket-share-layout">
+      <div class="embed-preview-frame share-og-preview-frame bracket-share-preview-frame">
+        <img
+          class="share-og-preview-img bracket-share-preview-img"
+          src="${esc(previewImage)}"
+          data-fallback-src="${esc(fallbackPreviewImage)}"
+          alt="Bracket share preview"
+        />
+      </div>
+      <div class="embed-share-controls">
+        <div class="share-section">
+          <p class="eyebrow">Bracket link</p>
+          <h3>Share your knockout picks</h3>
+          <div class="invite-link-box">
+            <span>${esc(link)}</span>
+            <button type="button" data-copy-bracket-link>Copy</button>
+          </div>
+          <div class="share-action-grid">
+            <button class="btn btn-primary" type="button" data-copy-bracket-link>Copy link</button>
+            <button class="btn btn-ghost" type="button" data-native-share-bracket>Share</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const preview = dom.embedModalBody.querySelector(".bracket-share-preview-img");
+  preview?.addEventListener("error", () => {
+    const fallback = preview.dataset.fallbackSrc;
+    if (fallback && preview.src !== fallback) {
+      preview.src = fallback;
+      preview.dataset.fallbackSrc = "";
+      return;
+    }
+    const message = document.createElement("div");
+    message.className = "share-preview-error";
+    message.textContent = "Preview unavailable. The share link still works.";
+    preview.replaceWith(message);
+  });
 }
 
 async function nativeShareMarket() {
@@ -3365,6 +3544,14 @@ async function createMarketForGroup(group, payload) {
     }),
   });
   setGroups(data.groups);
+  if (data.marketId || data.eventId || data.marketIds?.[0]) {
+    try {
+      await refreshFocusedMarketContext(data.marketId || data.marketIds?.[0] || data.eventId);
+    } catch (contextErr) {
+      console.warn("Could not refresh market context after create", contextErr);
+    }
+  }
+  return data;
 }
 
 async function joinGroup(groupId, myName) {
@@ -3473,9 +3660,10 @@ async function continueSharedMarketTrade() {
 async function joinSharedMarketAndOpen(marketId, side = "yes", mode = "buy") {
   if (!findMarketForRoute(marketId)) {
     const data = await api(`/api/markets/${encodeURIComponent(marketId)}/context`, { timeoutMs: API_TIMEOUT_MS });
+    if (Array.isArray(data.groups)) setGroups(data.groups);
     if (data.group) {
-      upsertGroup(data.group);
-    } else {
+      mergeFocusedGroupContext(data.group);
+    } else if (!Array.isArray(data.groups)) {
       setGroups(data.groups);
     }
   }
@@ -3679,6 +3867,7 @@ function render() {
   requestAnimationFrame(() => {
     renderCharts();
     animateIn();
+    hydrateWelcomeVideos();
   });
 }
 
@@ -3708,7 +3897,25 @@ function renderNav() {
     ${bracketButton}
     <button class="btn btn-primary btn-sm nav-enter" type="button" data-enter-app>Enter app</button>
     ${accountIndicatorHtml()}
-  `;
+	  `;
+}
+
+function hydrateWelcomeVideos() {
+  if (!document.querySelector(".welcome-hero")) return;
+  const load = () => {
+    if (!document.querySelector(".welcome-hero")) return;
+    document.querySelectorAll(".welcome-video-tile video[data-src]").forEach(video => {
+      video.src = video.dataset.src;
+      video.removeAttribute("data-src");
+      video.load();
+      video.play?.().catch(() => {});
+    });
+  };
+  if ("requestIdleCallback" in window) {
+    window.requestIdleCallback(load, { timeout: 1200 });
+  } else {
+    window.setTimeout(load, 700);
+  }
 }
 
 function visibleNavGroups() {
@@ -4221,8 +4428,8 @@ function renderEmptyDashboard() {
     <button class="welcome-bracket-card" type="button" data-go-bracket>
       <span class="welcome-bracket-copy">
         <em>New</em>
-        <strong>${BRACKET_CHALLENGE.prize} Bracket Challenge</strong>
-        <small>Free to enter. Submit your World Cup knockout picks.</small>
+        <strong>${BRACKET_CHALLENGE.prize} for perfect knockouts</strong>
+        <small>Free to enter. Build your World Cup bracket.</small>
       </span>
       <span class="welcome-bracket-prize">🏆</span>
     </button>`;
@@ -4256,19 +4463,19 @@ function renderEmptyDashboard() {
     <section class="empty-dashboard welcome-hero">
       <div class="welcome-video-field" aria-hidden="true">
         <figure class="welcome-video-tile tile-a">
-          <video src="/media/welcome-1.mp4" autoplay muted loop playsinline preload="metadata"></video>
+          <video data-src="/media/welcome-1.mp4" autoplay muted loop playsinline preload="none"></video>
         </figure>
         <figure class="welcome-video-tile tile-b">
-          <video src="/media/welcome-2.mp4" autoplay muted loop playsinline preload="metadata"></video>
+          <video data-src="/media/welcome-2.mp4" autoplay muted loop playsinline preload="none"></video>
         </figure>
         <figure class="welcome-video-tile tile-c">
-          <video src="/media/welcome-3.mp4" autoplay muted loop playsinline preload="metadata"></video>
+          <video data-src="/media/welcome-3.mp4" autoplay muted loop playsinline preload="none"></video>
         </figure>
         <figure class="welcome-video-tile tile-d">
-          <video src="/media/welcome-4.mp4" autoplay muted loop playsinline preload="metadata"></video>
+          <video data-src="/media/welcome-4.mp4" autoplay muted loop playsinline preload="none"></video>
         </figure>
         <figure class="welcome-video-tile tile-e">
-          <video src="/media/welcome-5.mp4" autoplay muted loop playsinline preload="metadata"></video>
+          <video data-src="/media/welcome-5.mp4" autoplay muted loop playsinline preload="none"></video>
         </figure>
       </div>
       <div class="welcome-scrim" aria-hidden="true"></div>
@@ -6045,6 +6252,7 @@ function loadBracketEntryIntoState() {
       ? { ...pending.picks }
       : {};
   state.bracketSubmitted = Boolean(entry?.submittedAt);
+  state.bracketEntryId = entry?.entryId || entry?.id || "";
   normalizeBracketPicks();
 }
 
@@ -6052,6 +6260,7 @@ function persistBracketEntry({ submitted = state.bracketSubmitted, submittedAt =
   const previous = loadBracketEntry();
   const payload = {
     challengeId: BRACKET_CHALLENGE.id,
+    entryId: previous?.entryId || previous?.id || state.bracketEntryId || "",
     name: bracketParticipantName(),
     prize: BRACKET_CHALLENGE.prize,
     picks: { ...state.bracketPicks },
@@ -6060,6 +6269,7 @@ function persistBracketEntry({ submitted = state.bracketSubmitted, submittedAt =
   };
   localStorage.setItem(bracketStorageKey(), JSON.stringify(payload));
   state.bracketSubmitted = Boolean(payload.submittedAt);
+  state.bracketEntryId = payload.entryId || "";
   return payload;
 }
 
@@ -6067,17 +6277,22 @@ function applyRemoteBracketEntry(entry) {
   if (!entry) return false;
   state.bracketPicks = entry.picks && typeof entry.picks === "object" ? { ...entry.picks } : {};
   state.bracketSubmitted = Boolean(entry.submittedAt);
+  state.bracketEntryId = entry.id || "";
   normalizeBracketPicks();
   persistBracketEntry({ submitted: state.bracketSubmitted, submittedAt: entry.submittedAt });
   return true;
 }
 
 async function loadRemoteBracketEntry({ refresh = false } = {}) {
-  if (!isLoggedIn()) return null;
+  const sharedEntry = state.sharedBracketEntryId || "";
+  if (!isLoggedIn() && !sharedEntry) return null;
   const participant = bracketParticipantName();
-  if (!participant) return null;
+  if (!participant && !sharedEntry) return null;
   try {
-    const data = await api(`/api/brackets/${encodeURIComponent(BRACKET_CHALLENGE.id)}/entry?participant=${encodeURIComponent(participant)}`, {
+    const query = sharedEntry
+      ? `entry=${encodeURIComponent(sharedEntry)}`
+      : `participant=${encodeURIComponent(participant)}`;
+    const data = await api(`/api/brackets/${encodeURIComponent(BRACKET_CHALLENGE.id)}/entry?${query}`, {
       timeoutMs: API_TIMEOUT_MS,
     });
     state.bracketRemoteLoaded = true;
@@ -6105,6 +6320,7 @@ async function saveBracketEntry({ submitted = state.bracketSubmitted, silent = t
       }),
     });
     if (data.entry) {
+      state.bracketEntryId = data.entry.id || state.bracketEntryId || "";
       state.bracketSubmitted = Boolean(data.entry.submittedAt);
       persistBracketEntry({ submitted: state.bracketSubmitted, submittedAt: data.entry.submittedAt });
     }
@@ -6182,6 +6398,10 @@ function normalizeBracketPicks() {
 function pickBracketTeam(matchupId, team) {
   if (!matchupId || !team) return;
   if (BRACKET_LOCKED_WINNERS[matchupId]) return;
+  if (state.bracketSubmitted) {
+    toast("Bracket already submitted and locked.");
+    return;
+  }
   state.bracketPicks[matchupId] = team;
   normalizeBracketPicks();
   state.bracketSubmitted = false;
@@ -6387,7 +6607,7 @@ function bracketMatchupHtml(matchup, index = 0) {
       ` : ""}
       ${locked ? `<span class="bracket-match-tag">Final: ${esc(winner)} advanced</span>` : ""}
       ${waiting ? "" : teams.map(team => team ? `
-        <button class="bracket-team ${winner === team ? "active" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
+        <button class="bracket-team ${winner === team ? "active" : ""} ${locked && winner === team ? "preset" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
           <span class="bracket-team-main">
             ${teamFlagHtml(team)}
             <strong>${esc(team)}</strong>
@@ -6469,7 +6689,7 @@ function bracketMiniCellHtml(matchup, options = {}) {
   return `
     <article class="bracket-mini-match ready ${compact ? "compact" : ""} ${winner ? "picked" : ""} ${locked ? "locked" : ""} ${state.bracketLastPickedId === matchup.id ? "just-picked" : ""}" data-matchup-id="${esc(matchup.id)}"${row}>
       ${teams.slice(0, 2).map(team => team ? `
-        <button class="bracket-mini-team ${winner === team ? "active" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" aria-label="${esc(team)}" title="${esc(team)}" ${locked ? "disabled" : ""}>
+        <button class="bracket-mini-team ${winner === team ? "active" : ""} ${locked && winner === team ? "preset" : ""} ${locked && winner !== team ? "locked-loser" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" aria-label="${esc(team)}" title="${esc(team)}" ${locked ? "disabled" : ""}>
           ${teamFlagHtml(team)}
           ${compact ? `<strong class="sr-only">${esc(team)}</strong>` : `<strong>${esc(team)}</strong>`}
         </button>
@@ -6539,6 +6759,7 @@ function bracketGridRoundLabel(name) {
 }
 
 function bracketSvgTeamRow(matchup, team, x, y, width, height, active, compact = false) {
+  const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
   const flagCode = teamFlagCode(team);
   const flag = flagCode
     ? `<image href="https://flagcdn.com/${esc(flagCode)}.svg" x="${x + 10}" y="${y + 6}" width="22" height="15" preserveAspectRatio="xMidYMid slice" />`
@@ -6546,7 +6767,7 @@ function bracketSvgTeamRow(matchup, team, x, y, width, height, active, compact =
   const label = compact && width < 130 ? team.slice(0, 3).toUpperCase() : team;
   const data = BRACKET_LOCKED_WINNERS[matchup.id] ? "" : `data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}"`;
   return `
-    <g class="bracket-svg-team ${active ? "active" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
+    <g class="bracket-svg-team ${active ? "active" : ""} ${locked && active ? "preset" : ""} ${locked && !active ? "locked-loser" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
       <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" />
       ${flag}
       <text class="bracket-svg-team-name" x="${x + 40}" y="${y + height / 2 + 4}">${esc(label)}</text>
@@ -6741,9 +6962,10 @@ function bracketMobileSvgHtml(rounds, champion) {
     const flag = flagCode
       ? `<image href="https://flagcdn.com/${esc(flagCode)}.svg" x="${x + Math.max(4, (width - 24) / 2)}" y="${y + 8}" width="24" height="18" preserveAspectRatio="xMidYMid slice" />`
       : `<text class="bracket-svg-flag-text" x="${x + width / 2}" y="${y + height / 2 + 4}" text-anchor="middle">${esc(teamFlag(team))}</text>`;
-    const data = BRACKET_LOCKED_WINNERS[matchup.id] ? "" : `data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}"`;
+    const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
+    const data = locked ? "" : `data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}"`;
     return `
-      <g class="bracket-svg-team bracket-mobile-flag-row ${active ? "active" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
+      <g class="bracket-svg-team bracket-mobile-flag-row ${active ? "active" : ""} ${locked && active ? "preset" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
         <title>${esc(team)}</title>
         <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" />
         ${flag}
@@ -6890,6 +7112,7 @@ function bracketViewToggleHtml(bracketView) {
 }
 
 function bracketActionControlsHtml(champion) {
+  const locked = state.bracketSubmitted;
   return `
     <div class="bracket-graph-actions">
       <div class="bracket-current-pick">
@@ -6897,8 +7120,8 @@ function bracketActionControlsHtml(champion) {
         <strong>${champion ? `${teamFlag(champion)} ${esc(champion)}` : "TBD"}</strong>
       </div>
       <button class="btn btn-ghost btn-sm bracket-share-btn" type="button" data-share-bracket>${shareArrowIconSvg()}<span>Share</span></button>
-      <button class="btn btn-ghost btn-sm" type="button" data-reset-bracket>Reset</button>
-      <button class="btn btn-primary btn-sm" type="button" data-submit-bracket>${state.bracketSubmitted ? "Update entry" : "Submit bracket"}</button>
+      <button class="btn btn-ghost btn-sm" type="button" data-reset-bracket ${locked ? "disabled" : ""}>Reset</button>
+      <button class="btn btn-primary btn-sm" type="button" data-submit-bracket ${locked ? "disabled" : ""}>${locked ? "Submitted" : "Submit bracket"}</button>
     </div>
   `;
 }
@@ -6943,8 +7166,8 @@ function renderBracketChallenge() {
   dom.mainContent.innerHTML = `
     <section class="bracket-page">
       <div class="bracket-toolbar motion-item">
-        <div>
-          <p class="eyebrow">World Cup bracket challenge · ${BRACKET_CHALLENGE.prize} prize</p>
+      <div>
+          <p class="eyebrow">World Cup bracket challenge · ${BRACKET_CHALLENGE.prize} prize for perfect knockouts</p>
           <h2>${entryStatus}</h2>
           <p>${entryHint}</p>
         </div>
@@ -9043,10 +9266,11 @@ function ammPreview(poolYes, poolNo, side, amount) {
   return { shares, newProb: newPoolNo / (newPoolYes + newPoolNo) };
 }
 
-function setGroups(groups) {
+function setGroups(groups, { persist = true } = {}) {
   state.groups = groups ?? [];
   tradeQuoteCache.clear();
   tradeQuoteInflight.clear();
+  if (persist) persistBootCache();
 }
 
 function upsertGroup(group) {
@@ -9059,6 +9283,82 @@ function upsertGroup(group) {
     next.unshift(group);
   }
   setGroups(next);
+}
+
+function mergeFocusedGroupContext(group) {
+  if (!group?.id) return;
+  const focusedMarkets = group.markets ?? [];
+  if (!focusedMarkets.length) {
+    upsertGroup(group);
+    return;
+  }
+
+  const next = [...state.groups];
+  const index = next.findIndex(item => item.id === group.id);
+  if (index < 0) {
+    upsertGroup(group);
+    return;
+  }
+
+  const focusedEventIds = new Set(focusedMarkets.map(market => market.eventId || market.id).filter(Boolean));
+  const focusedMarketIds = new Set(focusedMarkets.map(market => market.id).filter(Boolean));
+  const existing = next[index];
+  const remainingMarkets = (existing.markets ?? []).filter(market => {
+    const eventId = market.eventId || market.id;
+    return !focusedEventIds.has(eventId) && !focusedMarketIds.has(market.id);
+  });
+
+  next[index] = {
+    ...existing,
+    ...group,
+    markets: [...focusedMarkets, ...remainingMarkets],
+  };
+  setGroups(next);
+}
+
+function persistBootCache() {
+  if (!Array.isArray(state.groups) || !state.groups.length) return;
+  try {
+    localStorage.setItem(STORAGE_KEYS.bootCache, JSON.stringify({
+      groups: state.groups,
+      currentGroupId: state.currentGroupId,
+      activeMember: state.activeMember,
+      savedAt: Date.now(),
+    }));
+  } catch {
+    // Cache is best-effort; app correctness must not depend on storage quota.
+  }
+}
+
+function readBootCache() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.bootCache);
+    if (!raw) return null;
+    const cache = JSON.parse(raw);
+    if (!Array.isArray(cache?.groups) || !cache.groups.length) return null;
+    return cache;
+  } catch {
+    return null;
+  }
+}
+
+function restoreBootCacheForRoute(route) {
+  const cache = readBootCache();
+  if (!cache) return false;
+  setGroups(cache.groups, { persist: false });
+  if (cache.currentGroupId && state.groups.some(group => group.id === cache.currentGroupId)) {
+    state.currentGroupId = cache.currentGroupId;
+  }
+  if (!state.activeMember && cache.activeMember) state.activeMember = cache.activeMember;
+  normalizeSelection();
+  if (route.name === "market" && state.sharedMarketId) {
+    const cachedMarket = findMarketForRoute(state.sharedMarketId);
+    if (cachedMarket) {
+      openSharedMarket(state.sharedMarketId);
+      return true;
+    }
+  }
+  return state.shell === "app" && Boolean(getCurrentGroup());
 }
 
 function isPbMyMarketsGroup(group) {
