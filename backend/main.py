@@ -3118,6 +3118,11 @@ def bracket_share_card_png(
     return Response(output.getvalue(), media_type="image/png")
 
 
+@app.get("/b/{entry_id}", response_class=HTMLResponse)
+def short_bracket_open_graph_page(request: Request, entry_id: str) -> str:
+    return bracket_open_graph_page(request=request, entry=entry_id)
+
+
 @app.get("/bracket", response_class=HTMLResponse)
 def bracket_open_graph_page(
     request: Request,

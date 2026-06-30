@@ -3017,16 +3017,14 @@ function inviteUrl(token) {
 }
 
 function marketUrl(marketId) {
-  return `${shareBaseUrl()}/market/${encodeURIComponent(marketId)}`;
+  return `${sharePageBaseUrl()}/market/${encodeURIComponent(marketId)}`;
 }
 
 function bracketShareUrl() {
-  const participant = bracketParticipantName();
-  const params = new URLSearchParams();
-  if (state.bracketEntryId) params.set("entry", state.bracketEntryId);
-  if (participant && participant !== "Guest") params.set("participant", participant);
-  if (!params.toString()) return `${shareBaseUrl()}/bracket`;
-  return `${shareBaseUrl()}/bracket?${params.toString()}`;
+  if (state.bracketEntryId) {
+    return `${sharePageBaseUrl()}/b/${encodeURIComponent(state.bracketEntryId)}`;
+  }
+  return `${sharePageBaseUrl()}/bracket`;
 }
 
 function bracketShareCardUrl({ sample = false, preview = false } = {}) {
@@ -3059,6 +3057,12 @@ function shareBaseUrl() {
   if (["5173", "5174", "4173"].includes(location.port)) {
     return `${location.protocol}//${location.hostname}:8000`;
   }
+  return location.origin.replace(/\/$/, "");
+}
+
+function sharePageBaseUrl() {
+  const configuredApp = import.meta.env.VITE_PUBLIC_APP_BASE_URL;
+  if (configuredApp) return configuredApp.replace(/\/$/, "");
   return location.origin.replace(/\/$/, "");
 }
 
@@ -3208,10 +3212,9 @@ async function shareBracketLink() {
   await prepareBracketShareEntry();
   const url = bracketShareUrl();
   const title = `${BRACKET_CHALLENGE.title} · ${BRACKET_CHALLENGE.prize} for perfect knockouts`;
-  const text = "Build your World Cup bracket on Probable.";
   if (navigator.share) {
     try {
-      await navigator.share({ title, text, url });
+      await navigator.share({ title, url });
       return;
     } catch (err) {
       if (err?.name === "AbortError") return;
