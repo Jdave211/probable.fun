@@ -326,6 +326,7 @@ const STORAGE_KEYS = {
   user: "probable_user",
   devAuth: "probable_dev_auth",
   bootCache: "probable_boot_cache_v1",
+  groupAddons: "probable_group_addons_v1",
 };
 
 const state = {
@@ -448,6 +449,17 @@ const BRACKET_TEAM_CHANCES = {
   "South Africa": 0.5,
 };
 
+const GENERAL_MARKET_POOL = [
+  {
+    id: "world-cup-bracket",
+    type: "bracket",
+    title: BRACKET_CHALLENGE.title,
+    subtitle: "Free-to-enter knockout bracket contest.",
+    eyebrow: "General pool",
+    prize: BRACKET_CHALLENGE.prize,
+  },
+];
+
 document.querySelector("#app").innerHTML = `
   <nav class="topnav" id="topnav">
     <button class="logo" type="button" data-go-welcome>probable<span class="logo-dot">.</span></button>
@@ -523,6 +535,16 @@ document.querySelector("#app").innerHTML = `
         <button class="modal-x" type="button" id="closeInviteModal" aria-label="Close">x</button>
       </div>
       <div id="inviteModalBody" class="invite-modal-body"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="generalMarketModalOverlay">
+    <div class="modal general-market-modal">
+      <div class="modal-header">
+        <span class="modal-title">Add from general pool</span>
+        <button class="modal-x" type="button" id="closeGeneralMarketModal" aria-label="Close">x</button>
+      </div>
+      <div id="generalMarketModalBody" class="general-market-modal-body"></div>
     </div>
   </div>
 
@@ -703,6 +725,8 @@ const dom = {
   joinModalOverlay: document.querySelector("#joinModalOverlay"),
   inviteModalOverlay: document.querySelector("#inviteModalOverlay"),
   inviteModalBody: document.querySelector("#inviteModalBody"),
+  generalMarketModalOverlay: document.querySelector("#generalMarketModalOverlay"),
+  generalMarketModalBody: document.querySelector("#generalMarketModalBody"),
   embedModalOverlay: document.querySelector("#embedModalOverlay"),
   embedModalBody: document.querySelector("#embedModalBody"),
   leaderProfileModalOverlay: document.querySelector("#leaderProfileModalOverlay"),
@@ -735,6 +759,7 @@ document.querySelector("#cancelGroupModal").addEventListener("click", () => clos
 document.querySelector("#closeJoinModal").addEventListener("click", () => closeModal("join"));
 document.querySelector("#cancelJoinModal").addEventListener("click", () => closeModal("join"));
 document.querySelector("#closeInviteModal").addEventListener("click", () => closeModal("invite"));
+document.querySelector("#closeGeneralMarketModal").addEventListener("click", () => closeModal("generalMarket"));
 document.querySelector("#closeEmbedModal").addEventListener("click", () => closeModal("embed"));
 document.querySelector("#closeLeaderProfileModal").addEventListener("click", () => closeModal("leaderProfile"));
 document.querySelector("#closeTradeHistoryModal").addEventListener("click", () => closeModal("tradeHistory"));
@@ -743,6 +768,7 @@ document.querySelector("#closeMarketModal").addEventListener("click", () => clos
 dom.groupModalOverlay.addEventListener("click", e => { if (e.target === dom.groupModalOverlay) closeModal("group"); });
 dom.joinModalOverlay.addEventListener("click", e => { if (e.target === dom.joinModalOverlay) closeModal("join"); });
 dom.inviteModalOverlay.addEventListener("click", e => { if (e.target === dom.inviteModalOverlay) closeModal("invite"); });
+dom.generalMarketModalOverlay.addEventListener("click", e => { if (e.target === dom.generalMarketModalOverlay) closeModal("generalMarket"); });
 dom.embedModalOverlay.addEventListener("click", e => { if (e.target === dom.embedModalOverlay) closeModal("embed"); });
 dom.leaderProfileModalOverlay.addEventListener("click", e => { if (e.target === dom.leaderProfileModalOverlay) closeModal("leaderProfile"); });
 dom.tradeHistoryModalOverlay.addEventListener("click", e => { if (e.target === dom.tradeHistoryModalOverlay) closeModal("tradeHistory"); });
@@ -767,6 +793,7 @@ document.addEventListener("keydown", e => {
     closeModal("group");
     closeModal("join");
     closeModal("invite");
+    closeModal("generalMarket");
     closeModal("embed");
     closeModal("leaderProfile");
     closeModal("tradeHistory");
@@ -1407,7 +1434,7 @@ async function onGlobalClick(e) {
   if (groupBtn) {
     const gid = groupBtn.dataset.groupId;
     if (gid === "__new") {
-      if (requireLogin("create-group")) openModal("group");
+      if (requireLogin("general-pool")) openGeneralMarketPoolModal();
       return;
     }
     if (gid === "__leaderboard") {
@@ -1437,7 +1464,24 @@ async function onGlobalClick(e) {
 
   if (e.target.closest("[data-create-group]")) {
     if (!requireLogin("create-group")) return;
+    closeModal("generalMarket");
     openModal("group");
+    return;
+  }
+
+  const addGeneralMarketBtn = e.target.closest("[data-add-general-market]");
+  if (addGeneralMarketBtn) {
+    const group = getCurrentGroup();
+    if (!group) {
+      toast("Create or join a group first.");
+      return;
+    }
+    const item = GENERAL_MARKET_POOL.find(candidate => candidate.id === addGeneralMarketBtn.dataset.addGeneralMarket);
+    if (!item) return;
+    addGeneralMarketToGroup(group.id, item.id);
+    renderGeneralMarketPoolModal();
+    render();
+    toast(`${item.title} added to ${group.name}.`);
     return;
   }
 
@@ -1464,6 +1508,7 @@ async function onGlobalClick(e) {
 
   if (e.target.closest("[data-new-market]")) {
     if (!requireLogin("create-market")) return;
+    closeModal("generalMarket");
     await ensureMarketGroup();
     setMarketMinDate();
     openModal("market");
@@ -3878,7 +3923,7 @@ function renderNav() {
   const hasGroups = inApp && isLoggedIn() && navGroups.length > 0;
   dom.navSep.style.display = hasGroups ? "" : "none";
   dom.groupTabs.innerHTML = hasGroups
-    ? `<button class="group-add-btn" type="button" data-group-id="__new" aria-label="Create group">+</button>` + navGroups.map(g => `<button class="group-tab ${g.id === getCurrentGroup()?.id && state.view === "dashboard" ? "active" : ""}" type="button" data-group-id="${g.id}">${esc(g.emoji)} ${esc(g.name)}</button>`).join("")
+    ? `<button class="group-add-btn" type="button" data-group-id="__new" aria-label="Add from general pool">+</button>` + navGroups.map(g => `<button class="group-tab ${g.id === getCurrentGroup()?.id && state.view === "dashboard" ? "active" : ""}" type="button" data-group-id="${g.id}">${esc(g.emoji)} ${esc(g.name)}</button>`).join("")
     : "";
 
   const group = inApp && isLoggedIn() ? getCurrentGroup() : null;
@@ -3928,6 +3973,84 @@ function visibleNavGroups() {
     if (!current || group.id === activeId) byLabel.set(key, group);
   });
   return [...byLabel.values()];
+}
+
+function readGroupAddons() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.groupAddons);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeGroupAddons(addons) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.groupAddons, JSON.stringify(addons));
+  } catch {
+    // Local-only affordance; failing to persist should not block the app.
+  }
+}
+
+function groupAddonIds(groupId) {
+  const raw = readGroupAddons()[groupId] || [];
+  return Array.isArray(raw) ? raw.filter(Boolean) : [];
+}
+
+function addGeneralMarketToGroup(groupId, addonId) {
+  const addons = readGroupAddons();
+  const ids = new Set(Array.isArray(addons[groupId]) ? addons[groupId] : []);
+  ids.add(addonId);
+  addons[groupId] = [...ids];
+  writeGroupAddons(addons);
+}
+
+function generalMarketsForGroup(group) {
+  if (!group?.id) return [];
+  const ids = new Set(groupAddonIds(group.id));
+  return GENERAL_MARKET_POOL.filter(item => ids.has(item.id));
+}
+
+function openGeneralMarketPoolModal() {
+  renderGeneralMarketPoolModal();
+  openModal("generalMarket");
+}
+
+function renderGeneralMarketPoolModal() {
+  const group = getCurrentGroup();
+  const groupLabel = group ? `${group.emoji || ""} ${group.name}`.trim() : "your group";
+  dom.generalMarketModalBody.innerHTML = `
+    <div class="general-market-intro">
+      <p class="eyebrow">Reusable markets</p>
+      <h2>Add shared experiences to ${esc(groupLabel)}</h2>
+      <p>Pull in contests and global markets without recreating them for every group.</p>
+    </div>
+    <div class="general-market-list">
+      ${GENERAL_MARKET_POOL.map(item => generalMarketPoolRow(item, group)).join("")}
+    </div>
+    <div class="general-market-footer">
+      <button class="btn btn-ghost" type="button" data-create-group>Create new group</button>
+      <button class="btn btn-ghost" type="button" data-new-market>Custom market</button>
+    </div>
+  `;
+}
+
+function generalMarketPoolRow(item, group) {
+  const added = group?.id ? groupAddonIds(group.id).includes(item.id) : false;
+  return `
+    <article class="general-market-pool-row">
+      <div class="general-market-pool-icon" aria-hidden="true">🏆</div>
+      <div class="general-market-pool-copy">
+        <p>${esc(item.eyebrow)}</p>
+        <h3>${esc(item.title)}</h3>
+        <span>${esc(item.subtitle)} ${esc(item.prize)} prize.</span>
+      </div>
+      <button class="btn ${added ? "btn-ghost" : "btn-primary"} btn-sm" type="button" data-add-general-market="${esc(item.id)}" ${added ? "disabled" : ""}>
+        ${added ? "Added" : "Add"}
+      </button>
+    </article>
+  `;
 }
 
 function accountIndicatorHtml() {
@@ -3989,12 +4112,14 @@ function renderDashboard() {
     return;
   }
 
+  const activeStatus = state.marketStatus === "closed" ? "closed" : "open";
   const allEvents = marketEvents(markets);
-  const open = allEvents.filter(event => eventStatus(event) === "open").length;
+  const groupGeneralMarkets = generalMarketsForGroup(group);
+  const generalCards = activeStatus === "open" ? groupGeneralMarkets : [];
+  const open = allEvents.filter(event => eventStatus(event) === "open").length + groupGeneralMarkets.length;
   const closed = allEvents.filter(event => eventStatus(event) !== "open").length;
   const visibleMarkets = dashboardVisibleMarkets(markets);
   const events = sortedMarketEvents(visibleMarkets);
-  const activeStatus = state.marketStatus === "closed" ? "closed" : "open";
 
   dom.mainContent.innerHTML = `
     <section class="dashboard-shell">
@@ -4034,7 +4159,7 @@ function renderDashboard() {
             </div>
             ${marketSortControl()}
           </div>
-          ${visibleMarkets.length ? `<div class="market-grid" data-market-grid>${events.map(event => eventCard(event)).join("")}</div>` : emptyMarketsHtml(activeStatus)}
+          ${(visibleMarkets.length || generalCards.length) ? `<div class="market-grid" data-market-grid>${generalCards.map(generalMarketCard).join("")}${events.map(event => eventCard(event)).join("")}</div>` : emptyMarketsHtml(activeStatus)}
         </section>
 
         <aside class="side-panel motion-item">
@@ -4043,6 +4168,33 @@ function renderDashboard() {
       </div>
     </section>
   `;
+}
+
+function generalMarketCard(item) {
+  if (item.type === "bracket") {
+    return `
+      <article class="event-card general-market-card motion-item" data-go-bracket>
+        <div class="event-card-inner">
+          <div class="event-card-head">
+            <div class="event-thumb event-thumb-image" aria-hidden="true">🏆</div>
+            <div class="event-title-wrap">
+              <p class="event-title">${esc(item.title)}</p>
+            </div>
+            <span class="general-market-badge">General</span>
+          </div>
+          <div class="general-market-card-body">
+            <strong>${esc(item.prize)} prize</strong>
+            <span>${esc(item.subtitle)}</span>
+          </div>
+          <div class="event-card-foot">
+            <span>Bracket contest</span>
+            <span class="event-card-creator">from general pool</span>
+          </div>
+        </div>
+      </article>
+    `;
+  }
+  return "";
 }
 
 function renderFocusedTradeView(group, market, event) {

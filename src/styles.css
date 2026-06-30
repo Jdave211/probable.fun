@@ -1397,6 +1397,45 @@ button { color: inherit; }
   gap: 10px;
 }
 
+.general-market-card {
+  cursor: pointer;
+  background:
+    radial-gradient(circle at 86% 8%, rgba(45, 156, 255, 0.16), transparent 34%),
+    #1a2327;
+}
+.general-market-card:hover {
+  border-color: rgba(45, 156, 255, 0.42);
+}
+.general-market-badge {
+  align-self: flex-start;
+  border: 1px solid rgba(45, 156, 255, 0.28);
+  border-radius: 999px;
+  color: var(--primary-2);
+  padding: 4px 8px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.64rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.general-market-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 86px;
+  padding: 8px 0;
+}
+.general-market-card-body strong {
+  color: var(--text);
+  font-size: 1.28rem;
+  line-height: 1.1;
+}
+.general-market-card-body span {
+  color: var(--text-2);
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
 .focused-market-shell {
   max-width: 980px;
   margin: 0 auto;
@@ -5779,6 +5818,86 @@ button { color: inherit; }
   flex-direction: column;
   gap: 14px;
 }
+.general-market-modal {
+  width: min(680px, calc(100vw - 32px));
+}
+.general-market-modal-body {
+  display: grid;
+  gap: 14px;
+}
+.general-market-intro {
+  display: grid;
+  gap: 4px;
+}
+.general-market-intro h2 {
+  margin: 0;
+  font-size: clamp(1.35rem, 3vw, 2rem);
+  line-height: 1.05;
+}
+.general-market-intro p:not(.eyebrow) {
+  margin: 0;
+  color: var(--text-2);
+}
+.general-market-list {
+  display: grid;
+  gap: 10px;
+}
+.general-market-pool-row {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 92% 14%, rgba(45, 156, 255, 0.16), transparent 28%),
+    rgba(237, 242, 245, 0.035);
+  padding: 12px;
+}
+.general-market-pool-icon {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(45, 156, 255, 0.22);
+  border-radius: 14px;
+  background: rgba(45, 156, 255, 0.08);
+  font-size: 1.35rem;
+}
+.general-market-pool-copy {
+  min-width: 0;
+}
+.general-market-pool-copy p,
+.general-market-pool-copy h3,
+.general-market-pool-copy span {
+  margin: 0;
+}
+.general-market-pool-copy p {
+  color: var(--primary-2);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.general-market-pool-copy h3 {
+  margin-top: 2px;
+  font-size: 1.02rem;
+  line-height: 1.2;
+}
+.general-market-pool-copy span {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-2);
+  font-size: 0.84rem;
+}
+.general-market-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
 .invite-card {
   display: flex;
   flex-direction: column;
@@ -6823,6 +6942,23 @@ html {
     padding: 0 8px;
   }
   .member-name { max-width: 72px; font-size: 0.8rem; }
+  .general-market-pool-row {
+    grid-template-columns: 46px minmax(0, 1fr);
+  }
+  .general-market-pool-row .btn {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+  .general-market-pool-icon {
+    width: 46px;
+    height: 46px;
+  }
+  .general-market-footer {
+    flex-direction: column;
+  }
+  .general-market-footer .btn {
+    width: 100%;
+  }
   .member-balance { display: none; }
   .account-avatar {
     width: 32px;
