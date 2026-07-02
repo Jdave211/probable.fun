@@ -2306,15 +2306,26 @@ async def suggest_market_questions(group_id: str) -> dict:
     recent_titles = [e["title"] for e in (events_row.data or [])]
 
     openai_key = os.environ.get("OPENAI_API_KEY", "")
-    if not openai_key:
-        return {"questions": []}
+    if not openai_key or openai_key.startswith("sk-...") or openai_key == "sk-":
+        # Dev fallback: return plausible-looking questions based on group name
+        return {"questions": [
+            f"Will {group_name} hit a new record this month?",
+            "Will there be a surprise result this weekend?",
+            "Will the favourite win by more than 10 points?",
+            "Will a newcomer top the leaderboard this week?",
+            "Will the next event go to extra time?",
+        ]}
 
+    from datetime import date
+    today = date.today().isoformat()
     titles_block = "\n".join(f"- {t}" for t in recent_titles) if recent_titles else "No markets yet."
     system = "You generate concise yes/no prediction market questions for friend groups. Return only valid JSON."
     user = (
+        f'Today\'s date: {today}\n'
         f'Group name: "{group_name}"\n'
         f"Recent markets:\n{titles_block}\n\n"
         "Suggest 5 short, specific yes/no prediction market questions this group would enjoy. "
+        "Make sure questions are relevant to events happening now or in the near future — do not reference past events. "
         'Return exactly this JSON shape: {"questions": ["...", "...", "...", "...", "..."]}'
     )
 
