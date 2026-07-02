@@ -557,6 +557,7 @@ document.querySelector("#app").innerHTML = `
           <div class="field">
             <label class="field-label">Question</label>
             <input name="question" placeholder="Will Wirtz get 3+ GA tomorrow?" maxlength="100" required />
+            <div class="form-suggest-chips hidden" data-form-suggest-chips></div>
           </div>
           <div class="field prediction-field">
             <label class="field-label">Predictions</label>
@@ -1263,6 +1264,21 @@ async function onGlobalClick(e) {
     return;
   }
 
+  if (e.target.closest("[data-form-suggestion]")) {
+    const btn = e.target.closest("[data-form-suggestion]");
+    const idx = parseInt(btn.dataset.formSuggestionIndex, 10);
+    const question = state.questionSuggestions[idx];
+    if (!question) return;
+    const qInput = dom.marketForm?.querySelector("[name=question]");
+    if (qInput) {
+      qInput.value = question;
+      qInput.dispatchEvent(new Event("input", { bubbles: true }));
+      qInput.focus();
+    }
+    updateFormSuggestChips();
+    return;
+  }
+
   if (e.target.closest("[data-suggestion-chip]")) {
     const btn = e.target.closest("[data-suggestion-chip]");
     const idx = parseInt(btn.dataset.suggestionIndex, 10);
@@ -1647,6 +1663,7 @@ function onGlobalInput(e) {
   }
   if (e.target.matches("#marketForm [name=description], #marketForm [name=question], #marketForm [name=closesAt]")) {
     if (e.target.matches("#marketForm [name=question], #marketForm [name=closesAt]")) resetMarketOddsSeed();
+    if (e.target.matches("#marketForm [name=question]")) updateFormSuggestChips();
     updateMarketOddsPanel();
     if (state.marketFormStep === marketReviewStep()) updateMarketReview();
   }
@@ -2573,6 +2590,23 @@ async function goMarketFormStep(step) {
   }
 }
 
+function updateFormSuggestChips() {
+  const container = dom.marketForm?.querySelector("[data-form-suggest-chips]");
+  if (!container) return;
+  const onStep1 = state.marketFormStep === 1;
+  const qInput = dom.marketForm?.querySelector("[name=question]");
+  const hasTyped = (qInput?.value || "").trim().length > 0;
+  const questions = state.questionSuggestions;
+  if (!onStep1 || hasTyped || !questions.length) {
+    container.classList.add("hidden");
+    return;
+  }
+  container.innerHTML = questions.map((q, i) =>
+    `<button class="form-suggest-chip" type="button" data-form-suggestion data-form-suggestion-index="${i}">${esc(q)}</button>`
+  ).join("");
+  container.classList.remove("hidden");
+}
+
 function updateMarketFormStep() {
   const totalSteps = marketFormTotalSteps();
   const step = Math.max(1, Math.min(totalSteps, state.marketFormStep || 1));
@@ -2597,6 +2631,7 @@ function updateMarketFormStep() {
   dom.marketForm.querySelector("[data-market-step-back]")?.classList.toggle("hidden", step === 1);
   dom.marketForm.querySelector("[data-market-step-next]")?.classList.toggle("hidden", step === totalSteps);
   dom.marketForm.querySelector("[data-market-submit]")?.classList.toggle("hidden", step !== totalSteps);
+  updateFormSuggestChips();
 }
 
 function setMarketType(type) {

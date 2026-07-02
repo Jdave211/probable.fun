@@ -6431,3 +6431,30 @@ html {
   gap: 8px;
   justify-content: flex-end;
 }
+
+.form-suggest-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.form-suggest-chip {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 99px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.15);
+  color: rgba(255,255,255,0.6);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+
+.form-suggest-chip:hover {
+  border-color: rgba(255,255,255,0.4);
+  color: #fff;
+}
