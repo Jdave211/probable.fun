@@ -2319,39 +2319,53 @@ async def suggest_market_questions(group_id: str) -> dict:
     from datetime import date
     today = date.today().isoformat()
     titles_block = "\n".join(f"- {t}" for t in recent_titles) if recent_titles else "No markets yet."
-    system = "You generate concise yes/no prediction market questions for friend groups. Return only valid JSON."
+    already_asked = (
+        f"Already asked (do not repeat these or close variations):\n{titles_block}"
+        if recent_titles else ""
+    )
+    system = (
+        "You are a prediction market question generator for friend groups. "
+        "Use web search to find current news and upcoming events before generating questions. "
+        "Return only valid JSON — no markdown, no explanation."
+    )
     user = (
-        f'Today\'s date: {today}\n'
+        f"Today's date: {today}\n"
         f'Group name: "{group_name}"\n'
-        f"Recent markets:\n{titles_block}\n\n"
-        "Suggest 5 short, specific yes/no prediction market questions this group would enjoy. "
-        "Make sure questions are relevant to events happening now or in the near future — do not reference past events. "
-        'Return exactly this JSON shape: {"questions": ["...", "...", "...", "...", "..."]}'
+        f"{already_asked}\n\n"
+        "Search the web for the latest sports, entertainment, or current-events news relevant to this group. "
+        "Then suggest 5 short, specific yes/no prediction market questions grounded in real, current news. "
+        "Avoid anything that has already been decided or resolved as of today. "
+        'Respond with exactly this JSON and nothing else: {"questions": ["...", "...", "...", "...", "..."]}'
     )
 
+    # Use the Responses API with web_search_preview so the model can look up current news.
+    suggest_model = os.environ.get("OPENAI_SUGGEST_MODEL", os.environ.get("OPENAI_RULES_MODEL", "gpt-4o-mini"))
+
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                "https://api.openai.com/v1/chat/completions",
+                "https://api.openai.com/v1/responses",
                 headers={
                     "Authorization": f"Bearer {openai_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": os.environ.get("OPENAI_SUGGEST_MODEL", os.environ.get("OPENAI_RULES_MODEL", "gpt-4o-mini")),
-                    "temperature": 0.8,
-                    "max_tokens": 300,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    "response_format": {"type": "json_object"},
+                    "model": suggest_model,
+                    "tools": [{"type": "web_search_preview"}],
+                    "input": f"{system}\n\n{user}",
                 },
             )
         if response.status_code >= 400:
             return {"questions": []}
         data = response.json()
-        text = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+        # Responses API: find the assistant message in output[]
+        text = ""
+        for item in data.get("output", []):
+            if item.get("type") == "message":
+                for block in item.get("content", []):
+                    if block.get("type") == "output_text":
+                        text = block.get("text", "").strip()
+                        break
         parsed = parse_json_object_text(text)
         questions = parsed.get("questions") or []
         questions = [str(q).strip() for q in questions if str(q).strip()][:5]
