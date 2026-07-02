@@ -366,7 +366,9 @@ const state = {
   marketImageName: "",
   marketOddsSeed: null,
   marketImages: [],
-  pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, tradeMarketId: null, resolveMarketId: null },
+  pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, suggestions: false, suggestionPreview: null, tradeMarketId: null, resolveMarketId: null },
+  questionSuggestions: [],
+  questionSuggestionsGroupId: null,
   loaded: false,
 };
 
@@ -749,6 +751,7 @@ async function init() {
   } finally {
     state.loaded = true;
     render();
+    if (state.currentGroupId) loadQuestionSuggestions(state.currentGroupId);
     runStoredPendingAuthAction();
   }
 }
@@ -1192,6 +1195,7 @@ async function onGlobalClick(e) {
     routeToApp();
     normalizeSelection();
     render();
+    loadQuestionSuggestions(gid);
     return;
   }
 
@@ -2277,6 +2281,27 @@ function selectedMarketOddsSeed(outcomes) {
     if (Number.isFinite(Number(direct))) values[outcome] = Number(direct);
   });
   return Object.keys(values).length ? values : null;
+}
+
+async function loadQuestionSuggestions(groupId) {
+  if (!groupId || state.pendingUi.suggestions) return;
+  if (state.questionSuggestionsGroupId === groupId && state.questionSuggestions.length) return;
+  state.pendingUi.suggestions = true;
+  state.questionSuggestions = [];
+  state.questionSuggestionsGroupId = groupId;
+  render();
+  try {
+    const res = await fetch(`${API}/api/groups/${groupId}/questions/suggest`, { method: "POST" });
+    if (res.ok) {
+      const data = await res.json();
+      state.questionSuggestions = data.questions || [];
+    }
+  } catch {
+    state.questionSuggestions = [];
+  } finally {
+    state.pendingUi.suggestions = false;
+    render();
+  }
 }
 
 function resetMarketOddsSeed() {
