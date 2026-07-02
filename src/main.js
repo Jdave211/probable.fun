@@ -1246,12 +1246,12 @@ async function onGlobalClick(e) {
     const idx = parseInt(btn.dataset.suggestionIndex, 10);
     const question = state.questionSuggestions[idx];
     if (!question) return;
+    const group = getCurrentGroup();
+    if (!group) return;
     state.pendingUi.suggestionPreview = { question, rules: null, loading: true };
     render();
     openModal("suggestPreview");
     // Fetch AI rules draft for the preview
-    const group = getCurrentGroup();
-    if (!group) return;
     api(`/api/markets/rules/draft`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

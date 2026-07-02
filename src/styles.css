@@ -292,6 +292,9 @@ button { color: inherit; }
   font-size: 1.18rem;
   line-height: 1;
 }
+.btn-icon:hover {
+  color: var(--color-text, #fff);
+}
 .google-signin-btn {
   width: 100%;
   min-height: 58px;
