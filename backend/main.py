@@ -2289,6 +2289,68 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
     }
 
 
+@app.post("/api/groups/{group_id}/questions/suggest")
+async def suggest_market_questions(group_id: str) -> dict:
+    db = get_db()
+    group_row = db.table("groups").select("name").eq("id", group_id).execute()
+    if not group_row.data:
+        raise HTTPException(404, "Group not found")
+    group_name = group_row.data[0]["name"]
+
+    events_row = (
+        db.table("market_events")
+        .select("title")
+        .eq("group_id", group_id)
+        .order("created_at", desc=True)
+        .limit(5)
+        .execute()
+    )
+    recent_titles = [e["title"] for e in (events_row.data or [])]
+
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if not openai_key:
+        return {"questions": []}
+
+    titles_block = "\n".join(f"- {t}" for t in recent_titles) if recent_titles else "No markets yet."
+    system = "You generate concise yes/no prediction market questions for friend groups. Return only valid JSON."
+    user = (
+        f'Group name: "{group_name}"\n'
+        f"Recent markets:\n{titles_block}\n\n"
+        "Suggest 5 short, specific yes/no prediction market questions this group would enjoy. "
+        'Return exactly this JSON shape: {"questions": ["...", "...", "...", "...", "..."]}'
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {openai_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": os.environ.get("OPENAI_SUGGEST_MODEL", os.environ.get("OPENAI_RULES_MODEL", "gpt-4o-mini")),
+                    "temperature": 0.8,
+                    "max_tokens": 300,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    "response_format": {"type": "json_object"},
+                },
+            )
+        if response.status_code >= 400:
+            return {"questions": []}
+        data = response.json()
+        text = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+        parsed = parse_json_object_text(text)
+        questions = parsed.get("questions") or []
+        questions = [str(q).strip() for q in questions if str(q).strip()][:5]
+        return {"questions": questions}
+    except Exception:
+        return {"questions": []}
+
+
 @app.post("/api/groups/{group_id}/markets", status_code=201)
 def create_market(group_id: str, payload: MarketCreate) -> dict:
     db = get_db()
