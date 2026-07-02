@@ -1232,6 +1232,51 @@ async function onGlobalClick(e) {
     return;
   }
 
+  if (e.target.closest("[data-refresh-suggestions]")) {
+    const group = getCurrentGroup();
+    if (!group) return;
+    state.questionSuggestions = [];
+    state.questionSuggestionsGroupId = null;
+    loadQuestionSuggestions(group.id);
+    return;
+  }
+
+  if (e.target.closest("[data-suggestion-chip]")) {
+    const btn = e.target.closest("[data-suggestion-chip]");
+    const idx = parseInt(btn.dataset.suggestionIndex, 10);
+    const question = state.questionSuggestions[idx];
+    if (!question) return;
+    state.pendingUi.suggestionPreview = { question, rules: null, loading: true };
+    render();
+    openModal("suggestPreview");
+    // Fetch AI rules draft for the preview
+    const group = getCurrentGroup();
+    if (!group) return;
+    api(`/api/markets/rules/draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question,
+        brief: question,
+        outcomes: ["Yes", "No"],
+        oracleType: "ai",
+      }),
+    })
+      .then(data => {
+        if (data) {
+          state.pendingUi.suggestionPreview = { question, rules: data.description || "", loading: false };
+        } else {
+          state.pendingUi.suggestionPreview = { question, rules: "", loading: false };
+        }
+        render();
+      })
+      .catch(() => {
+        state.pendingUi.suggestionPreview = { question, rules: "", loading: false };
+        render();
+      });
+    return;
+  }
+
   if (e.target.closest("[data-new-market]")) {
     if (!requireLogin("create-market")) return;
     await ensureMarketGroup();
@@ -3531,6 +3576,35 @@ function leaderLevel(entry) {
   return "Level 1";
 }
 
+function suggestedQuestionsHtml() {
+  const loading = state.pendingUi.suggestions;
+  const questions = state.questionSuggestions;
+  if (!loading && !questions.length) return "";
+  const chipsHtml = loading
+    ? `<div class="suggest-skeleton-row">
+        <span class="suggest-skeleton"></span>
+        <span class="suggest-skeleton"></span>
+        <span class="suggest-skeleton"></span>
+        <span class="suggest-skeleton"></span>
+      </div>`
+    : questions.map((q, i) =>
+        `<button class="suggest-chip" type="button" data-suggestion-chip data-suggestion-index="${i}">${esc(q)}</button>`
+      ).join("");
+  return `
+    <div class="suggest-panel motion-item">
+      <div class="suggest-panel-head">
+        <p class="eyebrow">Suggested questions</p>
+        <button class="btn-icon" type="button" data-refresh-suggestions aria-label="Refresh suggestions">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M1 7a6 6 0 1 0 1.2-3.6"/><path d="M1 2v2.4h2.4"/>
+          </svg>
+        </button>
+      </div>
+      <div class="suggest-chips">${chipsHtml}</div>
+    </div>
+  `;
+}
+
 function renderDashboard() {
   const group = getCurrentGroup();
   if (!group) {
@@ -3595,6 +3669,7 @@ function renderDashboard() {
 
         <aside class="side-panel motion-item">
           ${leaderboardPanel(group, { limit: compactLeaderboardLimit(), compact: true })}
+          ${suggestedQuestionsHtml()}
         </aside>
       </div>
     </section>

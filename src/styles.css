@@ -6328,3 +6328,60 @@ html {
     min-height: 210px;
   }
 }
+
+.suggest-panel {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-border, rgba(255,255,255,0.08));
+}
+
+.suggest-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.suggest-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.suggest-chip {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--color-border, rgba(255,255,255,0.1));
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--color-text, #fff);
+  cursor: pointer;
+  line-height: 1.4;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.suggest-chip:hover {
+  border-color: var(--color-border-strong, rgba(255,255,255,0.25));
+  background: rgba(255,255,255,0.04);
+}
+
+.suggest-skeleton-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.suggest-skeleton {
+  display: block;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.06);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
