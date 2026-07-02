@@ -521,6 +521,21 @@ document.querySelector("#app").innerHTML = `
     </div>
   </div>
 
+  <div class="modal-overlay hidden" id="suggestPreviewModalOverlay">
+    <div class="modal suggest-preview-modal" id="suggestPreviewModal">
+      <div class="modal-header">
+        <span class="modal-title">Question preview</span>
+        <button class="modal-x" type="button" id="closeSuggestPreviewModal" aria-label="Close">×</button>
+      </div>
+      <p class="suggest-preview-question" id="suggestPreviewQuestion"></p>
+      <div class="suggest-preview-rules" id="suggestPreviewRules"></div>
+      <div class="suggest-preview-actions">
+        <button class="btn btn-ghost" type="button" id="dismissSuggestPreview">Dismiss</button>
+        <button class="btn btn-primary" type="button" id="createFromSuggestion">Create this market</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay hidden" id="marketModalOverlay">
     <div class="modal">
       <div class="modal-header">
@@ -638,6 +653,9 @@ const dom = {
   tradeHistoryModalBody: document.querySelector("#tradeHistoryModalBody"),
   loginModalOverlay: document.querySelector("#loginModalOverlay"),
   marketModalOverlay: document.querySelector("#marketModalOverlay"),
+  suggestPreviewModalOverlay: document.querySelector("#suggestPreviewModalOverlay"),
+  suggestPreviewQuestion: document.querySelector("#suggestPreviewQuestion"),
+  suggestPreviewRules: document.querySelector("#suggestPreviewRules"),
   groupForm: document.querySelector("#groupForm"),
   joinForm: document.querySelector("#joinForm"),
   loginForm: document.querySelector("#loginForm"),
@@ -667,6 +685,9 @@ document.querySelector("#closeLeaderProfileModal").addEventListener("click", () 
 document.querySelector("#closeTradeHistoryModal").addEventListener("click", () => closeModal("tradeHistory"));
 document.querySelector("#closeLoginModal").addEventListener("click", () => closeModal("login"));
 document.querySelector("#closeMarketModal").addEventListener("click", () => closeModal("market"));
+document.querySelector("#closeSuggestPreviewModal").addEventListener("click", () => closeModal("suggestPreview"));
+document.querySelector("#dismissSuggestPreview").addEventListener("click", () => closeModal("suggestPreview"));
+dom.suggestPreviewModalOverlay.addEventListener("click", e => { if (e.target === dom.suggestPreviewModalOverlay) closeModal("suggestPreview"); });
 dom.groupModalOverlay.addEventListener("click", e => { if (e.target === dom.groupModalOverlay) closeModal("group"); });
 dom.joinModalOverlay.addEventListener("click", e => { if (e.target === dom.joinModalOverlay) closeModal("join"); });
 dom.inviteModalOverlay.addEventListener("click", e => { if (e.target === dom.inviteModalOverlay) closeModal("invite"); });
@@ -699,6 +720,7 @@ document.addEventListener("keydown", e => {
     closeModal("tradeHistory");
     closeModal("login");
     closeModal("market");
+    closeModal("suggestPreview");
   }
 });
 window.addEventListener("popstate", () => {
@@ -1274,6 +1296,28 @@ async function onGlobalClick(e) {
         state.pendingUi.suggestionPreview = { question, rules: "", loading: false };
         render();
       });
+    return;
+  }
+
+  if (e.target.closest("#createFromSuggestion")) {
+    const preview = state.pendingUi.suggestionPreview;
+    if (!preview) return;
+    closeModal("suggestPreview");
+    await ensureMarketGroup();
+    setMarketMinDate();
+    openModal("market");
+    const qInput = dom.marketForm?.querySelector("[name=question]");
+    if (qInput) {
+      qInput.value = preview.question;
+      qInput.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    if (preview.rules) {
+      const descInput = dom.marketForm?.querySelector("[name=description]");
+      if (descInput) {
+        descInput.value = preview.rules;
+        descInput.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    }
     return;
   }
 
@@ -3461,6 +3505,7 @@ async function onOracleVote(market, outcome) {
 
 function render() {
   destroyCharts();
+  updateSuggestPreviewModal();
   const waitingForInitialAppData = state.shell === "app" && !state.loaded && (state.currentGroupId || isLoggedIn() || state.sharedMarketId || shouldHoldAppShell());
   const unresolvedMarketLink = Boolean(state.sharedMarketId && !findMarketForRoute(state.sharedMarketId));
   if (state.shell === "app" && !getCurrentGroup() && !waitingForInitialAppData && !unresolvedMarketLink && !state.bootError) {
@@ -3603,6 +3648,20 @@ function suggestedQuestionsHtml() {
       <div class="suggest-chips">${chipsHtml}</div>
     </div>
   `;
+}
+
+function updateSuggestPreviewModal() {
+  const preview = state.pendingUi.suggestionPreview;
+  if (!dom.suggestPreviewQuestion || !dom.suggestPreviewRules) return;
+  if (!preview) return;
+  dom.suggestPreviewQuestion.textContent = preview.question || "";
+  if (preview.loading) {
+    dom.suggestPreviewRules.innerHTML = `<p class="suggest-rules-loading">✨ Drafting rules…</p>`;
+  } else if (preview.rules) {
+    dom.suggestPreviewRules.innerHTML = `<pre class="suggest-rules-text">${esc(preview.rules)}</pre>`;
+  } else {
+    dom.suggestPreviewRules.innerHTML = "";
+  }
 }
 
 function renderDashboard() {
