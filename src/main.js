@@ -1302,7 +1302,7 @@ async function onGlobalClick(e) {
     })
       .then(data => {
         if (data) {
-          state.pendingUi.suggestionPreview = { question, rules: data.description || "", loading: false };
+          state.pendingUi.suggestionPreview = { question, rules: data.draft?.description || "", loading: false };
         } else {
           state.pendingUi.suggestionPreview = { question, rules: "", loading: false };
         }
@@ -1316,6 +1316,7 @@ async function onGlobalClick(e) {
   }
 
   if (e.target.closest("#createFromSuggestion")) {
+    if (!requireLogin("create-market")) return;
     const preview = state.pendingUi.suggestionPreview;
     if (!preview) return;
     closeModal("suggestPreview");
