@@ -2288,19 +2288,21 @@ async function loadQuestionSuggestions(groupId) {
   if (state.questionSuggestionsGroupId === groupId && state.questionSuggestions.length) return;
   state.pendingUi.suggestions = true;
   state.questionSuggestions = [];
-  state.questionSuggestionsGroupId = groupId;
   render();
   try {
-    const res = await fetch(`${API}/api/groups/${groupId}/questions/suggest`, { method: "POST" });
-    if (res.ok) {
-      const data = await res.json();
+    const data = await api(`/api/groups/${groupId}/questions/suggest`, { method: "POST" });
+    if (state.currentGroupId === groupId) {
       state.questionSuggestions = data.questions || [];
+      state.questionSuggestionsGroupId = groupId;
     }
   } catch {
     state.questionSuggestions = [];
   } finally {
     state.pendingUi.suggestions = false;
     render();
+    if (state.currentGroupId && state.currentGroupId !== groupId) {
+      loadQuestionSuggestions(state.currentGroupId);
+    }
   }
 }
 
