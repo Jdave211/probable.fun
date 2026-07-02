@@ -2291,12 +2291,10 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
 
 @app.post("/api/groups/{group_id}/questions/suggest")
 async def suggest_market_questions(group_id: str) -> dict:
-    db = get_db()
-    group_row = db.table("groups").select("name").eq("id", group_id).execute()
-    if not group_row.data:
-        raise HTTPException(404, "Group not found")
-    group_name = group_row.data[0]["name"]
+    group = require_group(group_id)
+    group_name = group["name"]
 
+    db = get_db()
     events_row = (
         db.table("market_events")
         .select("title")
