@@ -1187,9 +1187,28 @@ def groups_response(
     group_id: str | None = None,
     include: str | None = None,
     limit: int | None = None,
+    members: str | None = None,
     **extra,
 ) -> dict:
-    groups = load_all_groups(compact=compact, group_id=group_id, limit=limit)
+    aliases = {
+        item.strip().lower()
+        for item in (members or "").split(",")
+        if item.strip()
+    }
+    groups = load_all_groups(compact=compact, group_id=group_id, limit=None if aliases else limit)
+    if aliases:
+        def matches_member_alias(group: dict) -> bool:
+            creator = clean_person(group.get("createdBy"))
+            if creator.lower() in aliases:
+                return True
+            return any(clean_person(member).lower() in aliases for member in group.get("members", []))
+
+        groups = [
+            group for group in groups
+            if matches_member_alias(group)
+        ]
+        if limit:
+            groups = groups[:max(1, min(int(limit), 50))]
     if include and not any(group.get("id") == include for group in groups):
         groups.extend(load_all_groups(compact=compact, group_id=include))
     return {"groups": groups, **extra}
@@ -1282,12 +1301,20 @@ def request_base_url(request: Request | None) -> str | None:
 
 
 def frontend_base_url(request: Request | None = None) -> str:
-    explicit = os.environ.get("FRONTEND_BASE_URL") or os.environ.get("VITE_PUBLIC_APP_BASE_URL")
+    explicit = (
+        os.environ.get("FRONTEND_BASE_URL")
+        or os.environ.get("APP_BASE_URL")
+        or os.environ.get("SITE_URL")
+        or os.environ.get("VITE_PUBLIC_APP_BASE_URL")
+    )
     if explicit:
         return explicit.rstrip("/")
     base = request_base_url(request)
     if base:
         parsed = urlparse(base)
+        host = (parsed.hostname or "").lower()
+        if host.endswith(".onrender.com"):
+            return os.environ.get("PROBABLE_FRONTEND_FALLBACK", "https://www.probable.live").rstrip("/")
         if parsed.port == 8000:
             netloc = parsed.hostname or "localhost"
             if parsed.username:
@@ -2452,8 +2479,13 @@ def health() -> dict:
 
 
 @app.get("/api/groups")
-def list_groups(compact: bool = True, limit: int | None = None, include: str | None = None) -> dict:
-    return groups_response(compact=compact, limit=limit, include=include)
+def list_groups(
+    compact: bool = True,
+    limit: int | None = None,
+    include: str | None = None,
+    members: str | None = None,
+) -> dict:
+    return groups_response(compact=compact, limit=limit, include=include, members=members)
 
 
 @app.get("/api/markets/{market_id}/context")

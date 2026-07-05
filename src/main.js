@@ -893,6 +893,15 @@ async function loadInitialAppData() {
       setGroups(data.groups);
     }
     openSharedMarket(state.sharedMarketId);
+    if (isLoggedIn()) {
+      try {
+        const memberData = await loadGroupsForBoot();
+        if (Array.isArray(memberData.groups)) setGroups(memberData.groups);
+        openSharedMarket(state.sharedMarketId);
+      } catch (err) {
+        console.warn("Member groups refresh deferred", err);
+      }
+    }
     normalizeSelection();
     return;
   }
@@ -913,7 +922,9 @@ async function loadInitialAppData() {
 async function loadGroupsForBoot() {
   const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
   const include = savedGroup ? `&include=${encodeURIComponent(savedGroup)}` : "";
-  const path = `/api/groups?compact=1&limit=20${include}`;
+  const members = currentMemberAliases();
+  const memberQuery = members.length ? `&members=${encodeURIComponent(members.join(","))}` : "";
+  const path = `/api/groups?compact=1&limit=50${include}${memberQuery}`;
   try {
     return await api(path, { timeoutMs: BOOT_API_TIMEOUT_MS });
   } catch (err) {
@@ -984,7 +995,7 @@ function routeFromLocation() {
   if (parts[0] === "invite" && parts[1]) return { name: "invite", token: parts[1] };
   if (parts[0] === "embed" && parts[1] === "market" && parts[2]) return { name: "embedMarket", marketId: parts[2], options: embedOptionsFromSearch(url.searchParams) };
   if (parts[0] === "embed" && parts[1] === "event" && parts[2]) return { name: "embedEvent", eventId: parts[2], options: embedOptionsFromSearch(url.searchParams) };
-  if (parts[0] === "market" && parts[1]) return { name: "market", marketId: parts[1] };
+  if (parts[0] === "market" && parts[1]) return { name: "market", marketId: sanitizeRouteMarketId(parts.slice(1).join("/")) };
   if (parts[0] === "leaderboard") return { name: "leaderboard" };
   if (parts[0] === "admin") return { name: "admin" };
   if (parts[0] === "portfolio") return { name: "positions" };
@@ -1005,9 +1016,23 @@ function routeFromLocation() {
   const legacyMarket = url.searchParams.get("market");
   const legacyJoin = url.searchParams.get("join");
   if (legacyInvite) return { name: "invite", token: legacyInvite, legacyPath: `/invite/${encodeURIComponent(legacyInvite)}` };
-  if (legacyMarket) return { name: "market", marketId: legacyMarket, legacyPath: `/market/${encodeURIComponent(legacyMarket)}` };
+  if (legacyMarket) {
+    const marketId = sanitizeRouteMarketId(legacyMarket);
+    return { name: "market", marketId, legacyPath: `/market/${encodeURIComponent(marketId)}` };
+  }
   if (legacyJoin) return { name: "welcome", joinPreFill: legacyJoin, legacyPath: "/" };
   return { name: "welcome" };
+}
+
+function sanitizeRouteMarketId(raw) {
+  let value = String(raw || "").trim();
+  if (!value) return "";
+  value = value.split(/[?#]/)[0];
+  value = value.replace(/https?:.*$/i, "");
+  value = value.replace(/^market\//i, "");
+  value = value.replace(/\/+$/g, "");
+  const match = value.match(/[A-Za-z0-9][A-Za-z0-9_-]{5,80}/);
+  return match ? match[0] : value;
 }
 
 function embedOptionsFromSearch(params) {
@@ -1413,6 +1438,15 @@ async function onGlobalClick(e) {
       return;
     }
     try {
+      if (!getCurrentGroup()) {
+        try {
+          const data = await loadGroupsForBoot();
+          if (Array.isArray(data.groups)) setGroups(data.groups);
+          normalizeSelection();
+        } catch (err) {
+          console.warn("Enter app group refresh deferred", err);
+        }
+      }
       if (!getCurrentGroup()) {
         await ensureMarketGroup();
       }
