@@ -2723,6 +2723,7 @@ BRACKET_DERIVED_MATCHUPS = {
 BRACKET_DERIVED_WINNERS = {
     "m89": "France",
     "m90": "Morocco",
+    "m91": "Norway",
 }
 
 BRACKET_SAMPLE_PICKS = {

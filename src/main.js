@@ -412,6 +412,7 @@ const BRACKET_CHALLENGE = {
 const BRACKET_DERIVED_RESULTS = {
   m89: "France",
   m90: "Morocco",
+  m91: "Norway",
 };
 const BRACKET_LOCKED_WINNERS = {
   ...Object.fromEntries(
