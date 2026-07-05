@@ -2688,18 +2688,18 @@ BRACKET_BASE_MATCHUPS = [
     {"id": "m74", "teams": ["Germany", "Paraguay"], "winner": "Paraguay", "completed": True},
     {"id": "m75", "teams": ["Netherlands", "Morocco"], "winner": "Morocco", "completed": True},
     {"id": "m76", "teams": ["Brazil", "Japan"], "winner": "Brazil", "completed": True},
-    {"id": "m77", "teams": ["France", "Sweden"]},
+    {"id": "m77", "teams": ["France", "Sweden"], "winner": "France", "completed": True},
     {"id": "m78", "teams": ["Ivory Coast", "Norway"], "winner": "Norway", "completed": True},
-    {"id": "m79", "teams": ["Mexico", "Ecuador"]},
-    {"id": "m80", "teams": ["England", "DR Congo"]},
-    {"id": "m81", "teams": ["USA", "Bosnia and Herzegovina"]},
-    {"id": "m82", "teams": ["Belgium", "Senegal"]},
-    {"id": "m83", "teams": ["Portugal", "Croatia"]},
-    {"id": "m84", "teams": ["Spain", "Austria"]},
-    {"id": "m85", "teams": ["Switzerland", "Algeria"]},
-    {"id": "m86", "teams": ["Argentina", "Cabo Verde"]},
-    {"id": "m87", "teams": ["Colombia", "Ghana"]},
-    {"id": "m88", "teams": ["Australia", "Egypt"]},
+    {"id": "m79", "teams": ["Mexico", "Ecuador"], "winner": "Mexico", "completed": True},
+    {"id": "m80", "teams": ["England", "DR Congo"], "winner": "England", "completed": True},
+    {"id": "m81", "teams": ["USA", "Bosnia and Herzegovina"], "winner": "USA", "completed": True},
+    {"id": "m82", "teams": ["Belgium", "Senegal"], "winner": "Belgium", "completed": True},
+    {"id": "m83", "teams": ["Portugal", "Croatia"], "winner": "Portugal", "completed": True},
+    {"id": "m84", "teams": ["Spain", "Austria"], "winner": "Spain", "completed": True},
+    {"id": "m85", "teams": ["Switzerland", "Algeria"], "winner": "Switzerland", "completed": True},
+    {"id": "m86", "teams": ["Argentina", "Cabo Verde"], "winner": "Argentina", "completed": True},
+    {"id": "m87", "teams": ["Colombia", "Ghana"], "winner": "Colombia", "completed": True},
+    {"id": "m88", "teams": ["Australia", "Egypt"], "winner": "Egypt", "completed": True},
 ]
 
 BRACKET_DERIVED_MATCHUPS = {
@@ -2718,6 +2718,11 @@ BRACKET_DERIVED_MATCHUPS = {
     "m101": ("m97", "m98"),
     "m102": ("m99", "m100"),
     "final": ("m101", "m102"),
+}
+
+BRACKET_DERIVED_WINNERS = {
+    "m89": "France",
+    "m90": "Morocco",
 }
 
 BRACKET_SAMPLE_PICKS = {
@@ -2787,11 +2792,13 @@ def get_bracket_entry_by_id(challenge_id: str, entry_id: str | None) -> dict | N
 
 
 def bracket_locked_winners() -> dict[str, str]:
-    return {
+    winners = {
         item["id"]: item["winner"]
         for item in BRACKET_BASE_MATCHUPS
         if item.get("completed") and item.get("winner")
     }
+    winners.update(BRACKET_DERIVED_WINNERS)
+    return winners
 
 
 def bracket_official_winner(matchup_id: str) -> str | None:
@@ -2814,6 +2821,10 @@ def bracket_eliminated_teams() -> set[str]:
         if not winner:
             continue
         for team in item.get("teams") or []:
+            if team and team != winner:
+                eliminated.add(team)
+    for matchup_id, winner in bracket_locked_winners().items():
+        for team in bracket_matchup_teams(matchup_id, {}):
             if team and team != winner:
                 eliminated.add(team)
     return eliminated

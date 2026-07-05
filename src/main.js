@@ -395,25 +395,32 @@ const BRACKET_CHALLENGE = {
     { id: "m74", matchNo: 74, teams: ["Germany", "Paraguay"], winner: "Paraguay", completed: true },
     { id: "m75", matchNo: 75, teams: ["Netherlands", "Morocco"], winner: "Morocco", completed: true },
     { id: "m76", matchNo: 76, teams: ["Brazil", "Japan"], winner: "Brazil", completed: true },
-    { id: "m77", matchNo: 77, teams: ["France", "Sweden"] },
+    { id: "m77", matchNo: 77, teams: ["France", "Sweden"], winner: "France", completed: true },
     { id: "m78", matchNo: 78, teams: ["Ivory Coast", "Norway"], winner: "Norway", completed: true },
-    { id: "m79", matchNo: 79, teams: ["Mexico", "Ecuador"] },
-    { id: "m80", matchNo: 80, teams: ["England", "DR Congo"] },
-    { id: "m81", matchNo: 81, teams: ["USA", "Bosnia and Herzegovina"] },
-    { id: "m82", matchNo: 82, teams: ["Belgium", "Senegal"] },
-    { id: "m83", matchNo: 83, teams: ["Portugal", "Croatia"] },
-    { id: "m84", matchNo: 84, teams: ["Spain", "Austria"] },
-    { id: "m85", matchNo: 85, teams: ["Switzerland", "Algeria"] },
-    { id: "m86", matchNo: 86, teams: ["Argentina", "Cabo Verde"] },
-    { id: "m87", matchNo: 87, teams: ["Colombia", "Ghana"] },
-    { id: "m88", matchNo: 88, teams: ["Australia", "Egypt"] },
+    { id: "m79", matchNo: 79, teams: ["Mexico", "Ecuador"], winner: "Mexico", completed: true },
+    { id: "m80", matchNo: 80, teams: ["England", "DR Congo"], winner: "England", completed: true },
+    { id: "m81", matchNo: 81, teams: ["USA", "Bosnia and Herzegovina"], winner: "USA", completed: true },
+    { id: "m82", matchNo: 82, teams: ["Belgium", "Senegal"], winner: "Belgium", completed: true },
+    { id: "m83", matchNo: 83, teams: ["Portugal", "Croatia"], winner: "Portugal", completed: true },
+    { id: "m84", matchNo: 84, teams: ["Spain", "Austria"], winner: "Spain", completed: true },
+    { id: "m85", matchNo: 85, teams: ["Switzerland", "Algeria"], winner: "Switzerland", completed: true },
+    { id: "m86", matchNo: 86, teams: ["Argentina", "Cabo Verde"], winner: "Argentina", completed: true },
+    { id: "m87", matchNo: 87, teams: ["Colombia", "Ghana"], winner: "Colombia", completed: true },
+    { id: "m88", matchNo: 88, teams: ["Australia", "Egypt"], winner: "Egypt", completed: true },
   ],
 };
-const BRACKET_LOCKED_WINNERS = Object.fromEntries(
-  BRACKET_CHALLENGE.matchups
-    .filter(matchup => matchup.completed && matchup.winner)
-    .map(matchup => [matchup.id, matchup.winner])
-);
+const BRACKET_DERIVED_RESULTS = {
+  m89: "France",
+  m90: "Morocco",
+};
+const BRACKET_LOCKED_WINNERS = {
+  ...Object.fromEntries(
+    BRACKET_CHALLENGE.matchups
+      .filter(matchup => matchup.completed && matchup.winner)
+      .map(matchup => [matchup.id, matchup.winner])
+  ),
+  ...BRACKET_DERIVED_RESULTS,
+};
 const BRACKET_TEAM_CHANCES = {
   France: 23,
   Spain: 11,
@@ -6611,6 +6618,15 @@ function bracketEliminatedTeams() {
     if (!winner) continue;
     for (const team of matchup.teams || []) {
       if (team && team !== winner) eliminated.add(team);
+    }
+  }
+  for (const round of bracketRounds()) {
+    for (const matchup of round.matchups || []) {
+      const winner = bracketOfficialWinner(matchup.id);
+      if (!winner) continue;
+      for (const team of matchup.teams || []) {
+        if (team && team !== winner) eliminated.add(team);
+      }
     }
   }
   return eliminated;
