@@ -2729,6 +2729,7 @@ BRACKET_DERIVED_WINNERS = {
     "m94": "Spain",
     "m95": "Argentina",
     "m96": "Switzerland",
+    "m97": "France",
 }
 
 BRACKET_SAMPLE_PICKS = {

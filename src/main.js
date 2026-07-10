@@ -418,6 +418,7 @@ const BRACKET_DERIVED_RESULTS = {
   m94: "Spain",
   m95: "Argentina",
   m96: "Switzerland",
+  m97: "France",
 };
 const BRACKET_LOCKED_WINNERS = {
   ...Object.fromEntries(
