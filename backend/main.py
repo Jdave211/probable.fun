@@ -1357,6 +1357,35 @@ def share_base_url(request: Request | None = None) -> str:
     return configured_public_base_url() or request_base_url(request) or public_base_url()
 
 
+CRAWLER_USER_AGENT_MARKERS = (
+    "bot",
+    "crawler",
+    "spider",
+    "facebookexternalhit",
+    "facebot",
+    "twitterbot",
+    "slackbot",
+    "discordbot",
+    "linkedinbot",
+    "telegrambot",
+    "whatsapp",
+    "applebot",
+    "google-structured-data-testing-tool",
+)
+
+
+def is_crawler_request(request: Request) -> bool:
+    user_agent = (request.headers.get("user-agent") or "").casefold()
+    if not user_agent:
+        return False
+    return any(marker in user_agent for marker in CRAWLER_USER_AGENT_MARKERS)
+
+
+def app_market_url(market_id: str, request: Request | None = None) -> str:
+    app_base = frontend_base_url(request).rstrip("/")
+    return f"{app_base}/?market={quote_plus(market_id)}"
+
+
 def is_binary_no_row(market: dict) -> bool:
     titles = {
         str(outcome.get("title") or "").strip().lower()
@@ -1375,7 +1404,6 @@ def share_yes_no_prices(market: dict) -> tuple[float, float]:
 def share_market_payload(market_id: str, request: Request | None = None) -> dict:
     group, event, market = find_assembled_market(market_id)
     share_base = share_base_url(request)
-    app_base = frontend_base_url(request)
     title = event["title"]
     if share_card_is_multi(event):
         share_title = title
@@ -1395,7 +1423,7 @@ def share_market_payload(market_id: str, request: Request | None = None) -> dict
             "title": share_title,
             "description": share_description,
             "url": f"{share_base}/market/{market['id']}",
-            "appUrl": f"{app_base}/market/{market['id']}",
+            "appUrl": app_market_url(market["id"], request),
             "embedUrl": f"{share_base}/embed/market/{market['id']}",
             "imageUrl": f"{share_base}/api/markets/{market['id']}/share-card.png",
         },
@@ -3966,11 +3994,14 @@ def embed_event(event_id: str, request: Request, chart: int = 1, buttons: int = 
     return embed_market_html(market, event, group, chart=bool(chart), buttons=bool(buttons), dark=bool(dark), border=bool(border), app_base=frontend_base_url(request))
 
 
+@app.head("/market/{market_id}", response_class=HTMLResponse)
 @app.get("/market/{market_id}", response_class=HTMLResponse)
-def market_open_graph_page(market_id: str, request: Request) -> str:
+def market_open_graph_page(market_id: str, request: Request):
     payload = share_market_payload(market_id, request)
     share = payload["share"]
     app_url = share.get("appUrl") or share["url"]
+    if request.method == "GET" and not is_crawler_request(request):
+        return RedirectResponse(app_url, status_code=307)
     return f"""<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>{esc_html(share['title'])} · Probable</title>
 <meta name="description" content="{esc_html(share['description'])}"/>
