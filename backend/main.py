@@ -1165,7 +1165,7 @@ EVENT_SELECT_COMPACT = (
     "closes_at,created_at,outcome_id,resolved_at,oracle_proposal,legacy_key,"
     "resolution_source,edge_cases,verification_status,verification_attempts,"
     "resolved_by,resolution_notes,created_by,"
-    "market_outcomes(*),event_positions(*)"
+    "market_outcomes(*),event_trades(*),event_positions(*)"
 )
 EVENT_SELECT_CONTEXT = (
     "id,group_id,title,description,status,mode,oracle_type,liquidity_b,total_volume,"
