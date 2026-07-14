@@ -9413,7 +9413,9 @@ function displayMarketHistory(market, event) {
 }
 
 function hasMarketTrades(market) {
-  return (market.trades ?? []).some(trade => Math.abs(Number(trade.amount || 0)) > 0);
+  const legacyTrades = market.trades ?? [];
+  const eventTrades = market.eventTrades ?? [];
+  return [...legacyTrades, ...eventTrades].some(trade => Math.abs(tradeCashAmount(trade)) > 0);
 }
 
 function flatMarketHistory(history, market) {
@@ -9722,6 +9724,9 @@ function readBootCache() {
 function restoreBootCacheForRoute(route) {
   const cache = readBootCache();
   if (!cache) return false;
+  // Market links need fresh event trade history for charts. Rendering cached
+  // groups first causes a visible straight-line chart before hydration.
+  if (route.name === "market") return false;
   setGroups(cache.groups, { persist: false });
   if (cache.currentGroupId && state.groups.some(group => group.id === cache.currentGroupId)) {
     state.currentGroupId = cache.currentGroupId;
