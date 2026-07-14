@@ -925,7 +925,8 @@ async function loadInitialAppData() {
   normalizeSelection();
   if (state.shell === "app" && !state.currentGroupId && state.groups.length && !state.sharedMarketId) {
     const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
-    state.currentGroupId = state.groups.some(group => group.id === savedGroup) ? savedGroup : state.groups[0].id;
+    const saved = state.groups.find(group => group.id === savedGroup && groupHasCurrentMember(group) && !isPbMyMarketsGroup(group));
+    state.currentGroupId = saved?.id ?? firstSelectableGroup()?.id ?? state.groups[0].id;
     normalizeSelection();
   }
   if (state.authUser && !state.inviteToken && !state.sharedMarketId && (state.currentGroupId || state.groups.length)) {
@@ -4038,14 +4039,31 @@ function hydrateWelcomeVideos() {
 
 function visibleNavGroups() {
   if (state.shell !== "app" || !isLoggedIn()) return [];
+  return selectableNavGroups();
+}
+
+function selectableNavGroups() {
   const activeId = state.currentGroupId;
   const byLabel = new Map();
   state.groups.filter(group => groupHasCurrentMember(group) && !isPbMyMarketsGroup(group)).forEach(group => {
     const key = `${String(group.emoji || "").trim().toLowerCase()}::${String(group.name || "").trim().toLowerCase()}`;
     const current = byLabel.get(key);
-    if (!current || group.id === activeId) byLabel.set(key, group);
+    if (!current || groupNavSortScore(group, activeId) > groupNavSortScore(current, activeId)) byLabel.set(key, group);
   });
-  return [...byLabel.values()];
+  return [...byLabel.values()].sort((a, b) => groupNavSortScore(b, activeId) - groupNavSortScore(a, activeId));
+}
+
+function groupNavSortScore(group, activeId = state.currentGroupId) {
+  if (!group) return -1;
+  const markets = group.markets ?? [];
+  const openMarkets = new Set(markets.filter(market => market.status === "open").map(market => market.eventId || market.id)).size;
+  const marketCount = new Set(markets.map(market => market.eventId || market.id)).size;
+  const createdAt = Date.parse(group.createdAt || "") || 0;
+  return (group.id === activeId ? 1_000_000_000 : 0) + openMarkets * 10_000 + marketCount * 1_000 + createdAt / 1_000_000_000;
+}
+
+function firstSelectableGroup() {
+  return selectableNavGroups()[0] ?? state.groups.find(group => groupHasCurrentMember(group) && !isPbMyMarketsGroup(group)) ?? state.groups.find(groupHasCurrentMember) ?? null;
 }
 
 function readGroupAddons() {
@@ -9624,6 +9642,7 @@ function reconcileGroups(incomingGroups) {
   const byId = new Map(incoming.map(group => [group.id, group]));
   for (const existing of state.groups ?? []) {
     if (!existing?.id || byId.has(existing.id)) continue;
+    if (isPbMyMarketsGroup(existing) && existing.id !== state.currentGroupId) continue;
     if (existing.id === state.currentGroupId || groupHasCurrentMember(existing)) {
       byId.set(existing.id, existing);
     }
@@ -9776,7 +9795,7 @@ function normalizeSelection() {
   }
   let group = getCurrentGroup();
   if (group && isPbMyMarketsGroup(group)) {
-    const replacement = state.groups.find(item => item.id !== group.id && groupHasCurrentMember(item) && !isPbMyMarketsGroup(item));
+    const replacement = firstSelectableGroup();
     if (replacement) {
       state.currentGroupId = replacement.id;
       localStorage.setItem(STORAGE_KEYS.groupId, replacement.id);

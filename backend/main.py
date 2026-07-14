@@ -675,6 +675,34 @@ def person_key(value: str | None) -> str:
     return clean_person(value).casefold()
 
 
+def expand_member_aliases(aliases: set[str]) -> set[str]:
+    expanded = {alias for alias in aliases if alias}
+    emails = sorted(alias for alias in expanded if "@" in alias)
+    if not emails:
+        return expanded
+    try:
+        rows = (
+            get_db()
+            .table("bracket_entries")
+            .select("participant,user_email")
+            .in_("user_email", emails)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        print("Could not expand member aliases from bracket entries", exc)
+        return expanded
+    for row in rows:
+        email = clean_person(row.get("user_email"), "").casefold()
+        if email not in expanded:
+            continue
+        participant = clean_person(row.get("participant"), "").casefold()
+        if participant:
+            expanded.add(participant)
+    return expanded
+
+
 def clean_bracket_picks(picks: dict[str, str] | None) -> dict[str, str]:
     cleaned: dict[str, str] = {}
     for key, value in (picks or {}).items():
@@ -1191,17 +1219,18 @@ def groups_response(
     **extra,
 ) -> dict:
     aliases = {
-        item.strip().lower()
+        clean_person(item).casefold()
         for item in (members or "").split(",")
-        if item.strip()
+        if clean_person(item)
     }
+    aliases = expand_member_aliases(aliases)
     groups = load_all_groups(compact=compact, group_id=group_id, limit=None if aliases else limit)
     if aliases:
         def matches_member_alias(group: dict) -> bool:
             creator = clean_person(group.get("createdBy"))
-            if creator.lower() in aliases:
+            if creator.casefold() in aliases:
                 return True
-            return any(clean_person(member).lower() in aliases for member in group.get("members", []))
+            return any(clean_person(member).casefold() in aliases for member in group.get("members", []))
 
         groups = [
             group for group in groups
