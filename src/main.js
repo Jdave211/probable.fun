@@ -3239,7 +3239,7 @@ async function shareInviteLink() {
   try {
     await navigator.share({
       title: `Join ${invite.groupName} on Probable`,
-      text: `Join ${invite.groupName} and trade your World Cup takes.`,
+      text: `Join ${invite.groupName} and trade your predictions.`,
       url: inviteUrl(invite.token),
     });
   } catch (err) {
@@ -4355,7 +4355,7 @@ function renderFocusedTradeView(group, market, event) {
           <div class="focused-event-head">
             <div class="event-thumb ${eventThumbClass(eventTitle, event.imageUrl)} focused-event-thumb" aria-hidden="true">${eventThumb(eventTitle, event.imageUrl)}</div>
             <div>
-              <p class="focused-event-kicker">Sports · Soccer</p>
+              <p class="focused-event-kicker">${esc(marketContextLabel(group, market, event))}</p>
               <h1>${esc(eventTitle)}</h1>
             </div>
           </div>
@@ -4972,6 +4972,22 @@ function eventCard(event) {
 
 function eventCreatorLabel(event) {
   return event?.creator || getCurrentGroup()?.members?.[0] || "unknown";
+}
+
+function marketContextLabel(group, market, event) {
+  const text = [
+    group?.name,
+    group?.emoji,
+    event?.title,
+    market?.category,
+    market?.question,
+  ].filter(Boolean).join(" ").toLowerCase();
+  if (/(hockey|nhl|stanley|puck|leafs|rangers|oilers|canadiens|bruins|panthers|avalanche|penguins|lightning|jets|senators|flames|canucks|stars|devils|islanders)/.test(text)) return "Sports · Hockey";
+  if (/(nba|basketball|lakers|celtics|knicks|warriors|raptors|nuggets|mavericks|bucks|heat)/.test(text)) return "Sports · Basketball";
+  if (/(nfl|football|super bowl|chiefs|eagles|cowboys|ravens|bills|49ers)/.test(text)) return "Sports · Football";
+  if (/(soccer|world cup|fifa|champions league|premier league|goal|ronaldo|messi|mbappe|haaland|wirtz)/.test(text)) return "Sports · Soccer";
+  if (group?.name) return `${group.emoji || "PB"} ${group.name}`;
+  return "Group market";
 }
 
 function eventResolvedOutcome(event) {
