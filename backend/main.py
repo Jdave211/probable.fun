@@ -2787,16 +2787,22 @@ BRACKET_DERIVED_WINNERS = {
     "m95": "Argentina",
     "m96": "Switzerland",
     "m97": "France",
+    "m98": "Spain",
+    "m99": "England",
+    "m100": "Argentina",
+    "m101": "Spain",
+    "m102": "Argentina",
+    "final": "Spain",
 }
 
 BRACKET_SAMPLE_PICKS = {
-    "m74": "Germany", "m75": "Morocco", "m77": "France", "m78": "Norway",
-    "m79": "Mexico", "m80": "England", "m81": "USA", "m82": "Senegal",
+    "m74": "Paraguay", "m75": "Morocco", "m77": "France", "m78": "Norway",
+    "m79": "Mexico", "m80": "England", "m81": "USA", "m82": "Belgium",
     "m83": "Portugal", "m84": "Spain", "m85": "Switzerland", "m86": "Argentina",
-    "m87": "Colombia", "m88": "Australia", "m89": "France", "m90": "Morocco",
-    "m91": "Brazil", "m92": "England", "m93": "USA", "m94": "Spain",
-    "m95": "Argentina", "m96": "Colombia", "m97": "France", "m98": "Spain",
-    "m99": "Brazil", "m100": "Argentina", "m101": "France", "m102": "Argentina", "final": "France",
+    "m87": "Colombia", "m88": "Egypt", "m89": "France", "m90": "Morocco",
+    "m91": "Norway", "m92": "England", "m93": "Belgium", "m94": "Spain",
+    "m95": "Argentina", "m96": "Switzerland", "m97": "France", "m98": "Spain",
+    "m99": "England", "m100": "Argentina", "m101": "Spain", "m102": "Argentina", "final": "Spain",
 }
 
 BRACKET_FLAG = {
