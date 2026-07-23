@@ -11,6 +11,8 @@ import {
 } from "chart.js";
 import { animate, stagger } from "motion";
 import { supabase } from "./supabase.js";
+import { DEMO_GROUP_ID, buildDemoGroup, simulateDemoApi, resolveDemoMarket } from "./demo.js";
+import { startTutorial, stopTutorial, tutorialOnRender } from "./tutorial.js";
 
 const probableCursorShadePlugin = {
   id: "probableCursorShade",
@@ -367,6 +369,8 @@ const state = {
   marketOddsSeed: null,
   marketImages: [],
   pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, suggestions: false, suggestionPreview: null, tradeMarketId: null, resolveMarketId: null },
+  demoMode: false,
+  demoPrevGroupId: null,
   questionSuggestions: [],
   questionSuggestionsGroupId: null,
   loaded: false,
@@ -713,6 +717,10 @@ document.addEventListener("input", onGlobalInput);
 document.addEventListener("submit", onGlobalSubmit);
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
+    if (state.demoMode) {
+      exitDemo();
+      return;
+    }
     closeModal("group");
     closeModal("join");
     closeModal("invite");
@@ -1197,6 +1205,10 @@ async function onGlobalClick(e) {
 
   const groupBtn = e.target.closest("[data-group-id]");
   if (groupBtn) {
+    if (state.demoMode) {
+      toast("Finish or skip the demo first.");
+      return;
+    }
     const gid = groupBtn.dataset.groupId;
     if (gid === "__new") {
       if (requireLogin("create-group")) openModal("group");
@@ -1789,7 +1801,7 @@ async function onGlobalSubmit(e) {
     toast("Enter a valid amount.");
     return;
   }
-  if (!requireLogin()) return;
+  if (!state.demoMode && !requireLogin()) return;
   if (!state.activeMember) {
     toast("Select a member first.");
     return;
@@ -1905,6 +1917,10 @@ function runPendingAuthAction() {
   }
   if (action === "welcome-create-market") {
     createStoredWelcomeMarket().catch(err => toast(err.message || "Failed to create market."));
+    return;
+  }
+  if (action === "demo-create-group") {
+    openModal("group");
     return;
   }
   if (action === "trade-shared-market") {
@@ -2391,7 +2407,7 @@ function selectedMarketOddsSeed(outcomes) {
 }
 
 async function loadQuestionSuggestions(groupId) {
-  if (!groupId || state.pendingUi.suggestions) return;
+  if (!groupId || groupId === DEMO_GROUP_ID || state.pendingUi.suggestions) return;
   if (state.questionSuggestionsGroupId === groupId && state.questionSuggestions.length) return;
   state.pendingUi.suggestions = true;
   state.questionSuggestions = [];
@@ -3571,6 +3587,7 @@ function render() {
   requestAnimationFrame(() => {
     renderCharts();
     animateIn();
+    if (state.demoMode) tutorialOnRender();
   });
 }
 
@@ -3604,7 +3621,7 @@ function visibleNavGroups() {
   if (state.shell !== "app" || !isLoggedIn()) return [];
   const activeId = state.currentGroupId;
   const byLabel = new Map();
-  state.groups.filter(groupHasCurrentMember).forEach(group => {
+  state.groups.filter(group => group.id !== DEMO_GROUP_ID).filter(groupHasCurrentMember).forEach(group => {
     const key = `${String(group.emoji || "").trim().toLowerCase()}::${String(group.name || "").trim().toLowerCase()}`;
     const current = byLabel.get(key);
     if (!current || group.id === activeId) byLabel.set(key, group);
@@ -7943,6 +7960,9 @@ function ammPreview(poolYes, poolNo, side, amount) {
 
 function setGroups(groups) {
   state.groups = groups ?? [];
+  if (state.demoMode && !state.groups.some(g => g.id === DEMO_GROUP_ID)) {
+    state.groups = state.groups.concat([buildDemoGroup(state.activeMember || "You")]);
+  }
   tradeQuoteCache.clear();
   tradeQuoteInflight.clear();
 }
@@ -8086,6 +8106,59 @@ function renderMarketLinkLoading({ error = "" } = {}) {
         </div>
       </div>
     </section>`;
+}
+
+function enterDemo() {
+  if (state.demoMode) return;
+  const memberName = isLoggedIn() ? (authDisplayName() || "You") : "You";
+  const group = buildDemoGroup(memberName);
+  state.demoPrevGroupId = state.currentGroupId;
+  state.groups = state.groups.filter(g => g.id !== DEMO_GROUP_ID).concat([group]);
+  state.demoMode = true;
+  state.shell = "app";
+  state.view = "dashboard";
+  state.currentGroupId = DEMO_GROUP_ID;
+  state.activeMember = memberName;
+  state.trade = emptyTrade();
+  render();
+  startTutorial({
+    getGroup: () => state.groups.find(g => g.id === DEMO_GROUP_ID),
+    getMember: () => memberName,
+    resolveDemo: outcomeId => {
+      const demoGroup = state.groups.find(g => g.id === DEMO_GROUP_ID);
+      if (demoGroup) resolveDemoMarket(demoGroup, outcomeId);
+      render();
+    },
+    exitDemo: handoff => exitDemo(handoff),
+  });
+}
+
+function exitDemo(handoff = false) {
+  if (!state.demoMode) return;
+  stopTutorial();
+  state.demoMode = false;
+  state.groups = state.groups.filter(g => g.id !== DEMO_GROUP_ID);
+  localStorage.setItem("probable_demo_done", "1");
+  state.trade = emptyTrade();
+  state.mobileTradeOpen = false;
+  state.currentGroupId = state.demoPrevGroupId && state.groups.some(g => g.id === state.demoPrevGroupId)
+    ? state.demoPrevGroupId
+    : null;
+  state.demoPrevGroupId = null;
+  if (!state.currentGroupId) {
+    if (isLoggedIn() && state.groups.length) {
+      state.currentGroupId = state.groups[0].id;
+    } else {
+      state.shell = "welcome";
+      state.welcomeMode = "actions";
+    }
+  }
+  normalizeSelection();
+  render();
+  if (handoff) {
+    if (isLoggedIn()) openModal("group");
+    else requireLogin("demo-create-group");
+  }
 }
 
 function enterWelcomeShell({ updateUrl = true } = {}) {
@@ -8340,6 +8413,10 @@ function toastSettlement(settlement, fallback = "Market resolved.") {
 }
 
 async function api(path, opts = {}) {
+  if (state.demoMode && (path.includes("/markets/demo-") || path.includes(`/groups/${DEMO_GROUP_ID}/`))) {
+    const demoGroup = state.groups.find(g => g.id === DEMO_GROUP_ID);
+    return simulateDemoApi(path, opts, demoGroup, state.groups);
+  }
   if (!API && import.meta.env.PROD && !isLocalHost()) {
     throw new Error(API_CONFIG_ERROR);
   }
