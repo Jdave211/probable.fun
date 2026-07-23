@@ -6463,7 +6463,7 @@ html {
 
 .tutorial-spotlight {
   position: fixed;
-  z-index: 200;
+  z-index: 210;
   border-radius: 14px;
   pointer-events: none;
   box-shadow: 0 0 0 9999px rgba(4, 8, 16, 0.72);
@@ -6472,7 +6472,7 @@ html {
 
 .tutorial-bubble {
   position: fixed;
-  z-index: 201;
+  z-index: 211;
   max-width: 340px;
   background: #101826;
   border: 1px solid rgba(255, 255, 255, 0.14);
