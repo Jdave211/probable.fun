@@ -789,7 +789,8 @@ async function init() {
       !state.groups.some(groupHasCurrentMember) &&
       !state.inviteToken &&
       !state.sharedMarketId &&
-      !localStorage.getItem("probable_demo_done")
+      !localStorage.getItem("probable_demo_done") &&
+      !sessionStorage.getItem("probable_pending_auth_action")
     ) {
       enterDemo();
     }
