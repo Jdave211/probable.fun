@@ -141,12 +141,14 @@ export function applyDemoTrade(group, { participant, amount, outcomeId, side, ac
 export function simulateDemoApi(path, opts, group, allGroups) {
   const body = opts?.body ? JSON.parse(opts.body) : {};
   if (path.endsWith("/quote")) {
-    const shares = demoBuyShares(group, body.outcomeId, body.amount);
+    const outcomes = group.markets[0].outcomes;
+    const target = outcomes.find(o => o.id === body.outcomeId) || outcomes[0];
+    const shares = demoBuyShares(group, target.id, body.amount);
     return {
       quote: {
         shares,
         maxCash: 0,
-        price: shares > 0 ? Number(body.amount) / shares : 0,
+        price: target.price,
         isComplement: false,
       },
     };
