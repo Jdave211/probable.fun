@@ -14,9 +14,12 @@ function nowIso(offsetMs = 0) {
   return new Date(Date.now() + offsetMs).toISOString();
 }
 
+const FRIEND_POOL = ["Maya", "Sam", "Riley", "Alex", "Jordan P", "Nina"];
+
 export function buildDemoGroup(memberName) {
   const created = nowIso(-86400000);
   const closes = nowIso(86400000);
+  const friends = FRIEND_POOL.filter(n => n.toLowerCase() !== String(memberName).toLowerCase()).slice(0, 3);
   // Quantities chosen so softmax prices land at 62c / 38c with b = DEMO_B:
   // exp(0/150) / (exp(0/150) + exp(-73.4/150)) = 0.62
   const outcomes = [
@@ -24,8 +27,8 @@ export function buildDemoGroup(memberName) {
     { id: DEMO_NO_ID, title: "No", price: 0.38, quantity: -73.4, sortOrder: 1 },
   ];
   const positions = {
-    Maya: { [DEMO_YES_ID]: 40 },
-    Sam: { [DEMO_NO_ID]: 25 },
+    [friends[0]]: { [DEMO_YES_ID]: 40 },
+    [friends[1]]: { [DEMO_NO_ID]: 25 },
   };
   const markets = outcomes.map(outcome => ({
     id: outcome.id,
@@ -35,7 +38,7 @@ export function buildDemoGroup(memberName) {
     category: DEMO_QUESTION,
     description: "Kickoff is 6pm Thursday. Resolves Yes if Jordan arrives after kickoff. Source of truth: whoever runs the group timer. This is a practice market — nothing here is real.",
     imageUrl: null,
-    creator: "Maya",
+    creator: friends[0],
     status: "open",
     mode: "fake",
     oracleType: "manual",
@@ -73,8 +76,8 @@ export function buildDemoGroup(memberName) {
     emoji: "⚽",
     mode: "fake",
     createdAt: created,
-    members: [memberName, "Maya", "Sam", "Riley"],
-    balances: { [memberName]: 100000, Maya: 101200, Sam: 99100, Riley: 100450 },
+    members: [memberName, ...friends],
+    balances: { [memberName]: 100000, [friends[0]]: 101200, [friends[1]]: 99100, [friends[2]]: 100450 },
     markets,
   };
 }
