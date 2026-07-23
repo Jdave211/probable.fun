@@ -977,6 +977,13 @@ function routeToPositions({ replace = false } = {}) {
 }
 
 function routeToMarket(marketId, { replace = false } = {}) {
+  if (state.demoMode) {
+    // The demo market only exists in client-side state, so it can never be
+    // resolved as a shared-market link. Keep the URL at /app instead of
+    // leaking a demo-* id into the address bar (breaks on refresh/share).
+    routeToApp({ replace });
+    return;
+  }
   navigateTo(`/market/${encodeURIComponent(marketId)}`, { replace });
 }
 
