@@ -1384,6 +1384,10 @@ async function onGlobalClick(e) {
   }
 
   if (e.target.closest("[data-new-market]")) {
+    if (state.demoMode) {
+      toast("Finish or skip the demo first.");
+      return;
+    }
     if (!requireLogin("create-market")) return;
     await ensureMarketGroup();
     setMarketMinDate();

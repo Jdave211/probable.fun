@@ -157,7 +157,7 @@ export function simulateDemoApi(path, opts, group, allGroups) {
     applyDemoTrade(group, body);
     return { groups: allGroups };
   }
-  return {};
+  throw new Error("Not available in the practice market.");
 }
 
 export function resolveDemoMarket(group, winningOutcomeId) {
