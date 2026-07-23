@@ -1180,6 +1180,7 @@ async function onGlobalClick(e) {
   }
 
   if (e.target.closest("[data-go-welcome]")) {
+    if (state.demoMode) exitDemo();
     enterWelcomeShell();
     render();
     return;
