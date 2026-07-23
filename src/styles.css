@@ -6458,3 +6458,90 @@ html {
   border-color: rgba(255,255,255,0.4);
   color: #fff;
 }
+
+/* ── Tutorial (demo-market onboarding) ─────────────────────────── */
+
+.tutorial-spotlight {
+  position: fixed;
+  z-index: 200;
+  border-radius: 14px;
+  pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(4, 8, 16, 0.72);
+  transition: left 0.3s ease, top 0.3s ease, width 0.3s ease, height 0.3s ease;
+}
+
+.tutorial-bubble {
+  position: fixed;
+  z-index: 201;
+  max-width: 340px;
+  background: #101826;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  padding: 16px 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+.tutorial-bubble.centered {
+  left: 50% !important;
+  top: 50% !important;
+  transform: translate(-50%, -50%);
+}
+
+.tutorial-step-count {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+  margin: 0 0 6px;
+}
+
+.tutorial-bubble h4 {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 6px;
+}
+
+.tutorial-bubble p {
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.75);
+  margin: 0;
+}
+
+.tutorial-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.welcome-demo-link {
+  margin-top: 14px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.welcome-demo-link:hover {
+  color: #fff;
+}
+
+@media (max-width: 480px) {
+  .tutorial-bubble {
+    left: 12px !important;
+    right: 12px;
+    top: auto !important;
+    bottom: 12px;
+    max-width: none;
+    transform: none;
+  }
+  .tutorial-bubble.centered {
+    transform: none;
+  }
+}
