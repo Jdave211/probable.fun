@@ -809,7 +809,11 @@ async function loadInitialAppData() {
   normalizeSelection();
   if (state.shell === "app" && !state.currentGroupId && state.groups.length && !state.sharedMarketId) {
     const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
-    state.currentGroupId = state.groups.some(group => group.id === savedGroup) ? savedGroup : state.groups[0].id;
+    const savedGroupObj = state.groups.find(group => group.id === savedGroup);
+    const fallbackGroup = state.groups.find(groupHasCurrentMember);
+    state.currentGroupId = (savedGroupObj && groupHasCurrentMember(savedGroupObj))
+      ? savedGroup
+      : (fallbackGroup ? fallbackGroup.id : null);
     normalizeSelection();
   }
   if (state.authUser && !state.inviteToken && !state.sharedMarketId && (state.currentGroupId || state.groups.length)) {
@@ -8169,8 +8173,9 @@ function exitDemo(handoff = false) {
     : null;
   state.demoPrevGroupId = null;
   if (!state.currentGroupId) {
-    if (isLoggedIn() && state.groups.length) {
-      state.currentGroupId = state.groups[0].id;
+    const memberGroup = isLoggedIn() ? state.groups.find(groupHasCurrentMember) : null;
+    if (memberGroup) {
+      state.currentGroupId = memberGroup.id;
     } else {
       state.shell = "welcome";
       state.welcomeMode = "actions";
