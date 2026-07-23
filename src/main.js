@@ -783,6 +783,15 @@ async function init() {
     state.loaded = true;
     render();
     if (state.currentGroupId) loadQuestionSuggestions(state.currentGroupId);
+    if (
+      isLoggedIn() &&
+      !state.groups.length &&
+      !state.inviteToken &&
+      !state.sharedMarketId &&
+      !localStorage.getItem("probable_demo_done")
+    ) {
+      enterDemo();
+    }
     runStoredPendingAuthAction();
   }
 }
@@ -1033,6 +1042,12 @@ async function onGlobalClick(e) {
     return;
   }
 
+  if (e.target.closest("[data-demo-replay]")) {
+    state.accountMenuOpen = false;
+    enterDemo();
+    return;
+  }
+
   const accountSignOut = e.target.closest("[data-account-signout]");
   if (accountSignOut) {
     e.preventDefault();
@@ -1231,6 +1246,11 @@ async function onGlobalClick(e) {
     normalizeSelection();
     render();
     loadQuestionSuggestions(gid);
+    return;
+  }
+
+  if (e.target.closest("[data-try-demo]")) {
+    enterDemo();
     return;
   }
 
@@ -3638,6 +3658,7 @@ function accountIndicatorHtml() {
           <div class="account-popover">
             <button class="account-popover-name" type="button" data-open-positions>My Portfolio</button>
             <button type="button" data-open-admin>Admin verify</button>
+            <button type="button" data-demo-replay>How it works</button>
             <button type="button" data-account-signout>Sign out</button>
           </div>` : ""}
       </div>`;
@@ -4165,7 +4186,8 @@ function renderEmptyDashboard() {
     <div class="welcome-button-row">
       <button class="btn btn-primary btn-lg" type="button" data-create-market-welcome>Create market</button>
       <button class="btn btn-ghost btn-lg" type="button" data-join-group>Join group</button>
-    </div>`;
+    </div>
+    <button class="welcome-demo-link" type="button" data-try-demo>New here? Try the 2-minute demo</button>`;
   const welcomeCreateForm = `
     <form class="welcome-inline-form" id="dashboardCreateForm">
       <div class="form-topline">
