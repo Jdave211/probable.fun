@@ -785,7 +785,7 @@ async function init() {
     if (state.currentGroupId) loadQuestionSuggestions(state.currentGroupId);
     if (
       isLoggedIn() &&
-      !state.groups.length &&
+      !state.groups.some(groupHasCurrentMember) &&
       !state.inviteToken &&
       !state.sharedMarketId &&
       !localStorage.getItem("probable_demo_done")
