@@ -785,6 +785,7 @@ async function init() {
     if (state.currentGroupId) loadQuestionSuggestions(state.currentGroupId);
     if (
       isLoggedIn() &&
+      !state.bootError &&
       !state.groups.some(groupHasCurrentMember) &&
       !state.inviteToken &&
       !state.sharedMarketId &&
