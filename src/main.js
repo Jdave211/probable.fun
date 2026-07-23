@@ -1030,6 +1030,10 @@ async function onGlobalClick(e) {
   const openPositionsBtn = e.target.closest("[data-open-positions]");
   if (openPositionsBtn) {
     e.preventDefault();
+    if (state.demoMode) {
+      toast("Finish or skip the demo first.");
+      return;
+    }
     state.accountMenuOpen = false;
     state.shell = "app";
     state.view = "positions";
@@ -1044,6 +1048,10 @@ async function onGlobalClick(e) {
   const openAdminBtn = e.target.closest("[data-open-admin]");
   if (openAdminBtn) {
     e.preventDefault();
+    if (state.demoMode) {
+      toast("Finish or skip the demo first.");
+      return;
+    }
     state.accountMenuOpen = false;
     state.shell = "app";
     state.view = "admin";
@@ -1412,6 +1420,10 @@ async function onGlobalClick(e) {
 
   const inviteBtn = e.target.closest("[data-open-invite]");
   if (inviteBtn) {
+    if (state.demoMode) {
+      toast("Finish or skip the demo first.");
+      return;
+    }
     await openInviteModal(inviteBtn.dataset.openInvite);
     return;
   }
@@ -1428,6 +1440,10 @@ async function onGlobalClick(e) {
 
   const marketShareBtn = e.target.closest("[data-share-market]");
   if (marketShareBtn) {
+    if (state.demoMode) {
+      toast("Finish or skip the demo first.");
+      return;
+    }
     openMarketEmbedModal(marketShareBtn.dataset.shareMarket);
     await copyMarketLink(marketShareBtn.dataset.shareMarket);
     return;
@@ -8176,6 +8192,7 @@ function enterDemo() {
 function exitDemo(handoff = false) {
   if (!state.demoMode) return;
   stopTutorial();
+  ["group", "join", "invite", "embed", "leaderProfile", "tradeHistory", "login", "market", "suggestPreview"].forEach(closeModal);
   state.demoMode = false;
   state.groups = state.groups.filter(g => g.id !== DEMO_GROUP_ID);
   localStorage.setItem("probable_demo_done", "1");

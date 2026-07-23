@@ -157,6 +157,7 @@ export function simulateDemoApi(path, opts, group, allGroups) {
     };
   }
   if (path.endsWith("/trade")) {
+    if (body.action === "sell") throw new Error("Selling isn't part of the practice market.");
     applyDemoTrade(group, body);
     return { groups: allGroups };
   }
