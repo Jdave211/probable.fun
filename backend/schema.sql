@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS groups (
   name        text        NOT NULL,
   emoji       text        NOT NULL DEFAULT '📣',
   mode        text        NOT NULL DEFAULT 'fake',
+  created_by  text,
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
@@ -105,6 +106,10 @@ CREATE TABLE IF NOT EXISTS market_outcomes (
   sort_order       integer     NOT NULL DEFAULT 0,
   quantity         numeric     NOT NULL DEFAULT 0.0,
   price            numeric     NOT NULL DEFAULT 0.0,
+  status           text        NOT NULL DEFAULT 'active',
+  eliminated_at    timestamptz,
+  eliminated_by    text,
+  elimination_notes text,
   legacy_market_id text,
   created_at       timestamptz NOT NULL DEFAULT now(),
   UNIQUE (event_id, title)
@@ -138,15 +143,44 @@ CREATE TABLE IF NOT EXISTS event_trades (
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 
+-- Submitted seasonal bracket entries. LocalStorage is only a draft cache;
+-- signed-in entries should persist here.
+CREATE TABLE IF NOT EXISTS bracket_entries (
+  id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  challenge_id text       NOT NULL,
+  participant  text       NOT NULL,
+  user_email   text,
+  picks        jsonb      NOT NULL DEFAULT '{}',
+  submitted_at timestamptz,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (challenge_id, participant)
+);
+
+-- Market settlement approvals. Founder + creator must agree before payout when
+-- they are different people.
+CREATE TABLE IF NOT EXISTS market_resolution_approvals (
+  id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_id   text       NOT NULL REFERENCES market_events(id) ON DELETE CASCADE,
+  outcome_id text       NOT NULL,
+  resolver   text       NOT NULL,
+  role       text       NOT NULL DEFAULT 'admin',
+  notes      text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (event_id, resolver)
+);
+
 ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_group_id text;
 ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_outcome_id text;
 ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_side text;
 ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_shares numeric;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS created_by text;
 
 -- Indexes for common lookups
 CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id);
 CREATE INDEX IF NOT EXISTS idx_group_invites_group ON group_invites(group_id);
 CREATE INDEX IF NOT EXISTS idx_group_invites_active ON group_invites(group_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_groups_created_by ON groups(created_by);
 CREATE INDEX IF NOT EXISTS idx_markets_group       ON markets(group_id);
 CREATE INDEX IF NOT EXISTS idx_trades_market       ON trades(market_id);
 CREATE INDEX IF NOT EXISTS idx_market_events_group ON market_events(group_id);
@@ -155,7 +189,8 @@ CREATE INDEX IF NOT EXISTS idx_market_outcomes_event ON market_outcomes(event_id
 CREATE INDEX IF NOT EXISTS idx_market_outcomes_legacy ON market_outcomes(legacy_market_id);
 CREATE INDEX IF NOT EXISTS idx_event_positions_event_participant ON event_positions(event_id, participant);
 CREATE INDEX IF NOT EXISTS idx_event_trades_event ON event_trades(event_id, created_at);
-
+CREATE INDEX IF NOT EXISTS idx_bracket_entries_challenge ON bracket_entries(challenge_id, submitted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_market_resolution_approvals_event ON market_resolution_approvals(event_id, created_at);
 ALTER TABLE market_events ADD COLUMN IF NOT EXISTS image_url text;
 ALTER TABLE market_events ADD COLUMN IF NOT EXISTS created_by text;
 ALTER TABLE market_events ADD COLUMN IF NOT EXISTS slug text;
@@ -165,6 +200,10 @@ ALTER TABLE market_events ADD COLUMN IF NOT EXISTS verification_status text NOT 
 ALTER TABLE market_events ADD COLUMN IF NOT EXISTS verification_attempts jsonb NOT NULL DEFAULT '[]';
 ALTER TABLE market_events ADD COLUMN IF NOT EXISTS resolved_by text;
 ALTER TABLE market_events ADD COLUMN IF NOT EXISTS resolution_notes text;
+ALTER TABLE market_outcomes ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
+ALTER TABLE market_outcomes ADD COLUMN IF NOT EXISTS eliminated_at timestamptz;
+ALTER TABLE market_outcomes ADD COLUMN IF NOT EXISTS eliminated_by text;
+ALTER TABLE market_outcomes ADD COLUMN IF NOT EXISTS elimination_notes text;
 ALTER TABLE market_events ALTER COLUMN liquidity_b SET DEFAULT 20000.0;
 ALTER TABLE group_members ALTER COLUMN balance SET DEFAULT 100000.0;
 
@@ -178,6 +217,8 @@ ALTER TABLE market_events DISABLE ROW LEVEL SECURITY;
 ALTER TABLE market_outcomes DISABLE ROW LEVEL SECURITY;
 ALTER TABLE event_positions DISABLE ROW LEVEL SECURITY;
 ALTER TABLE event_trades DISABLE ROW LEVEL SECURITY;
+ALTER TABLE bracket_entries DISABLE ROW LEVEL SECURITY;
+ALTER TABLE market_resolution_approvals DISABLE ROW LEVEL SECURITY;
 
 -- Grant full access to the anon/publishable key role
 GRANT ALL ON groups        TO anon;
@@ -189,6 +230,8 @@ GRANT ALL ON market_events TO anon;
 GRANT ALL ON market_outcomes TO anon;
 GRANT ALL ON event_positions TO anon;
 GRANT ALL ON event_trades TO anon;
+GRANT ALL ON bracket_entries TO anon;
+GRANT ALL ON market_resolution_approvals TO anon;
 
 CREATE OR REPLACE FUNCTION probable_reprice_event(p_event_id text)
 RETURNS void
@@ -203,17 +246,24 @@ BEGIN
     RAISE EXCEPTION 'Event not found or invalid liquidity';
   END IF;
 
+  UPDATE market_outcomes
+  SET price = 0
+  WHERE event_id = p_event_id
+    AND COALESCE(status, 'active') = 'eliminated';
+
   SELECT SUM(EXP(quantity / v_b)) INTO v_sum
   FROM market_outcomes
-  WHERE event_id = p_event_id;
+  WHERE event_id = p_event_id
+    AND COALESCE(status, 'active') <> 'eliminated';
 
   IF v_sum IS NULL OR v_sum <= 0 THEN
-    RAISE EXCEPTION 'Event has no outcomes';
+    RAISE EXCEPTION 'Event has no active outcomes';
   END IF;
 
   UPDATE market_outcomes
   SET price = ROUND((EXP(quantity / v_b) / v_sum)::numeric, 8)
-  WHERE event_id = p_event_id;
+  WHERE event_id = p_event_id
+    AND COALESCE(status, 'active') <> 'eliminated';
 END;
 $$;
 
@@ -266,7 +316,12 @@ BEGIN
     UPDATE market_events SET status = 'closed' WHERE id = p_event_id;
     RAISE EXCEPTION 'Market is closed for trading';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM market_outcomes WHERE id = p_outcome_id AND event_id = p_event_id) THEN
+  IF NOT EXISTS (
+    SELECT 1 FROM market_outcomes
+    WHERE id = p_outcome_id
+      AND event_id = p_event_id
+      AND COALESCE(status, 'active') <> 'eliminated'
+  ) THEN
     RAISE EXCEPTION 'Outcome not found';
   END IF;
 
@@ -293,11 +348,14 @@ BEGIN
   SELECT jsonb_object_agg(id, price ORDER BY sort_order), SUM(EXP(quantity / v_b))
     INTO v_prices_before, v_sum_exp
   FROM market_outcomes
-  WHERE event_id = p_event_id;
+  WHERE event_id = p_event_id
+    AND COALESCE(status, 'active') <> 'eliminated';
 
   SELECT EXP(quantity / v_b) INTO v_outcome_exp
   FROM market_outcomes
-  WHERE id = p_outcome_id AND event_id = p_event_id;
+  WHERE id = p_outcome_id
+    AND event_id = p_event_id
+    AND COALESCE(status, 'active') <> 'eliminated';
 
   IF lower(p_action) = 'buy' THEN
     v_curve_cash := ROUND(v_cash * (1 - v_fee_rate), 4);
@@ -435,6 +493,9 @@ BEGIN
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Resolution outcome not found';
+  END IF;
+  IF COALESCE(v_outcome.status, 'active') = 'eliminated' THEN
+    RAISE EXCEPTION 'Cannot resolve to an eliminated outcome';
   END IF;
 
   v_resolved_by := COALESCE(NULLIF(btrim(p_resolved_by), ''), 'manual');

@@ -304,7 +304,7 @@ const DEFAULT_BALANCE = 100000;
 const DEFAULT_MARKET_LIQUIDITY = 20000;
 const MARKET_FEE_RATE = 0.015;
 const API_TIMEOUT_MS = 18000;
-const BOOT_API_TIMEOUT_MS = 45000;
+const BOOT_API_TIMEOUT_MS = 9000;
 const AUTH_TIMEOUT_MS = 8000;
 const ALL_OUTCOMES_RESOLUTION = "__all__";
 
@@ -320,12 +320,15 @@ const EVENT_CHART_COLORS = ["#2d9cff", "#f23645", "#f2c414", "#ff861c", "#8bd450
 const BINARY_CHART_COLORS = { yes: "#2d9cff", no: "#f23645" };
 const charts = new Map();
 let gooeyCleanup = null;
+let bootRetryTimer = null;
 const STORAGE_KEYS = {
   shell: "probable_shell",
   view: "probable_view",
   groupId: "probable_groupId",
   user: "probable_user",
   devAuth: "probable_dev_auth",
+  bootCache: "probable_boot_cache_v1",
+  groupAddons: "probable_group_addons_v1",
 };
 
 const state = {
@@ -368,6 +371,15 @@ const state = {
   marketImageName: "",
   marketOddsSeed: null,
   marketImages: [],
+  bracketPicks: {},
+  bracketSubmitted: false,
+  bracketRoundIndex: 0,
+  bracketView: "grid",
+  bracketEntryId: "",
+  sharedBracketEntryId: "",
+  bracketRemoteLoaded: false,
+  bracketLastPickedId: "",
+  bracketSaving: false,
   pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, suggestions: false, suggestionPreview: null, tradeMarketId: null, resolveMarketId: null },
   demoMode: false,
   demoPrevGroupId: null,
@@ -378,6 +390,101 @@ const state = {
 
 const tradeQuoteCache = new Map();
 const tradeQuoteInflight = new Map();
+
+const BRACKET_CHALLENGE = {
+  id: "wc26-bracket-r32",
+  prize: "up to $500",
+  title: "World Cup Bracket Challenge",
+  subtitle: "Free to enter. Submit the cleanest knockout bracket from the Round of 32 onward.",
+  matchups: [
+    { id: "m73", matchNo: 73, teams: ["South Africa", "Canada"], winner: "Canada", completed: true },
+    { id: "m74", matchNo: 74, teams: ["Germany", "Paraguay"], winner: "Paraguay", completed: true },
+    { id: "m75", matchNo: 75, teams: ["Netherlands", "Morocco"], winner: "Morocco", completed: true },
+    { id: "m76", matchNo: 76, teams: ["Brazil", "Japan"], winner: "Brazil", completed: true },
+    { id: "m77", matchNo: 77, teams: ["France", "Sweden"], winner: "France", completed: true },
+    { id: "m78", matchNo: 78, teams: ["Ivory Coast", "Norway"], winner: "Norway", completed: true },
+    { id: "m79", matchNo: 79, teams: ["Mexico", "Ecuador"], winner: "Mexico", completed: true },
+    { id: "m80", matchNo: 80, teams: ["England", "DR Congo"], winner: "England", completed: true },
+    { id: "m81", matchNo: 81, teams: ["USA", "Bosnia and Herzegovina"], winner: "USA", completed: true },
+    { id: "m82", matchNo: 82, teams: ["Belgium", "Senegal"], winner: "Belgium", completed: true },
+    { id: "m83", matchNo: 83, teams: ["Portugal", "Croatia"], winner: "Portugal", completed: true },
+    { id: "m84", matchNo: 84, teams: ["Spain", "Austria"], winner: "Spain", completed: true },
+    { id: "m85", matchNo: 85, teams: ["Switzerland", "Algeria"], winner: "Switzerland", completed: true },
+    { id: "m86", matchNo: 86, teams: ["Argentina", "Cabo Verde"], winner: "Argentina", completed: true },
+    { id: "m87", matchNo: 87, teams: ["Colombia", "Ghana"], winner: "Colombia", completed: true },
+    { id: "m88", matchNo: 88, teams: ["Australia", "Egypt"], winner: "Egypt", completed: true },
+  ],
+};
+const BRACKET_DERIVED_RESULTS = {
+  m89: "France",
+  m90: "Morocco",
+  m91: "Norway",
+  m92: "England",
+  m93: "Belgium",
+  m94: "Spain",
+  m95: "Argentina",
+  m96: "Switzerland",
+  m97: "France",
+  m98: "Spain",
+  m99: "England",
+  m100: "Argentina",
+  m101: "Spain",
+  m102: "Argentina",
+  final: "Spain",
+};
+const BRACKET_LOCKED_WINNERS = {
+  ...Object.fromEntries(
+    BRACKET_CHALLENGE.matchups
+      .filter(matchup => matchup.completed && matchup.winner)
+      .map(matchup => [matchup.id, matchup.winner])
+  ),
+  ...BRACKET_DERIVED_RESULTS,
+};
+const BRACKET_TEAM_CHANCES = {
+  France: 23,
+  Spain: 11,
+  Argentina: 10,
+  Brazil: 9,
+  England: 8,
+  Portugal: 6,
+  Netherlands: 5,
+  Germany: 4,
+  Colombia: 4,
+  Belgium: 3,
+  USA: 3,
+  Mexico: 3,
+  Canada: 2,
+  Switzerland: 2,
+  Croatia: 1,
+  Morocco: 1,
+  Senegal: 1,
+  Japan: 1,
+  Norway: 1,
+  Austria: 1,
+  Ecuador: 1,
+  Ghana: 1,
+  Sweden: 1,
+  "Ivory Coast": 1,
+  Australia: 1,
+  Egypt: 1,
+  Algeria: 1,
+  Paraguay: 1,
+  "DR Congo": 1,
+  "Bosnia and Herzegovina": 1,
+  "Cabo Verde": 1,
+  "South Africa": 0.5,
+};
+
+const GENERAL_MARKET_POOL = [
+  {
+    id: "world-cup-bracket",
+    type: "bracket",
+    title: BRACKET_CHALLENGE.title,
+    subtitle: "Free-to-enter knockout bracket contest.",
+    eyebrow: "General pool",
+    prize: BRACKET_CHALLENGE.prize,
+  },
+];
 
 document.querySelector("#app").innerHTML = `
   <nav class="topnav" id="topnav">
@@ -454,6 +561,16 @@ document.querySelector("#app").innerHTML = `
         <button class="modal-x" type="button" id="closeInviteModal" aria-label="Close">x</button>
       </div>
       <div id="inviteModalBody" class="invite-modal-body"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="generalMarketModalOverlay">
+    <div class="modal general-market-modal">
+      <div class="modal-header">
+        <span class="modal-title">Add from general pool</span>
+        <button class="modal-x" type="button" id="closeGeneralMarketModal" aria-label="Close">x</button>
+      </div>
+      <div id="generalMarketModalBody" class="general-market-modal-body"></div>
     </div>
   </div>
 
@@ -650,6 +767,8 @@ const dom = {
   joinModalOverlay: document.querySelector("#joinModalOverlay"),
   inviteModalOverlay: document.querySelector("#inviteModalOverlay"),
   inviteModalBody: document.querySelector("#inviteModalBody"),
+  generalMarketModalOverlay: document.querySelector("#generalMarketModalOverlay"),
+  generalMarketModalBody: document.querySelector("#generalMarketModalBody"),
   embedModalOverlay: document.querySelector("#embedModalOverlay"),
   embedModalBody: document.querySelector("#embedModalBody"),
   leaderProfileModalOverlay: document.querySelector("#leaderProfileModalOverlay"),
@@ -685,6 +804,7 @@ document.querySelector("#cancelGroupModal").addEventListener("click", () => clos
 document.querySelector("#closeJoinModal").addEventListener("click", () => closeModal("join"));
 document.querySelector("#cancelJoinModal").addEventListener("click", () => closeModal("join"));
 document.querySelector("#closeInviteModal").addEventListener("click", () => closeModal("invite"));
+document.querySelector("#closeGeneralMarketModal").addEventListener("click", () => closeModal("generalMarket"));
 document.querySelector("#closeEmbedModal").addEventListener("click", () => closeModal("embed"));
 document.querySelector("#closeLeaderProfileModal").addEventListener("click", () => closeModal("leaderProfile"));
 document.querySelector("#closeTradeHistoryModal").addEventListener("click", () => closeModal("tradeHistory"));
@@ -696,6 +816,7 @@ dom.suggestPreviewModalOverlay.addEventListener("click", e => { if (e.target ===
 dom.groupModalOverlay.addEventListener("click", e => { if (e.target === dom.groupModalOverlay) closeModal("group"); });
 dom.joinModalOverlay.addEventListener("click", e => { if (e.target === dom.joinModalOverlay) closeModal("join"); });
 dom.inviteModalOverlay.addEventListener("click", e => { if (e.target === dom.inviteModalOverlay) closeModal("invite"); });
+dom.generalMarketModalOverlay.addEventListener("click", e => { if (e.target === dom.generalMarketModalOverlay) closeModal("generalMarket"); });
 dom.embedModalOverlay.addEventListener("click", e => { if (e.target === dom.embedModalOverlay) closeModal("embed"); });
 dom.leaderProfileModalOverlay.addEventListener("click", e => { if (e.target === dom.leaderProfileModalOverlay) closeModal("leaderProfile"); });
 dom.tradeHistoryModalOverlay.addEventListener("click", e => { if (e.target === dom.tradeHistoryModalOverlay) closeModal("tradeHistory"); });
@@ -724,6 +845,7 @@ document.addEventListener("keydown", e => {
     closeModal("group");
     closeModal("join");
     closeModal("invite");
+    closeModal("generalMarket");
     closeModal("embed");
     closeModal("leaderProfile");
     closeModal("tradeHistory");
@@ -772,30 +894,49 @@ async function init() {
     runStoredPendingAuthAction();
   });
 
+  const restoredFromCache = restoreBootCacheForRoute(initialRoute);
+  if (restoredFromCache) {
+    state.loaded = true;
+    normalizeSelection();
+  }
   render();
   loadMarketImages().catch(() => {});
-  try {
-    await loadInitialAppData();
-  } catch (err) {
-    state.bootError = err.message || "Could not load groups.";
-    toast(err.message || "Could not load groups.");
-  } finally {
-    state.loaded = true;
-    render();
-    if (state.currentGroupId) loadQuestionSuggestions(state.currentGroupId);
-    if (
-      isLoggedIn() &&
-      !state.bootError &&
-      !state.groups.some(groupHasCurrentMember) &&
-      !state.inviteToken &&
-      !state.sharedMarketId &&
-      !localStorage.getItem("probable_demo_done") &&
-      !sessionStorage.getItem("probable_pending_auth_action")
-    ) {
-      enterDemo();
-    }
-    runStoredPendingAuthAction();
-  }
+  let keepInitialLoading = false;
+  loadInitialAppData()
+    .catch(err => {
+      if (!restoredFromCache && isWakeTimeoutError(err)) {
+        state.bootError = "";
+        state.marketLinkError = "";
+        keepInitialLoading = true;
+        scheduleInitialLoadRetry();
+        return;
+      }
+      if (restoredFromCache) {
+        console.warn("Initial refresh deferred", err);
+        return;
+      }
+      state.bootError = err.message || "Could not load groups.";
+      toast(err.message || "Could not load groups.");
+    })
+    .finally(() => {
+      if (!keepInitialLoading) state.loaded = true;
+      render();
+      if (!keepInitialLoading) {
+        if (state.currentGroupId) loadQuestionSuggestions(state.currentGroupId);
+        if (
+          isLoggedIn() &&
+          !state.bootError &&
+          !state.groups.some(groupHasCurrentMember) &&
+          !state.inviteToken &&
+          !state.sharedMarketId &&
+          !localStorage.getItem("probable_demo_done") &&
+          !sessionStorage.getItem("probable_pending_auth_action")
+        ) {
+          enterDemo();
+        }
+        runStoredPendingAuthAction();
+      }
+    });
 }
 
 init();
@@ -803,18 +944,42 @@ init();
 async function loadInitialAppData() {
   state.bootError = "";
   state.marketLinkError = "";
+  if (state.view === "bracket" && !state.sharedMarketId && !state.inviteToken) {
+    loadBracketEntryIntoState();
+    if (isLoggedIn() || state.sharedBracketEntryId) void loadRemoteBracketEntry({ refresh: true });
+    return;
+  }
+  if (state.sharedMarketId) {
+    const data = await loadMarketContextForBoot(state.sharedMarketId);
+    if (Array.isArray(data.groups)) {
+      setGroups(data.groups);
+    }
+    if (data.group) {
+      mergeFocusedGroupContext(data.group);
+    } else if (!Array.isArray(data.groups)) {
+      setGroups(data.groups);
+    }
+    openSharedMarket(state.sharedMarketId);
+    if (isLoggedIn()) {
+      try {
+        const memberData = await loadGroupsForBoot();
+        if (Array.isArray(memberData.groups)) setGroups(memberData.groups);
+        openSharedMarket(state.sharedMarketId);
+      } catch (err) {
+        console.warn("Member groups refresh deferred", err);
+      }
+    }
+    normalizeSelection();
+    return;
+  }
   const data = await loadGroupsForBoot();
   setGroups(data.groups);
   if (state.inviteToken) await loadInvitePreview(state.inviteToken);
-  if (state.sharedMarketId) openSharedMarket(state.sharedMarketId);
   normalizeSelection();
   if (state.shell === "app" && !state.currentGroupId && state.groups.length && !state.sharedMarketId) {
     const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
-    const savedGroupObj = state.groups.find(group => group.id === savedGroup);
-    const fallbackGroup = state.groups.find(groupHasCurrentMember);
-    state.currentGroupId = (savedGroupObj && groupHasCurrentMember(savedGroupObj))
-      ? savedGroup
-      : (fallbackGroup ? fallbackGroup.id : null);
+    const saved = state.groups.find(group => group.id === savedGroup && groupHasCurrentMember(group) && !isPbMyMarketsGroup(group));
+    state.currentGroupId = saved?.id ?? firstSelectableGroup()?.id ?? null;
     normalizeSelection();
   }
   if (state.authUser && !state.inviteToken && !state.sharedMarketId && (state.currentGroupId || state.groups.length)) {
@@ -823,29 +988,70 @@ async function loadInitialAppData() {
 }
 
 async function loadGroupsForBoot() {
+  const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
+  const include = savedGroup ? `&include=${encodeURIComponent(savedGroup)}` : "";
+  const members = currentMemberAliases();
+  const memberQuery = members.length ? `&members=${encodeURIComponent(members.join(","))}` : "";
+  const path = `/api/groups?compact=1&limit=50${include}${memberQuery}`;
   try {
-    return await api("/api/groups", { timeoutMs: BOOT_API_TIMEOUT_MS });
+    return await api(path, { timeoutMs: BOOT_API_TIMEOUT_MS });
   } catch (err) {
     if (!/timed out/i.test(err?.message || "")) throw err;
-    return api("/api/groups", { timeoutMs: BOOT_API_TIMEOUT_MS });
+    throw new Error("Still waking the server. Showing the last saved view if available.");
   }
 }
 
-async function retryInitialLoad() {
+async function loadMarketContextForBoot(marketId) {
+  const path = `/api/markets/${encodeURIComponent(marketId)}/context`;
+  try {
+    return await api(path, { timeoutMs: BOOT_API_TIMEOUT_MS });
+  } catch (err) {
+    if (!/timed out/i.test(err?.message || "")) throw err;
+    throw new Error("Still waking the server. Showing the last saved view if available.");
+  }
+}
+
+async function refreshFocusedMarketContext(marketId) {
+  if (!marketId) return false;
+  const data = await api(`/api/markets/${encodeURIComponent(marketId)}/context`, { timeoutMs: API_TIMEOUT_MS });
+  if (Array.isArray(data.groups)) setGroups(data.groups);
+  if (data.group) mergeFocusedGroupContext(data.group);
+  return Boolean(data.group || data.groups);
+}
+
+function isWakeTimeoutError(err) {
+  return /timed out|still waking|connection timed out|waking the server/i.test(err?.message || "");
+}
+
+function scheduleInitialLoadRetry() {
+  if (bootRetryTimer) window.clearTimeout(bootRetryTimer);
+  bootRetryTimer = window.setTimeout(() => {
+    bootRetryTimer = null;
+    void retryInitialLoad({ auto: true });
+  }, 1800);
+}
+
+async function retryInitialLoad({ auto = false } = {}) {
   state.loaded = false;
   state.bootError = "";
   state.marketLinkError = "";
   render();
   loadMarketImages().catch(() => {});
+  let keepLoading = false;
   try {
     await loadInitialAppData();
   } catch (err) {
+    if (isWakeTimeoutError(err)) {
+      keepLoading = true;
+      scheduleInitialLoadRetry();
+      return;
+    }
     state.bootError = err.message || "Could not load groups.";
-    toast(state.bootError);
+    if (!auto) toast(state.bootError);
   } finally {
-    state.loaded = true;
+    if (!keepLoading) state.loaded = true;
     render();
-    runStoredPendingAuthAction();
+    if (!keepLoading) runStoredPendingAuthAction();
   }
 }
 
@@ -857,20 +1063,44 @@ function routeFromLocation() {
   if (parts[0] === "invite" && parts[1]) return { name: "invite", token: parts[1] };
   if (parts[0] === "embed" && parts[1] === "market" && parts[2]) return { name: "embedMarket", marketId: parts[2], options: embedOptionsFromSearch(url.searchParams) };
   if (parts[0] === "embed" && parts[1] === "event" && parts[2]) return { name: "embedEvent", eventId: parts[2], options: embedOptionsFromSearch(url.searchParams) };
-  if (parts[0] === "market" && parts[1]) return { name: "market", marketId: parts[1] };
+  if (parts[0] === "market" && parts[1]) return { name: "market", marketId: sanitizeRouteMarketId(parts.slice(1).join("/")) };
   if (parts[0] === "leaderboard") return { name: "leaderboard" };
   if (parts[0] === "admin") return { name: "admin" };
   if (parts[0] === "portfolio") return { name: "positions" };
   if (parts[0] === "positions") return { name: "positions", legacyPath: "/portfolio" };
+  if (parts[0] === "b" && parts[1]) return {
+    name: "bracket",
+    entry: parts[1],
+    legacyPath: `/bracket?entry=${encodeURIComponent(parts[1])}`,
+  };
+  if (parts[0] === "bracket") return {
+    name: "bracket",
+    entry: url.searchParams.get("entry") || "",
+    participant: url.searchParams.get("participant") || "",
+  };
   if (parts[0] === "app") return { name: "app" };
 
   const legacyInvite = url.searchParams.get("invite");
   const legacyMarket = url.searchParams.get("market");
   const legacyJoin = url.searchParams.get("join");
   if (legacyInvite) return { name: "invite", token: legacyInvite, legacyPath: `/invite/${encodeURIComponent(legacyInvite)}` };
-  if (legacyMarket) return { name: "market", marketId: legacyMarket, legacyPath: `/market/${encodeURIComponent(legacyMarket)}` };
+  if (legacyMarket) {
+    const marketId = sanitizeRouteMarketId(legacyMarket);
+    return { name: "market", marketId, legacyPath: `/market/${encodeURIComponent(marketId)}` };
+  }
   if (legacyJoin) return { name: "welcome", joinPreFill: legacyJoin, legacyPath: "/" };
   return { name: "welcome" };
+}
+
+function sanitizeRouteMarketId(raw) {
+  let value = String(raw || "").trim();
+  if (!value) return "";
+  value = value.split(/[?#]/)[0];
+  value = value.replace(/https?:.*$/i, "");
+  value = value.replace(/^market\//i, "");
+  value = value.replace(/\/+$/g, "");
+  const match = value.match(/[A-Za-z0-9][A-Za-z0-9_-]{5,80}/);
+  return match ? match[0] : value;
 }
 
 function embedOptionsFromSearch(params) {
@@ -889,6 +1119,7 @@ function shouldHoldAppShell() {
     route.name === "leaderboard" ||
     route.name === "admin" ||
     route.name === "positions" ||
+    route.name === "bracket" ||
     route.name === "market" ||
     route.name === "embedMarket" ||
     route.name === "embedEvent" ||
@@ -902,6 +1133,7 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
   state.invitePreview = null;
   state.inviteError = "";
   state.sharedMarketId = null;
+  state.sharedBracketEntryId = "";
   state.joinPreFill = null;
   state.embedRoute = null;
 
@@ -936,6 +1168,11 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
     state.shell = "app";
     state.view = "positions";
     state.trade = emptyTrade();
+  } else if (route.name === "bracket") {
+    state.shell = "app";
+    state.view = "bracket";
+    state.trade = emptyTrade();
+    state.sharedBracketEntryId = route.entry || "";
   } else if (route.name === "app") {
     state.shell = "app";
     state.view = "dashboard";
@@ -977,6 +1214,10 @@ function routeToPositions({ replace = false } = {}) {
   navigateTo("/portfolio", { replace });
 }
 
+function routeToBracket({ replace = false } = {}) {
+  navigateTo("/bracket", { replace });
+}
+
 function routeToMarket(marketId, { replace = false } = {}) {
   if (state.demoMode) {
     // The demo market only exists in client-side state, so it can never be
@@ -992,9 +1233,11 @@ function appViewFromRouteOrSaved(route, savedView = "dashboard") {
   if (route.name === "leaderboard") return "leaderboard";
   if (route.name === "admin") return "admin";
   if (route.name === "positions") return "positions";
+  if (route.name === "bracket") return "bracket";
   if (savedView === "leaderboard") return "leaderboard";
   if (savedView === "admin") return "admin";
   if (savedView === "positions") return "positions";
+  if (savedView === "bracket") return "bracket";
   return "dashboard";
 }
 
@@ -1002,6 +1245,7 @@ function routeToCurrentAppView({ replace = false } = {}) {
   if (state.view === "leaderboard") return routeToLeaderboard({ replace });
   if (state.view === "admin") return routeToAdmin({ replace });
   if (state.view === "positions") return routeToPositions({ replace });
+  if (state.view === "bracket") return routeToBracket({ replace });
   return routeToApp({ replace });
 }
 
@@ -1207,6 +1451,72 @@ async function onGlobalClick(e) {
     return;
   }
 
+  if (e.target.closest("[data-go-bracket]")) {
+    state.shell = "app";
+    state.view = "bracket";
+    state.trade = emptyTrade();
+    state.sharedMarketId = null;
+    state.bracketView = "grid";
+    loadBracketEntryIntoState();
+    void loadRemoteBracketEntry({ refresh: true });
+    routeToBracket();
+    render();
+    return;
+  }
+
+  const bracketViewBtn = e.target.closest("[data-bracket-view]");
+  if (bracketViewBtn) {
+    e.preventDefault();
+    state.bracketView = bracketViewBtn.dataset.bracketView === "table" ? "table" : "grid";
+    refreshBracketChallenge();
+    return;
+  }
+
+  const bracketPickBtn = e.target.closest("[data-bracket-pick]");
+  if (bracketPickBtn) {
+    e.preventDefault();
+    const matchupId = bracketPickBtn.dataset.bracketPick;
+    const team = bracketPickBtn.dataset.team;
+    pickBracketTeam(matchupId, team);
+    refreshBracketChallenge();
+    return;
+  }
+
+  const bracketNavBtn = e.target.closest("[data-bracket-round-nav]");
+  if (bracketNavBtn) {
+    e.preventDefault();
+    moveBracketRound(Number(bracketNavBtn.dataset.bracketRoundNav || 0));
+    refreshBracketChallenge();
+    return;
+  }
+
+  if (e.target.closest("[data-reset-bracket]")) {
+    e.preventDefault();
+    if (state.bracketSubmitted) {
+      toast("Submitted brackets are locked.");
+      return;
+    }
+    state.bracketPicks = {};
+    state.bracketSubmitted = false;
+    state.bracketLastPickedId = "";
+    state.bracketRoundIndex = 0;
+    void saveBracketEntry({ submitted: false, silent: true }).catch(() => {});
+    refreshBracketChallenge();
+    toast("Bracket reset.");
+    return;
+  }
+
+  if (e.target.closest("[data-submit-bracket]")) {
+    void submitBracketEntry();
+    return;
+  }
+
+  if (e.target.closest("[data-share-bracket]")) {
+    e.preventDefault();
+    await openBracketShareModal();
+    return;
+  }
+
   if (e.target.closest("[data-retry-initial-load]")) {
     await retryInitialLoad();
     return;
@@ -1218,6 +1528,15 @@ async function onGlobalClick(e) {
       return;
     }
     try {
+      if (!getCurrentGroup()) {
+        try {
+          const data = await loadGroupsForBoot();
+          if (Array.isArray(data.groups)) setGroups(data.groups);
+          normalizeSelection();
+        } catch (err) {
+          console.warn("Enter app group refresh deferred", err);
+        }
+      }
       if (!getCurrentGroup()) {
         await ensureMarketGroup();
       }
@@ -1248,7 +1567,7 @@ async function onGlobalClick(e) {
     }
     const gid = groupBtn.dataset.groupId;
     if (gid === "__new") {
-      if (requireLogin("create-group")) openModal("group");
+      if (requireLogin("add-menu")) openGeneralMarketStartModal();
       return;
     }
     if (gid === "__leaderboard") {
@@ -1284,7 +1603,35 @@ async function onGlobalClick(e) {
 
   if (e.target.closest("[data-create-group]")) {
     if (!requireLogin("create-group")) return;
+    closeModal("generalMarket");
     openModal("group");
+    return;
+  }
+
+  if (e.target.closest("[data-show-general-market-pool]")) {
+    if (!requireLogin("general-pool")) return;
+    renderGeneralMarketPoolModal();
+    return;
+  }
+
+  if (e.target.closest("[data-add-menu-back]")) {
+    renderGeneralMarketStartModal();
+    return;
+  }
+
+  const addGeneralMarketBtn = e.target.closest("[data-add-general-market]");
+  if (addGeneralMarketBtn) {
+    const group = getCurrentGroup();
+    if (!group) {
+      toast("Create or join a group first.");
+      return;
+    }
+    const item = GENERAL_MARKET_POOL.find(candidate => candidate.id === addGeneralMarketBtn.dataset.addGeneralMarket);
+    if (!item) return;
+    addGeneralMarketToGroup(group.id, item.id);
+    renderGeneralMarketPoolModal();
+    render();
+    toast(`${item.title} added to ${group.name}.`);
     return;
   }
 
@@ -1398,6 +1745,7 @@ async function onGlobalClick(e) {
       return;
     }
     if (!requireLogin("create-market")) return;
+    closeModal("generalMarket");
     await ensureMarketGroup();
     setMarketMinDate();
     openModal("market");
@@ -1456,6 +1804,16 @@ async function onGlobalClick(e) {
 
   if (e.target.closest("[data-native-share-market]")) {
     await nativeShareMarket();
+    return;
+  }
+
+  if (e.target.closest("[data-copy-bracket-link]")) {
+    await copyBracketLink();
+    return;
+  }
+
+  if (e.target.closest("[data-native-share-bracket]")) {
+    await shareBracketLink();
     return;
   }
 
@@ -1607,6 +1965,15 @@ async function onGlobalClick(e) {
     const market = findMarket(container?.dataset.marketId);
     const reasoning = container?.querySelector("[data-resolution-reasoning]")?.value?.trim() || "";
     if (market) onResolve(market, resolveBtn.dataset.resolve, { reasoning, button: resolveBtn });
+    return;
+  }
+
+  const eliminateBtn = e.target.closest("[data-eliminate-outcome]");
+  if (eliminateBtn) {
+    const container = eliminateBtn.closest("[data-market-id]");
+    const market = findMarket(container?.dataset.marketId);
+    const reasoning = container?.querySelector("[data-resolution-reasoning]")?.value?.trim() || "";
+    if (market) onEliminateOutcome(market, eliminateBtn.dataset.eliminateOutcome, { reasoning, button: eliminateBtn });
     return;
   }
 
@@ -1901,6 +2268,11 @@ async function onGlobalSubmit(e) {
     state.pendingUi.tradeMarketId = null;
     setButtonPending(submit, false);
     setGroups(data.groups);
+    try {
+      await refreshFocusedMarketContext(market.id);
+    } catch (contextErr) {
+      console.warn("Could not refresh market context after trade", contextErr);
+    }
     state.trade = { marketId: market.id, side, mode: action };
     state.mobileTradeOpen = false;
     normalizeSelection();
@@ -1975,6 +2347,14 @@ function runPendingAuthAction() {
   }
   if (action === "demo-create-group") {
     openModal("group");
+    return;
+  }
+  if (action === "submit-bracket") {
+    state.shell = "app";
+    state.view = "bracket";
+    routeToBracket();
+    render();
+    void submitBracketEntry();
     return;
   }
   if (action === "trade-shared-market") {
@@ -2928,7 +3308,37 @@ function inviteUrl(token) {
 }
 
 function marketUrl(marketId) {
-  return `${shareBaseUrl()}/market/${encodeURIComponent(marketId)}`;
+  return `${sharePageBaseUrl()}/market/${encodeURIComponent(marketId)}`;
+}
+
+function bracketShareUrl() {
+  if (state.bracketEntryId) {
+    return `${sharePageBaseUrl()}/bracket?entry=${encodeURIComponent(state.bracketEntryId)}`;
+  }
+  return `${sharePageBaseUrl()}/bracket`;
+}
+
+function bracketShareCardUrl({ sample = false, preview = false } = {}) {
+  const params = new URLSearchParams();
+  const participant = bracketParticipantName();
+  if (state.bracketEntryId) params.set("entry", state.bracketEntryId);
+  if (participant && participant !== "Guest") params.set("participant", participant);
+  if (sample) params.set("sample", "1");
+  const query = params.toString();
+  const base = preview ? shareAssetBaseUrl() : shareBaseUrl();
+  return `${base}/api/brackets/${encodeURIComponent(BRACKET_CHALLENGE.id)}/share-card.png${query ? `?${query}` : ""}`;
+}
+
+function encodedBracketPicks() {
+  const picks = state.bracketPicks && typeof state.bracketPicks === "object" ? state.bracketPicks : {};
+  const clean = Object.fromEntries(Object.entries(picks).filter(([, value]) => value));
+  if (!Object.keys(clean).length) return "";
+  try {
+    const json = JSON.stringify(clean);
+    return btoa(unescape(encodeURIComponent(json))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  } catch {
+    return "";
+  }
 }
 
 function shareBaseUrl() {
@@ -2939,6 +3349,26 @@ function shareBaseUrl() {
     return `${location.protocol}//${location.hostname}:8000`;
   }
   return location.origin.replace(/\/$/, "");
+}
+
+function sharePageBaseUrl() {
+  const configuredApp = import.meta.env.VITE_PUBLIC_APP_BASE_URL;
+  if (configuredApp) return configuredApp.replace(/\/$/, "");
+  return location.origin.replace(/\/$/, "");
+}
+
+function shareAssetBaseUrl() {
+  const configuredApp = import.meta.env.VITE_PUBLIC_APP_BASE_URL;
+  if (configuredApp) return configuredApp.replace(/\/$/, "");
+  return apiOriginForAssets();
+}
+
+function apiOriginForAssets() {
+  if (API) return new URL(API, location.origin).origin.replace(/\/$/, "");
+  if (["5173", "5174", "4173"].includes(location.port)) {
+    return `${location.protocol}//${location.hostname}:8000`;
+  }
+  return shareBaseUrl();
 }
 
 function appBaseUrl() {
@@ -3035,7 +3465,7 @@ async function shareInviteLink() {
   try {
     await navigator.share({
       title: `Join ${invite.groupName} on Probable`,
-      text: `Join ${invite.groupName} and trade your World Cup takes.`,
+      text: `Join ${invite.groupName} and trade your predictions.`,
       url: inviteUrl(invite.token),
     });
   } catch (err) {
@@ -3068,6 +3498,40 @@ async function shareMarketLink(marketId) {
   }
 }
 
+async function copyBracketLink() {
+  await prepareBracketShareEntry();
+  const link = bracketShareUrl();
+  const copied = await writeClipboardText(link);
+  toast(copied ? "Bracket link copied." : link);
+}
+
+async function shareBracketLink() {
+  await prepareBracketShareEntry();
+  const url = bracketShareUrl();
+  const title = `${BRACKET_CHALLENGE.title} · ${BRACKET_CHALLENGE.prize} for perfect knockouts`;
+  if (navigator.share) {
+    try {
+      await navigator.share({ title, url });
+      return;
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+    }
+  }
+  await copyBracketLink();
+}
+
+async function prepareBracketShareEntry() {
+  if (!isLoggedIn()) return null;
+  const hasPicks = Object.values(state.bracketPicks || {}).some(Boolean);
+  if (!hasPicks) return null;
+  try {
+    return await saveBracketEntry({ submitted: state.bracketSubmitted, silent: true });
+  } catch (err) {
+    console.warn("Could not prepare bracket share entry", err);
+    return null;
+  }
+}
+
 function openMarketEmbedModal(marketId) {
   const market = findMarket(marketId);
   if (!market) {
@@ -3080,6 +3544,7 @@ function openMarketEmbedModal(marketId) {
 }
 
 function renderMarketEmbedModal() {
+  dom.embedModalOverlay.querySelector(".modal-title").textContent = "Share market";
   const market = findMarket(state.embedModal.marketId);
   if (!market) {
     dom.embedModalBody.innerHTML = `<p class="muted">Market unavailable.</p>`;
@@ -3110,6 +3575,59 @@ function renderMarketEmbedModal() {
 
       </div>
     </div>`;
+}
+
+async function openBracketShareModal() {
+  openModal("embed");
+  dom.embedModalOverlay.querySelector(".modal-title").textContent = "Share bracket";
+  dom.embedModalBody.innerHTML = `<div class="modal-loading">Preparing share preview...</div>`;
+  await prepareBracketShareEntry();
+  renderBracketShareModal();
+}
+
+function renderBracketShareModal() {
+  const link = bracketShareUrl();
+  const previewImage = bracketShareCardUrl({ preview: true });
+  const fallbackPreviewImage = bracketShareCardUrl();
+  dom.embedModalOverlay.querySelector(".modal-title").textContent = "Share bracket";
+  dom.embedModalBody.innerHTML = `
+    <div class="embed-share-layout bracket-share-layout">
+      <div class="embed-preview-frame share-og-preview-frame bracket-share-preview-frame">
+        <img
+          class="share-og-preview-img bracket-share-preview-img"
+          src="${esc(previewImage)}"
+          data-fallback-src="${esc(fallbackPreviewImage)}"
+          alt="Bracket share preview"
+        />
+      </div>
+      <div class="embed-share-controls">
+        <div class="share-section">
+          <p class="eyebrow">Bracket link</p>
+          <h3>Share your knockout picks</h3>
+          <div class="invite-link-box">
+            <span>${esc(link)}</span>
+            <button type="button" data-copy-bracket-link>Copy</button>
+          </div>
+          <div class="share-action-grid">
+            <button class="btn btn-primary" type="button" data-copy-bracket-link>Copy link</button>
+            <button class="btn btn-ghost" type="button" data-native-share-bracket>Share</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const preview = dom.embedModalBody.querySelector(".bracket-share-preview-img");
+  preview?.addEventListener("error", () => {
+    const fallback = preview.dataset.fallbackSrc;
+    if (fallback && preview.src !== fallback) {
+      preview.src = fallback;
+      preview.dataset.fallbackSrc = "";
+      return;
+    }
+    const message = document.createElement("div");
+    message.className = "share-preview-error";
+    message.textContent = "Preview unavailable. The share link still works.";
+    preview.replaceWith(message);
+  });
 }
 
 async function nativeShareMarket() {
@@ -3290,7 +3808,7 @@ async function createGroup({ name, emoji, members, activeMember, form }) {
   try {
     const data = await api("/api/groups", {
       method: "POST",
-      body: JSON.stringify({ name, emoji, members, mode: "fake" }),
+      body: JSON.stringify({ name, emoji, members, mode: "fake", createdBy: activeMember || authDisplayName() }),
     });
     setGroups(data.groups);
     state.currentGroupId = data.groupId ?? state.currentGroupId;
@@ -3335,6 +3853,7 @@ async function ensureMarketGroup() {
       emoji: "PB",
       members: [member],
       mode: "fake",
+      createdBy: member,
     }),
   });
   setGroups(data.groups);
@@ -3355,7 +3874,7 @@ function pickReusableGroup() {
     const saved = state.groups.find(group => group.id === savedGroupId);
     if (saved && groupHasCurrentMember(saved)) return saved;
   }
-  return state.groups.find(group => isPbMyMarketsGroup(group) && groupHasCurrentMember(group))
+  return state.groups.find(group => groupHasCurrentMember(group) && !isPbMyMarketsGroup(group))
     ?? state.groups.find(groupHasCurrentMember)
     ?? null;
 }
@@ -3370,6 +3889,14 @@ async function createMarketForGroup(group, payload) {
     }),
   });
   setGroups(data.groups);
+  if (data.marketId || data.eventId || data.marketIds?.[0]) {
+    try {
+      await refreshFocusedMarketContext(data.marketId || data.marketIds?.[0] || data.eventId);
+    } catch (contextErr) {
+      console.warn("Could not refresh market context after create", contextErr);
+    }
+  }
+  return data;
 }
 
 async function joinGroup(groupId, myName) {
@@ -3476,9 +4003,14 @@ async function continueSharedMarketTrade() {
 }
 
 async function joinSharedMarketAndOpen(marketId, side = "yes", mode = "buy") {
-  if (!state.loaded || !state.groups.length) {
-    const data = await api("/api/groups", { timeoutMs: API_TIMEOUT_MS });
-    setGroups(data.groups);
+  if (!findMarketForRoute(marketId)) {
+    const data = await api(`/api/markets/${encodeURIComponent(marketId)}/context`, { timeoutMs: API_TIMEOUT_MS });
+    if (Array.isArray(data.groups)) setGroups(data.groups);
+    if (data.group) {
+      mergeFocusedGroupContext(data.group);
+    } else if (!Array.isArray(data.groups)) {
+      setGroups(data.groups);
+    }
   }
   let group = findGroupForMarket(marketId);
   let market = findMarketForRoute(marketId, group);
@@ -3524,15 +4056,53 @@ async function onResolve(market, outcome, options = {}) {
         outcome,
         reasoning: reasoning || null,
         resolvedBy: authDisplayName() || state.activeMember || "manual",
+        resolverAliases: currentMemberAliases(),
       }),
     });
     setGroups(data.groups);
     delete state.oracleErrors[market.id];
     normalizeSelection();
     render();
-    toastSettlement(data.settlement, `Resolved ${resolutionOutcomeLabel(market, outcome)}.`);
+    if (data.settlement) {
+      toastSettlement(data.settlement, `Resolved ${resolutionOutcomeLabel(market, outcome)}.`);
+    } else if (data.resolutionApproval) {
+      const approval = data.resolutionApproval;
+      const missing = approval.missingResolvers?.length ? ` Waiting on ${approval.missingResolvers.join(" + ")}.` : "";
+      const prefix = approval.status === "needs_review" ? "Approval conflict." : "Approval recorded.";
+      toast(`${prefix}${missing}`);
+    } else {
+      toast("Approval recorded.");
+    }
   } catch (err) {
     toast(err.message || "Resolve failed.");
+  } finally {
+    if (state.pendingUi.resolveMarketId === market.id) state.pendingUi.resolveMarketId = null;
+    setButtonPending(button, false);
+  }
+}
+
+async function onEliminateOutcome(market, outcomeId, options = {}) {
+  if (state.pendingUi.resolveMarketId === market.id) return;
+  const reasoning = String(options.reasoning || "").trim();
+  const button = options.button || null;
+  state.pendingUi.resolveMarketId = market.id;
+  setButtonPending(button, true, "Eliminating");
+  try {
+    const data = await api(`/api/markets/${market.id}/outcomes/${outcomeId}/eliminate`, {
+      method: "POST",
+      body: JSON.stringify({
+        reasoning: reasoning || null,
+        eliminatedBy: authDisplayName() || state.activeMember || "manual",
+      }),
+    });
+    setGroups(data.groups);
+    delete state.oracleErrors[market.id];
+    normalizeSelection();
+    render();
+    const title = data.elimination?.outcomeTitle || resolutionOutcomeLabel(market, outcomeId);
+    toast(`${title} eliminated. Remaining outcomes repriced.`);
+  } catch (err) {
+    toast(err.message || "Eliminate failed.");
   } finally {
     if (state.pendingUi.resolveMarketId === market.id) state.pendingUi.resolveMarketId = null;
     setButtonPending(button, false);
@@ -3614,7 +4184,7 @@ function render() {
   updateSuggestPreviewModal();
   const waitingForInitialAppData = state.shell === "app" && !state.loaded && (state.currentGroupId || isLoggedIn() || state.sharedMarketId || shouldHoldAppShell());
   const unresolvedMarketLink = Boolean(state.sharedMarketId && !findMarketForRoute(state.sharedMarketId));
-  if (state.shell === "app" && !getCurrentGroup() && !waitingForInitialAppData && !unresolvedMarketLink && !state.bootError) {
+  if (state.shell === "app" && state.view !== "bracket" && !getCurrentGroup() && !waitingForInitialAppData && !unresolvedMarketLink && !state.bootError) {
     enterWelcomeShell();
   }
   renderNav();
@@ -3623,7 +4193,7 @@ function render() {
     renderEmbedRoute();
   } else if (state.shell === "app" && !state.loaded && !getCurrentGroup()) {
     renderMarketLinkLoading();
-  } else if (state.shell === "app" && (state.bootError || unresolvedMarketLink)) {
+  } else if (state.shell === "app" && state.view !== "bracket" && (state.bootError || unresolvedMarketLink)) {
     renderMarketLinkLoading({ error: state.bootError || state.marketLinkError || "That market link could not be found." });
   } else if (state.shell === "invite") {
     renderInvitePreview();
@@ -3635,12 +4205,15 @@ function render() {
     renderAdminVerification();
   } else if (state.view === "positions") {
     renderPositions();
+  } else if (state.view === "bracket") {
+    renderBracketChallenge();
   } else {
     renderDashboard();
   }
   requestAnimationFrame(() => {
     renderCharts();
     animateIn();
+    hydrateWelcomeVideos();
     if (state.demoMode) tutorialOnRender();
   });
 }
@@ -3652,35 +4225,188 @@ function renderNav() {
   const hasGroups = inApp && isLoggedIn() && navGroups.length > 0;
   dom.navSep.style.display = hasGroups ? "" : "none";
   dom.groupTabs.innerHTML = hasGroups
-    ? `<button class="group-add-btn" type="button" data-group-id="__new" aria-label="Create group">+</button>` + navGroups.map(g => `<button class="group-tab ${g.id === getCurrentGroup()?.id && state.view === "dashboard" ? "active" : ""}" type="button" data-group-id="${g.id}">${esc(g.emoji)} ${esc(g.name)}</button>`).join("")
+    ? `<button class="group-add-btn" type="button" data-group-id="__new" aria-label="Add from general pool">+</button>` + navGroups.map(g => `<button class="group-tab ${g.id === getCurrentGroup()?.id && state.view === "dashboard" ? "active" : ""}" type="button" data-group-id="${g.id}">${esc(g.emoji)} ${esc(g.name)}</button>`).join("")
     : "";
 
   const group = inApp && isLoggedIn() ? getCurrentGroup() : null;
   const displayName = authDisplayName() || state.activeMember || "User";
   const balance = group?.balances?.[state.activeMember] ?? 0;
 
+  const bracketButton = `<button class="btn btn-ghost btn-sm nav-bracket ${state.view === "bracket" ? "active" : ""}" type="button" data-go-bracket>Bracket</button>`;
   dom.navRight.innerHTML = group ? `
+    ${bracketButton}
     <div class="member-pill" title="${esc(displayName)}">
       <span class="member-name">${esc(displayName)}</span>
       <span class="member-balance">${topbarMoney(balance)}</span>
     </div>
     ${accountIndicatorHtml()}
   ` : `
+    ${bracketButton}
     <button class="btn btn-primary btn-sm nav-enter" type="button" data-enter-app>Enter app</button>
     ${accountIndicatorHtml()}
-  `;
+	  `;
+}
+
+function hydrateWelcomeVideos() {
+  if (!document.querySelector(".welcome-hero")) return;
+  const load = () => {
+    if (!document.querySelector(".welcome-hero")) return;
+    document.querySelectorAll(".welcome-video-tile video[data-src]").forEach(video => {
+      video.src = video.dataset.src;
+      video.removeAttribute("data-src");
+      video.load();
+      video.play?.().catch(() => {});
+    });
+  };
+  if ("requestIdleCallback" in window) {
+    window.requestIdleCallback(load, { timeout: 1200 });
+  } else {
+    window.setTimeout(load, 700);
+  }
 }
 
 function visibleNavGroups() {
   if (state.shell !== "app" || !isLoggedIn()) return [];
+  return selectableNavGroups();
+}
+
+function selectableNavGroups() {
   const activeId = state.currentGroupId;
   const byLabel = new Map();
-  state.groups.filter(group => group.id !== DEMO_GROUP_ID).filter(groupHasCurrentMember).forEach(group => {
+  state.groups.filter(group => group.id !== DEMO_GROUP_ID && groupHasCurrentMember(group) && !isPbMyMarketsGroup(group)).forEach(group => {
     const key = `${String(group.emoji || "").trim().toLowerCase()}::${String(group.name || "").trim().toLowerCase()}`;
     const current = byLabel.get(key);
-    if (!current || group.id === activeId) byLabel.set(key, group);
+    if (!current || groupNavSortScore(group, activeId) > groupNavSortScore(current, activeId)) byLabel.set(key, group);
   });
-  return [...byLabel.values()];
+  return [...byLabel.values()].sort((a, b) => groupNavSortScore(b, activeId) - groupNavSortScore(a, activeId));
+}
+
+function groupNavSortScore(group, activeId = state.currentGroupId) {
+  if (!group) return -1;
+  const markets = group.markets ?? [];
+  const openMarkets = new Set(markets.filter(market => market.status === "open").map(market => market.eventId || market.id)).size;
+  const marketCount = new Set(markets.map(market => market.eventId || market.id)).size;
+  const createdAt = Date.parse(group.createdAt || "") || 0;
+  return (group.id === activeId ? 1_000_000_000 : 0) + openMarkets * 10_000 + marketCount * 1_000 + createdAt / 1_000_000_000;
+}
+
+function firstSelectableGroup() {
+  return selectableNavGroups()[0] ?? state.groups.find(group => groupHasCurrentMember(group) && !isPbMyMarketsGroup(group)) ?? state.groups.find(groupHasCurrentMember) ?? null;
+}
+
+function readGroupAddons() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.groupAddons);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeGroupAddons(addons) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.groupAddons, JSON.stringify(addons));
+  } catch {
+    // Local-only affordance; failing to persist should not block the app.
+  }
+}
+
+function groupAddonIds(groupId) {
+  const raw = readGroupAddons()[groupId] || [];
+  return Array.isArray(raw) ? raw.filter(Boolean) : [];
+}
+
+function addGeneralMarketToGroup(groupId, addonId) {
+  const addons = readGroupAddons();
+  const ids = new Set(Array.isArray(addons[groupId]) ? addons[groupId] : []);
+  ids.add(addonId);
+  addons[groupId] = [...ids];
+  writeGroupAddons(addons);
+}
+
+function generalMarketsForGroup(group) {
+  if (!group?.id) return [];
+  const ids = new Set(groupAddonIds(group.id));
+  return GENERAL_MARKET_POOL.filter(item => ids.has(item.id));
+}
+
+function openGeneralMarketPoolModal() {
+  renderGeneralMarketPoolModal();
+  openModal("generalMarket");
+}
+
+function openGeneralMarketStartModal() {
+  renderGeneralMarketStartModal();
+  openModal("generalMarket");
+}
+
+function renderGeneralMarketStartModal() {
+  const group = getCurrentGroup();
+  const groupLabel = group ? `${group.emoji || ""} ${group.name}`.trim() : "your group";
+  dom.generalMarketModalOverlay.querySelector(".modal-title").textContent = "Add";
+  dom.generalMarketModalBody.innerHTML = `
+    <div class="general-market-intro">
+      <p class="eyebrow">Add to ${esc(groupLabel)}</p>
+      <h2>What are we adding?</h2>
+      <p>Start a custom market, add a shared market, or create another group.</p>
+    </div>
+    <div class="general-market-choice-grid">
+      <button class="general-market-choice" type="button" data-new-market>
+        <span aria-hidden="true">✦</span>
+        <strong>Custom market</strong>
+        <em>Write your own question.</em>
+      </button>
+      <button class="general-market-choice" type="button" data-show-general-market-pool>
+        <span aria-hidden="true">🏆</span>
+        <strong>General markets</strong>
+        <em>Bracket and shared contests.</em>
+      </button>
+      <button class="general-market-choice" type="button" data-create-group>
+        <span aria-hidden="true">＋</span>
+        <strong>New group</strong>
+        <em>Spin up a new room.</em>
+      </button>
+    </div>
+  `;
+}
+
+function renderGeneralMarketPoolModal() {
+  const group = getCurrentGroup();
+  const groupLabel = group ? `${group.emoji || ""} ${group.name}`.trim() : "your group";
+  dom.generalMarketModalOverlay.querySelector(".modal-title").textContent = "General markets";
+  dom.generalMarketModalBody.innerHTML = `
+    <div class="general-market-intro">
+      <p class="eyebrow">Reusable markets</p>
+      <h2>Add shared experiences to ${esc(groupLabel)}</h2>
+      <p>Pull in contests and global markets without recreating them for every group.</p>
+    </div>
+    <div class="general-market-list">
+      ${GENERAL_MARKET_POOL.map(item => generalMarketPoolRow(item, group)).join("")}
+    </div>
+    <div class="general-market-footer">
+      <button class="btn btn-ghost" type="button" data-add-menu-back>Back</button>
+      <button class="btn btn-ghost" type="button" data-create-group>Create new group</button>
+      <button class="btn btn-ghost" type="button" data-new-market>Custom market</button>
+    </div>
+  `;
+}
+
+function generalMarketPoolRow(item, group) {
+  const added = group?.id ? groupAddonIds(group.id).includes(item.id) : false;
+  return `
+    <article class="general-market-pool-row">
+      <div class="general-market-pool-icon" aria-hidden="true">🏆</div>
+      <div class="general-market-pool-copy">
+        <p>${esc(item.eyebrow)}</p>
+        <h3>${esc(item.title)}</h3>
+        <span>${esc(item.subtitle)} ${esc(item.prize)} prize.</span>
+      </div>
+      <button class="btn ${added ? "btn-ghost" : "btn-primary"} btn-sm" type="button" data-add-general-market="${esc(item.id)}" ${added ? "disabled" : ""}>
+        ${added ? "Added" : "Add"}
+      </button>
+    </article>
+  `;
 }
 
 function accountIndicatorHtml() {
@@ -3786,12 +4512,14 @@ function renderDashboard() {
     return;
   }
 
+  const activeStatus = state.marketStatus === "closed" ? "closed" : "open";
   const allEvents = marketEvents(markets);
-  const open = allEvents.filter(event => eventStatus(event) === "open").length;
+  const groupGeneralMarkets = generalMarketsForGroup(group);
+  const generalCards = activeStatus === "open" ? groupGeneralMarkets : [];
+  const open = allEvents.filter(event => eventStatus(event) === "open").length + groupGeneralMarkets.length;
   const closed = allEvents.filter(event => eventStatus(event) !== "open").length;
   const visibleMarkets = dashboardVisibleMarkets(markets);
   const events = sortedMarketEvents(visibleMarkets);
-  const activeStatus = state.marketStatus === "closed" ? "closed" : "open";
 
   dom.mainContent.innerHTML = `
     <section class="dashboard-shell">
@@ -3831,7 +4559,7 @@ function renderDashboard() {
             </div>
             ${marketSortControl()}
           </div>
-          ${visibleMarkets.length ? `<div class="market-grid" data-market-grid>${events.map(event => eventCard(event)).join("")}</div>` : emptyMarketsHtml(activeStatus)}
+          ${(visibleMarkets.length || generalCards.length) ? `<div class="market-grid" data-market-grid>${generalCards.map(generalMarketCard).join("")}${events.map(event => eventCard(event)).join("")}</div>` : emptyMarketsHtml(activeStatus)}
         </section>
 
         <aside class="side-panel motion-item">
@@ -3841,6 +4569,33 @@ function renderDashboard() {
       </div>
     </section>
   `;
+}
+
+function generalMarketCard(item) {
+  if (item.type === "bracket") {
+    return `
+      <article class="event-card general-market-card motion-item" data-go-bracket>
+        <div class="event-card-inner">
+          <div class="event-card-head">
+            <div class="event-thumb event-thumb-image" aria-hidden="true">🏆</div>
+            <div class="event-title-wrap">
+              <p class="event-title">${esc(item.title)}</p>
+            </div>
+            <span class="general-market-badge">General</span>
+          </div>
+          <div class="general-market-card-body">
+            <strong>${esc(item.prize)} prize</strong>
+            <span>${esc(item.subtitle)}</span>
+          </div>
+          <div class="event-card-foot">
+            <span>Bracket contest</span>
+            <span class="event-card-creator">from general pool</span>
+          </div>
+        </div>
+      </article>
+    `;
+  }
+  return "";
 }
 
 function renderFocusedTradeView(group, market, event) {
@@ -3873,7 +4628,7 @@ function renderFocusedTradeView(group, market, event) {
           <div class="focused-event-head">
             <div class="event-thumb ${eventThumbClass(eventTitle, event.imageUrl)} focused-event-thumb" aria-hidden="true">${eventThumb(eventTitle, event.imageUrl)}</div>
             <div>
-              <p class="focused-event-kicker">Sports · Soccer</p>
+              <p class="focused-event-kicker">${esc(marketContextLabel(group, market, event))}</p>
               <h1>${esc(eventTitle)}</h1>
             </div>
           </div>
@@ -4063,6 +4818,7 @@ function focusedOutcomeRow(market, activeMarketId, index, event) {
   const option = marketOptionTitle(market);
   const tradeTarget = tradeTargetForOutcome(market, event);
   const active = tradeTarget.marketId === activeMarketId;
+  const eliminated = marketOutcomeEliminated(market);
   const binary = isBinaryEvent(event);
   const yesButtonMarket = binary ? binaryMarketForSide(event, "yes") : market;
   const noButtonMarket = binary ? binaryMarketForSide(event, "no") : market;
@@ -4071,13 +4827,13 @@ function focusedOutcomeRow(market, activeMarketId, index, event) {
     ? Math.round(displayedEventProbability(noButtonMarket || market, event))
     : 100 - yesButtonPct;
   return `
-    <div class="focused-outcome-row ${active ? "active" : ""}" data-market-id="${tradeTarget.marketId}">
+    <div class="focused-outcome-row ${active ? "active" : ""} ${eliminated ? "is-eliminated" : ""}" data-market-id="${tradeTarget.marketId}">
       <div class="focused-outcome-name">
         <i style="--series-color:${chartColorForMarket(market, index, event)}"></i>
         <span>${outcomeTitleHtml(option)}</span>
       </div>
       <strong>${yesPct}%</strong>
-      ${market.status === "open" ? `
+      ${eliminated ? `<span class="event-result-pill lost">Eliminated</span>` : market.status === "open" ? `
         <div class="event-trade-actions">
           <button class="event-side yes" type="button" data-buy="yes" aria-label="Buy YES on ${option} at ${yesButtonPct} cents"><span>Yes</span><em>${yesButtonPct}¢</em></button>
           <button class="event-side no" type="button" data-buy="no" aria-label="Buy NO on ${option} at ${noButtonPct} cents"><span>No</span><em>${noButtonPct}¢</em></button>
@@ -4222,6 +4978,15 @@ function renderEmptyDashboard() {
       <button class="btn btn-ghost btn-lg" type="button" data-join-group>Join group</button>
     </div>
     <button class="welcome-demo-link" type="button" data-try-demo>New here? Try the 2-minute demo</button>`;
+  const bracketPromo = `
+    <button class="welcome-bracket-card" type="button" data-go-bracket>
+      <span class="welcome-bracket-copy">
+        <em>New</em>
+        <strong>${BRACKET_CHALLENGE.prize} for perfect knockouts</strong>
+        <small>Free to enter. Build your World Cup bracket.</small>
+      </span>
+      <span class="welcome-bracket-prize">🏆</span>
+    </button>`;
   const welcomeCreateForm = `
     <form class="welcome-inline-form" id="dashboardCreateForm">
       <div class="form-topline">
@@ -4252,19 +5017,19 @@ function renderEmptyDashboard() {
     <section class="empty-dashboard welcome-hero">
       <div class="welcome-video-field" aria-hidden="true">
         <figure class="welcome-video-tile tile-a">
-          <video src="/media/welcome-1.mp4" autoplay muted loop playsinline preload="metadata"></video>
+          <video data-src="/media/welcome-1.mp4" autoplay muted loop playsinline preload="none"></video>
         </figure>
         <figure class="welcome-video-tile tile-b">
-          <video src="/media/welcome-2.mp4" autoplay muted loop playsinline preload="metadata"></video>
+          <video data-src="/media/welcome-2.mp4" autoplay muted loop playsinline preload="none"></video>
         </figure>
         <figure class="welcome-video-tile tile-c">
-          <video src="/media/welcome-3.mp4" autoplay muted loop playsinline preload="metadata"></video>
+          <video data-src="/media/welcome-3.mp4" autoplay muted loop playsinline preload="none"></video>
         </figure>
         <figure class="welcome-video-tile tile-d">
-          <video src="/media/welcome-4.mp4" autoplay muted loop playsinline preload="metadata"></video>
+          <video data-src="/media/welcome-4.mp4" autoplay muted loop playsinline preload="none"></video>
         </figure>
         <figure class="welcome-video-tile tile-e">
-          <video src="/media/welcome-5.mp4" autoplay muted loop playsinline preload="metadata"></video>
+          <video data-src="/media/welcome-5.mp4" autoplay muted loop playsinline preload="none"></video>
         </figure>
       </div>
       <div class="welcome-scrim" aria-hidden="true"></div>
@@ -4287,6 +5052,7 @@ function renderEmptyDashboard() {
             <p class="eyebrow">Enter market mode</p>
           </div>
           <div class="welcome-action-stack">
+            ${bracketPromo}
             ${welcomeEntry}
           </div>
         </div>
@@ -4386,7 +5152,10 @@ function marketEvents(markets) {
   });
   return [...map.values()].map(event => ({
     ...event,
-    markets: event.markets.sort((a, b) => Number(b.probability ?? 0) - Number(a.probability ?? 0)),
+    markets: event.markets.sort((a, b) => {
+      const eliminatedDelta = Number(marketOutcomeEliminated(a)) - Number(marketOutcomeEliminated(b));
+      return eliminatedDelta || Number(b.probability ?? 0) - Number(a.probability ?? 0);
+    }),
   }));
 }
 
@@ -4479,6 +5248,22 @@ function eventCreatorLabel(event) {
   return event?.creator || getCurrentGroup()?.members?.[0] || "unknown";
 }
 
+function marketContextLabel(group, market, event) {
+  const text = [
+    group?.name,
+    group?.emoji,
+    event?.title,
+    market?.category,
+    market?.question,
+  ].filter(Boolean).join(" ").toLowerCase();
+  if (/(hockey|nhl|stanley|puck|leafs|rangers|oilers|canadiens|bruins|panthers|avalanche|penguins|lightning|jets|senators|flames|canucks|stars|devils|islanders)/.test(text)) return "Sports · Hockey";
+  if (/(nba|basketball|lakers|celtics|knicks|warriors|raptors|nuggets|mavericks|bucks|heat)/.test(text)) return "Sports · Basketball";
+  if (/(nfl|football|super bowl|chiefs|eagles|cowboys|ravens|bills|49ers)/.test(text)) return "Sports · Football";
+  if (/(soccer|world cup|fifa|champions league|premier league|goal|ronaldo|messi|mbappe|haaland|wirtz)/.test(text)) return "Sports · Soccer";
+  if (group?.name) return `${group.emoji || "PB"} ${group.name}`;
+  return "Group market";
+}
+
 function eventResolvedOutcome(event) {
   const market = event?.markets?.[0];
   const outcome = event?.outcome || market?.outcome || "";
@@ -4513,6 +5298,7 @@ function eventOutcomeRow(market, event) {
   const yesPct = Math.round(displayedEventProbability(market, event));
   const option = marketOptionTitle(market);
   const tradeTarget = tradeTargetForOutcome(market, event);
+  const eliminated = marketOutcomeEliminated(market);
   const binary = isBinaryEvent(event);
   const yesButtonMarket = binary ? binaryMarketForSide(event, "yes") : market;
   const noButtonMarket = binary ? binaryMarketForSide(event, "no") : market;
@@ -4527,12 +5313,12 @@ function eventOutcomeRow(market, event) {
     || resolvedOutcome.label.toLowerCase() === option.toLowerCase()
   );
   return `
-    <div class="event-outcome-row ${market.status === "resolved" ? (rowIsWinner ? "is-winner" : "is-loser") : ""}" data-market-id="${tradeTarget.marketId}">
+    <div class="event-outcome-row ${market.status === "resolved" ? (rowIsWinner ? "is-winner" : "is-loser") : ""} ${eliminated ? "is-eliminated" : ""}" data-market-id="${tradeTarget.marketId}">
       <div class="event-outcome-main">
         <span class="event-outcome-name">${outcomeTitleHtml(option)}</span>
         <strong>${yesPct}%</strong>
       </div>
-      ${market.status === "open" ? `
+      ${eliminated ? `<span class="event-result-pill lost">Eliminated</span>` : market.status === "open" ? `
         <div class="event-trade-actions">
           <button class="event-side yes" type="button" data-buy="yes" aria-label="Buy YES on ${option} at ${yesButtonPct} cents"><span>Yes</span><em>${yesButtonPct}¢</em></button>
           <button class="event-side no" type="button" data-buy="no" aria-label="Buy NO on ${option} at ${noButtonPct} cents"><span>No</span><em>${noButtonPct}¢</em></button>
@@ -4797,6 +5583,20 @@ function resolutionOutcomes(market) {
     { id: "yes", title: "Yes" },
     { id: "no", title: "No" },
   ];
+}
+
+function outcomeEliminated(outcome) {
+  return String(outcome?.status || outcome?.outcomeStatus || "").trim().toLowerCase() === "eliminated";
+}
+
+function activeResolutionOutcomes(market) {
+  return resolutionOutcomes(market).filter(outcome => !outcomeEliminated(outcome));
+}
+
+function marketOutcomeEliminated(market) {
+  if (outcomeEliminated(market)) return true;
+  const outcomeId = market?.outcomeId || market?.id;
+  return outcomeEliminated((market?.outcomes || []).find(outcome => outcome.id === outcomeId));
 }
 
 function resolutionOutcomeLabel(market, outcome) {
@@ -5431,6 +6231,9 @@ function tradeContextFromPanel(panel, form, market) {
   if (!outcomeBelongsToMarket(market, outcomeId)) {
     return { valid: false, error: "Selected outcome does not belong to this market." };
   }
+  if (!outcomeActiveInMarket(market, outcomeId)) {
+    return { valid: false, error: "That outcome has been eliminated." };
+  }
   if (action === "sell" && !tradeSellState(market, side).canSellSelected) {
     return { valid: false, error: "You do not own this side yet." };
   }
@@ -5456,6 +6259,13 @@ function outcomeBelongsToMarket(market, outcomeId) {
   const outcomes = market.outcomes || [];
   if (!outcomes.length) return outcomeId === (market.outcomeId || market.id);
   return outcomes.some(outcome => outcome.id === outcomeId);
+}
+
+function outcomeActiveInMarket(market, outcomeId) {
+  const outcomes = market.outcomes || [];
+  if (!outcomes.length) return !marketOutcomeEliminated(market);
+  const outcome = outcomes.find(item => item.id === outcomeId);
+  return Boolean(outcome) && !outcomeEliminated(outcome);
 }
 
 function syncTradePanelDataset(panel, market, side, mode) {
@@ -5484,11 +6294,18 @@ function isElementVisible(element) {
 }
 
 function isComplementNoTrade(market, side = state.trade.side || "yes") {
-  return side === "no" && (market.outcomes?.length || 0) > 2;
+  return side === "no" && (market.outcomes?.length || 0) > 2 && activeOutcomesForMarket(market).length > 1;
+}
+
+function activeOutcomesForMarket(market) {
+  const outcomes = market.outcomes?.length
+    ? market.outcomes
+    : [{ id: market.outcomeId || market.id, price: market.probability, quantity: 0 }];
+  return outcomes.filter(outcome => !outcomeEliminated(outcome));
 }
 
 function complementOutcomes(market, outcomeId = tradeOutcomeId(market, "yes")) {
-  return (market.outcomes || []).filter(outcome => outcome.id !== outcomeId);
+  return activeOutcomesForMarket(market).filter(outcome => outcome.id !== outcomeId);
 }
 
 function complementShareState(market, outcomeId = tradeOutcomeId(market, "yes")) {
@@ -5515,9 +6332,10 @@ function binaryOutcomeForSide(market, side) {
 }
 
 function lmsrPreview(market, outcomeId, mode, amount) {
-  const outcomes = market.outcomes?.length ? market.outcomes : [{ id: market.outcomeId || market.id, price: market.probability, quantity: 0 }];
+  const outcomes = activeOutcomesForMarket(market);
   const b = Number(market.initialLiquidity || market.liquidity || DEFAULT_MARKET_LIQUIDITY);
   const target = outcomes.find(item => item.id === outcomeId) || outcomes[0];
+  if (!target) return { shares: 0, maxCash: 0, held: 0, oversell: false };
   const sumExp = outcomes.reduce((sum, item) => sum + Math.exp(Number(item.quantity || 0) / b), 0);
   const targetExp = Math.exp(Number(target.quantity || 0) / b);
   if (mode === "sell") {
@@ -5537,7 +6355,7 @@ function lmsrPreview(market, outcomeId, mode, amount) {
 }
 
 function lmsrStateForMarket(market) {
-  const outcomes = market.outcomes?.length ? market.outcomes : [{ id: market.outcomeId || market.id, price: market.probability, quantity: 0 }];
+  const outcomes = activeOutcomesForMarket(market);
   const b = Number(market.initialLiquidity || market.liquidity || DEFAULT_MARKET_LIQUIDITY);
   const values = outcomes.map(item => ({
     ...item,
@@ -5972,6 +6790,1031 @@ function renderLeaderboard() {
     </section>`;
 }
 
+function bracketStorageKey() {
+  const owner = bracketParticipantName();
+  return `probable_bracket_${BRACKET_CHALLENGE.id}_${slug(owner) || "guest"}`;
+}
+
+function bracketParticipantName() {
+  return authDisplayName() || state.activeMember || state.authUser?.email || localStorage.getItem(STORAGE_KEYS.user) || "Guest";
+}
+
+function loadBracketEntry() {
+  try {
+    const raw = localStorage.getItem(bracketStorageKey());
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadBracketEntryIntoState() {
+  const entry = loadBracketEntry();
+  let pending = null;
+  try {
+    pending = JSON.parse(sessionStorage.getItem("probable_pending_bracket") || "null");
+  } catch {
+    pending = null;
+  }
+  state.bracketPicks = entry?.picks && typeof entry.picks === "object"
+    ? { ...entry.picks }
+    : pending?.picks && typeof pending.picks === "object"
+      ? { ...pending.picks }
+      : {};
+  state.bracketSubmitted = Boolean(entry?.submittedAt);
+  state.bracketEntryId = entry?.entryId || entry?.id || "";
+  normalizeBracketPicks();
+}
+
+function persistBracketEntry({ submitted = state.bracketSubmitted, submittedAt = null } = {}) {
+  const previous = loadBracketEntry();
+  const payload = {
+    challengeId: BRACKET_CHALLENGE.id,
+    entryId: previous?.entryId || previous?.id || state.bracketEntryId || "",
+    name: bracketParticipantName(),
+    prize: BRACKET_CHALLENGE.prize,
+    picks: { ...state.bracketPicks },
+    submittedAt: submitted ? (submittedAt || previous?.submittedAt || new Date().toISOString()) : null,
+    updatedAt: new Date().toISOString(),
+  };
+  localStorage.setItem(bracketStorageKey(), JSON.stringify(payload));
+  state.bracketSubmitted = Boolean(payload.submittedAt);
+  state.bracketEntryId = payload.entryId || "";
+  return payload;
+}
+
+function applyRemoteBracketEntry(entry) {
+  if (!entry) return false;
+  state.bracketPicks = entry.picks && typeof entry.picks === "object" ? { ...entry.picks } : {};
+  state.bracketSubmitted = Boolean(entry.submittedAt);
+  state.bracketEntryId = entry.id || "";
+  normalizeBracketPicks();
+  persistBracketEntry({ submitted: state.bracketSubmitted, submittedAt: entry.submittedAt });
+  return true;
+}
+
+async function loadRemoteBracketEntry({ refresh = false } = {}) {
+  const sharedEntry = state.sharedBracketEntryId || "";
+  if (!isLoggedIn() && !sharedEntry) return null;
+  const participant = bracketParticipantName();
+  if (!participant && !sharedEntry) return null;
+  try {
+    const query = sharedEntry
+      ? `entry=${encodeURIComponent(sharedEntry)}`
+      : `participant=${encodeURIComponent(participant)}`;
+    const data = await api(`/api/brackets/${encodeURIComponent(BRACKET_CHALLENGE.id)}/entry?${query}`, {
+      timeoutMs: API_TIMEOUT_MS,
+    });
+    state.bracketRemoteLoaded = true;
+    if (applyRemoteBracketEntry(data.entry) && refresh) refreshBracketChallenge();
+    return data.entry || null;
+  } catch (err) {
+    state.bracketRemoteLoaded = false;
+    console.warn("Bracket entry load failed", err);
+    return null;
+  }
+}
+
+async function saveBracketEntry({ submitted = state.bracketSubmitted, silent = true } = {}) {
+  if (state.bracketSubmitted && !submitted) {
+    return loadBracketEntry();
+  }
+  const local = persistBracketEntry({ submitted });
+  if (!isLoggedIn()) return local;
+  state.bracketSaving = true;
+  try {
+    const data = await api(`/api/brackets/${encodeURIComponent(BRACKET_CHALLENGE.id)}/entry`, {
+      method: "POST",
+      body: JSON.stringify({
+        participant: bracketParticipantName(),
+        userEmail: state.authUser?.email || null,
+        picks: state.bracketPicks,
+        submitted,
+      }),
+    });
+    if (data.entry) {
+      state.bracketEntryId = data.entry.id || state.bracketEntryId || "";
+      state.bracketSubmitted = Boolean(data.entry.submittedAt);
+      persistBracketEntry({ submitted: state.bracketSubmitted, submittedAt: data.entry.submittedAt });
+    }
+    return data.entry || local;
+  } catch (err) {
+    if (!silent) toast(err.message || "Could not save bracket.");
+    throw err;
+  } finally {
+    state.bracketSaving = false;
+  }
+}
+
+function bracketOfficialWinner(id) {
+  return BRACKET_LOCKED_WINNERS[id] || "";
+}
+
+function bracketUserPick(id) {
+  return state.bracketPicks?.[id] || "";
+}
+
+function predictedWinner(id) {
+  return bracketUserPick(id) || bracketOfficialWinner(id) || "";
+}
+
+function displayWinner(id) {
+  return predictedWinner(id);
+}
+
+function bracketWinner(id) {
+  return displayWinner(id);
+}
+
+function bracketEliminatedTeams() {
+  const eliminated = new Set();
+  for (const matchup of BRACKET_CHALLENGE.matchups) {
+    const winner = bracketOfficialWinner(matchup.id);
+    if (!winner) continue;
+    for (const team of matchup.teams || []) {
+      if (team && team !== winner) eliminated.add(team);
+    }
+  }
+  for (const round of bracketRounds()) {
+    for (const matchup of round.matchups || []) {
+      const winner = bracketOfficialWinner(matchup.id);
+      if (!winner) continue;
+      for (const team of matchup.teams || []) {
+        if (team && team !== winner) eliminated.add(team);
+      }
+    }
+  }
+  return eliminated;
+}
+
+function bracketTeamStatusClass(matchup, team) {
+  if (!matchup?.id || !team) return "";
+  const officialWinner = bracketOfficialWinner(matchup.id);
+  const userPick = bracketUserPick(matchup.id);
+  if (officialWinner) {
+    if (userPick && userPick === team) {
+      return team === officialWinner ? "correct-pick" : "wrong-pick";
+    }
+    if (!userPick && team === officialWinner) return "auto-advance";
+    return team === officialWinner ? "auto-advance" : "official-loser";
+  }
+  if (bracketEliminatedTeams().has(team)) return "dead-pick";
+  return userPick === team ? "user-pick" : "";
+}
+
+function bracketMatchup(id, sourceA, sourceB) {
+  const teams = [
+    typeof sourceA === "function" ? sourceA() : sourceA,
+    typeof sourceB === "function" ? sourceB() : sourceB,
+  ].filter(Boolean);
+  return { id, teams };
+}
+
+function bracketRounds() {
+  const r32 = BRACKET_CHALLENGE.matchups.map(item => ({ ...item }));
+  const r16 = [
+    bracketMatchup("m89", () => bracketWinner("m74"), () => bracketWinner("m77")),
+    bracketMatchup("m90", () => bracketWinner("m73"), () => bracketWinner("m75")),
+    bracketMatchup("m91", () => bracketWinner("m76"), () => bracketWinner("m78")),
+    bracketMatchup("m92", () => bracketWinner("m79"), () => bracketWinner("m80")),
+    bracketMatchup("m93", () => bracketWinner("m81"), () => bracketWinner("m82")),
+    bracketMatchup("m94", () => bracketWinner("m83"), () => bracketWinner("m84")),
+    bracketMatchup("m95", () => bracketWinner("m86"), () => bracketWinner("m88")),
+    bracketMatchup("m96", () => bracketWinner("m85"), () => bracketWinner("m87")),
+  ];
+  const qf = [
+    bracketMatchup("m97", () => bracketWinner("m89"), () => bracketWinner("m90")),
+    bracketMatchup("m98", () => bracketWinner("m93"), () => bracketWinner("m94")),
+    bracketMatchup("m99", () => bracketWinner("m91"), () => bracketWinner("m92")),
+    bracketMatchup("m100", () => bracketWinner("m95"), () => bracketWinner("m96")),
+  ];
+  const sf = [
+    bracketMatchup("m101", () => bracketWinner("m97"), () => bracketWinner("m98")),
+    bracketMatchup("m102", () => bracketWinner("m99"), () => bracketWinner("m100")),
+  ];
+  const final = [
+    bracketMatchup("final", () => bracketWinner("m101"), () => bracketWinner("m102")),
+  ];
+  return [
+    { id: "r32", name: "Round of 32", matchups: r32 },
+    { id: "r16", name: "Round of 16", matchups: r16 },
+    { id: "qf", name: "Quarterfinals", matchups: qf },
+    { id: "sf", name: "Semifinals", matchups: sf },
+    { id: "final", name: "Final", matchups: final },
+  ];
+}
+
+function normalizeBracketPicks() {
+  const validIds = new Set();
+  for (const round of bracketRounds()) {
+    for (const matchup of round.matchups) {
+      validIds.add(matchup.id);
+    }
+  }
+  for (const id of Object.keys(state.bracketPicks)) {
+    if (!validIds.has(id)) delete state.bracketPicks[id];
+    if (!state.bracketSubmitted && BRACKET_LOCKED_WINNERS[id]) {
+      delete state.bracketPicks[id];
+    }
+  }
+}
+
+function pickBracketTeam(matchupId, team) {
+  if (!matchupId || !team) return;
+  if (BRACKET_LOCKED_WINNERS[matchupId]) return;
+  if (state.bracketSubmitted) {
+    toast("Bracket already submitted and locked.");
+    return;
+  }
+  state.bracketPicks[matchupId] = team;
+  normalizeBracketPicks();
+  state.bracketSubmitted = false;
+  state.bracketLastPickedId = matchupId;
+  void saveBracketEntry({ submitted: false, silent: true }).catch(() => {});
+}
+
+function bracketComplete() {
+  normalizeBracketPicks();
+  return Boolean(bracketWinner("final"));
+}
+
+function moveBracketRound(delta) {
+  const rounds = bracketRounds();
+  const next = Math.max(0, Math.min(rounds.length - 1, Number(state.bracketRoundIndex || 0) + delta));
+  state.bracketRoundIndex = next;
+}
+
+function bracketRoundPickCount(round) {
+  return (round?.matchups || []).filter(matchup => Boolean(bracketWinner(matchup.id))).length;
+}
+
+function bracketProgress(rounds) {
+  const total = rounds.reduce((sum, round) => sum + round.matchups.length, 0);
+  const picked = rounds.reduce((sum, round) => sum + bracketRoundPickCount(round), 0);
+  return { picked, total, pct: total ? Math.round((picked / total) * 100) : 0 };
+}
+
+async function submitBracketEntry() {
+  if (!bracketComplete()) {
+    toast("Finish the bracket before submitting.");
+    return;
+  }
+  if (!isLoggedIn()) {
+    sessionStorage.setItem("probable_pending_bracket", JSON.stringify({ picks: state.bracketPicks }));
+    requireLogin("submit-bracket");
+    return;
+  }
+  sessionStorage.removeItem("probable_pending_bracket");
+  try {
+    await saveBracketEntry({ submitted: true, silent: false });
+    refreshBracketChallenge();
+    toast(`Bracket submitted for the ${BRACKET_CHALLENGE.prize} prize.`);
+  } catch {
+    // saveBracketEntry already surfaced the useful message.
+  }
+}
+
+function refreshBracketChallenge({ preserveScroll = true } = {}) {
+  if (state.view !== "bracket") {
+    render();
+    return;
+  }
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+  renderBracketChallenge();
+  if (!preserveScroll) return;
+  requestAnimationFrame(() => {
+    window.scrollTo(scrollX, scrollY);
+    animateBracketAdvance();
+  });
+}
+
+function animateBracketAdvance() {
+  if (!state.bracketLastPickedId) return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const targets = document.querySelectorAll(".bracket-mini-match.just-picked, .bracket-matchup.just-picked");
+  if (!targets.length) return;
+  animate(targets, { scale: [0.985, 1.012, 1], opacity: [0.92, 1] }, { duration: 0.38, easing: "ease-out" });
+  const activeRows = document.querySelectorAll(".bracket-mini-match.just-picked .active, .bracket-matchup.just-picked .active");
+  if (activeRows.length) {
+    animate(activeRows, { boxShadow: ["inset 4px 0 0 #169bff", "inset 4px 0 0 #2d9cff"] }, { duration: 0.42 });
+  }
+  window.setTimeout(() => {
+    state.bracketLastPickedId = "";
+  }, 650);
+}
+
+function teamFlag(team) {
+  const flags = {
+    Algeria: "🇩🇿",
+    Argentina: "🇦🇷",
+    Australia: "🇦🇺",
+    Austria: "🇦🇹",
+    Belgium: "🇧🇪",
+    "Bosnia and Herzegovina": "🇧🇦",
+    Brazil: "🇧🇷",
+    Canada: "🇨🇦",
+    "Cabo Verde": "🇨🇻",
+    Colombia: "🇨🇴",
+    Croatia: "🇭🇷",
+    "DR Congo": "🇨🇩",
+    Ecuador: "🇪🇨",
+    Egypt: "🇪🇬",
+    England: "ENG",
+    France: "🇫🇷",
+    Germany: "🇩🇪",
+    Ghana: "🇬🇭",
+    Italy: "🇮🇹",
+    "Ivory Coast": "🇨🇮",
+    Japan: "🇯🇵",
+    Mexico: "🇲🇽",
+    Morocco: "🇲🇦",
+    Netherlands: "🇳🇱",
+    Norway: "🇳🇴",
+    Paraguay: "🇵🇾",
+    Portugal: "🇵🇹",
+    Scotland: "SCO",
+    Senegal: "🇸🇳",
+    "South Africa": "🇿🇦",
+    "South Korea": "🇰🇷",
+    Spain: "🇪🇸",
+    Sweden: "🇸🇪",
+    Switzerland: "🇨🇭",
+    Turkey: "🇹🇷",
+    Uruguay: "🇺🇾",
+    USA: "🇺🇸",
+  };
+  return flags[team] || "⚽";
+}
+
+function teamFlagCode(team) {
+  const codes = {
+    Algeria: "dz",
+    Argentina: "ar",
+    Australia: "au",
+    Austria: "at",
+    Belgium: "be",
+    "Bosnia and Herzegovina": "ba",
+    Brazil: "br",
+    Canada: "ca",
+    "Cabo Verde": "cv",
+    Colombia: "co",
+    Croatia: "hr",
+    "DR Congo": "cd",
+    Ecuador: "ec",
+    Egypt: "eg",
+    England: "gb-eng",
+    France: "fr",
+    Germany: "de",
+    Ghana: "gh",
+    Italy: "it",
+    "Ivory Coast": "ci",
+    Japan: "jp",
+    Mexico: "mx",
+    Morocco: "ma",
+    Netherlands: "nl",
+    Norway: "no",
+    Paraguay: "py",
+    Portugal: "pt",
+    Scotland: "gb-sct",
+    Senegal: "sn",
+    "South Africa": "za",
+    "South Korea": "kr",
+    Spain: "es",
+    Sweden: "se",
+    Switzerland: "ch",
+    Turkey: "tr",
+    Uruguay: "uy",
+    USA: "us",
+  };
+  return codes[team] || "";
+}
+
+function teamFlagHtml(team) {
+  const code = teamFlagCode(team);
+  if (code) {
+    return `<span class="bracket-flag-token" aria-hidden="true"><img src="https://flagcdn.com/${esc(code)}.svg" alt="" loading="lazy" /></span>`;
+  }
+  return `<span class="bracket-flag-token" aria-hidden="true"><span class="bracket-emoji-flag">${esc(teamFlag(team))}</span></span>`;
+}
+
+function bracketChanceText(team) {
+  const chance = Number(BRACKET_TEAM_CHANCES[team] ?? 1);
+  return chance < 1 ? "<1%" : `${Math.round(chance)}%`;
+}
+
+function bracketChanceWidth(team) {
+  const chance = Number(BRACKET_TEAM_CHANCES[team] ?? 1);
+  return Math.max(3, Math.min(100, chance * 4));
+}
+
+function bracketMatchupHtml(matchup, index = 0) {
+  const winner = bracketWinner(matchup.id);
+  const empty = matchup.teams.length < 2;
+  const teams = empty ? [...matchup.teams, ...Array(2 - matchup.teams.length).fill("")] : matchup.teams.slice(0, 2);
+  const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
+  const missing = teams.every(team => !team);
+  const waiting = empty || missing;
+  return `
+    <article class="bracket-matchup ${winner ? "picked" : ""} ${locked ? "locked" : ""} ${waiting ? "waiting empty" : ""} ${state.bracketLastPickedId === matchup.id ? "just-picked" : ""}">
+      ${waiting ? `
+        <div class="bracket-pick-slot waiting">
+          <span>·</span>
+          <strong>Unlocks after previous picks</strong>
+        </div>
+      ` : !locked && !winner ? `
+        <div class="bracket-pick-slot">
+          <span>+</span>
+          <strong>Pick to advance</strong>
+          <em>⌄</em>
+        </div>
+      ` : ""}
+      ${locked ? `<span class="bracket-match-tag">Final: ${esc(winner)} advanced</span>` : ""}
+      ${waiting ? "" : teams.map(team => team ? `
+        <button class="bracket-team ${winner === team ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && !bracketUserPick(matchup.id) && winner === team ? "preset" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" ${locked ? "disabled" : ""}>
+          <span class="bracket-team-main">
+            ${teamFlagHtml(team)}
+            <strong>${esc(team)}</strong>
+          </span>
+          <span class="bracket-team-chance">${bracketChanceText(team)}</span>
+          <span class="bracket-team-bar" style="--bar-width:${bracketChanceWidth(team)}%"></span>
+        </button>
+      ` : "").join("")}
+    </article>
+  `;
+}
+
+function bracketRoundShellHtml(rounds, champion) {
+  const roundIndex = Math.max(0, Math.min(rounds.length - 1, Number(state.bracketRoundIndex || 0)));
+  state.bracketRoundIndex = roundIndex;
+  const round = rounds[roundIndex];
+  const progress = bracketProgress(rounds);
+  const pickedInRound = bracketRoundPickCount(round);
+  return `
+    <div class="bracket-progress-bar" aria-hidden="true">
+      <span style="width:${progress.pct}%"></span>
+    </div>
+    <div class="bracket-stage-nav">
+      <button class="bracket-nav-btn" type="button" data-bracket-round-nav="-1" ${roundIndex === 0 ? "disabled" : ""} aria-label="Previous round">‹</button>
+      <div>
+        <h2>${esc(round.name)}</h2>
+        <p>${pickedInRound}/${round.matchups.length} picked</p>
+      </div>
+      <button class="bracket-nav-btn" type="button" data-bracket-round-nav="1" ${roundIndex === rounds.length - 1 ? "disabled" : ""} aria-label="Next round">›</button>
+    </div>
+    <div class="bracket-board motion-item">
+      <section class="bracket-focused-round">
+        <div class="bracket-round-list">
+          ${round.matchups.map((matchup, index) => bracketMatchupHtml(matchup, index)).join("")}
+        </div>
+      </section>
+      <aside class="bracket-side-summary">
+        <div class="bracket-winner-card">
+          ${champion ? `${teamFlagHtml(champion)}<strong>${esc(champion)}</strong><small>Your winner</small>` : `<span>🏆</span><strong>No winner yet</strong><small>Complete the final</small>`}
+        </div>
+        <div class="bracket-faq-card">
+          <h3>Rules & FAQ</h3>
+          <p>Submit one bracket before entries close. If nobody is perfect, the best bracket wins.</p>
+        </div>
+      </aside>
+    </div>
+  `;
+}
+
+function bracketMiniCellHtml(matchup, options = {}) {
+  const winner = bracketWinner(matchup.id);
+  const hasChoices = matchup.teams.length >= 2;
+  const teams = hasChoices ? matchup.teams.slice(0, 2) : [];
+  const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
+  const depth = Number(options?.depth ?? 0);
+  const mobile = Boolean(options?.mobile);
+  const compact = !mobile && depth >= 2;
+  const row = !mobile && typeof options === "object" && Number.isFinite(Number(options.row))
+    ? ` style="--bracket-row:${Number(options.row)}"`
+    : "";
+  if (!hasChoices) {
+    const waitingTeams = [...matchup.teams, ...Array(2 - matchup.teams.length).fill("")].slice(0, 2);
+    return `
+      <article class="bracket-mini-match waiting ${matchup.teams.length ? "has-pending" : "empty"} ${compact ? "compact" : ""} ${state.bracketLastPickedId === matchup.id ? "just-picked" : ""}" data-matchup-id="${esc(matchup.id)}"${row}>
+        ${waitingTeams.map(team => team ? `
+          <div class="bracket-mini-team pending-team" title="${esc(team)}">
+            ${teamFlagHtml(team)}
+            ${compact ? `<strong class="sr-only">${esc(team)}</strong>` : `<strong>${esc(team)}</strong>`}
+          </div>
+        ` : `
+          <div class="bracket-mini-team placeholder">
+            <span>·</span>
+            ${compact ? `<strong class="sr-only">Awaiting</strong>` : `<strong>Awaiting</strong>`}
+          </div>
+        `).join("")}
+      </article>
+    `;
+  }
+  return `
+    <article class="bracket-mini-match ready ${compact ? "compact" : ""} ${winner ? "picked" : ""} ${locked ? "locked" : ""} ${state.bracketLastPickedId === matchup.id ? "just-picked" : ""}" data-matchup-id="${esc(matchup.id)}"${row}>
+      ${teams.slice(0, 2).map(team => team ? `
+        <button class="bracket-mini-team ${winner === team ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && !bracketUserPick(matchup.id) && winner === team ? "preset" : ""} ${locked && winner !== team ? "locked-loser" : ""}" type="button" data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}" aria-label="${esc(team)}" title="${esc(team)}" ${locked ? "disabled" : ""}>
+          ${teamFlagHtml(team)}
+          ${compact ? `<strong class="sr-only">${esc(team)}</strong>` : `<strong>${esc(team)}</strong>`}
+        </button>
+      ` : "").join("")}
+    </article>
+  `;
+}
+
+function bracketStageReadyMatchups(stage) {
+  return (stage?.matchups || []).filter(matchup => matchup.teams.length >= 2);
+}
+
+function bracketIncomingConnectorHtml(stage, index) {
+  if (!stage || Number(stage.depth) <= 0) return "";
+  const previousMatchCount = stage.matchups.length * 2;
+  const topCenterLine = bracketGridRowForMatch(previousMatchCount, index * 2) + 1;
+  const bottomCenterLine = bracketGridRowForMatch(previousMatchCount, index * 2 + 1) + 1;
+  return `
+    <span
+      class="bracket-connector"
+      aria-hidden="true"
+      style="--connector-start:${topCenterLine}; --connector-end:${bottomCenterLine}"
+    ></span>
+  `;
+}
+
+function bracketGridRowForMatch(matchCount, index) {
+  if (matchCount >= 8) return index * 2 + 1;
+  if (matchCount === 4) return index * 4 + 2;
+  if (matchCount === 2) return index * 8 + 4;
+  return 8;
+}
+
+function bracketMatchupsByIds(round, ids) {
+  const lookup = new Map((round?.matchups || []).map(matchup => [matchup.id, matchup]));
+  return ids.map(id => lookup.get(id)).filter(Boolean);
+}
+
+function bracketSideStages(rounds, side) {
+  const left = side === "left";
+  const sideIds = left
+    ? [
+        ["m74", "m77", "m73", "m75", "m81", "m82", "m83", "m84"],
+        ["m89", "m90", "m93", "m94"],
+        ["m97", "m98"],
+        ["m101"],
+      ]
+    : [
+        ["m76", "m78", "m79", "m80", "m86", "m88", "m85", "m87"],
+        ["m91", "m92", "m95", "m96"],
+        ["m99", "m100"],
+        ["m102"],
+      ];
+  const source = sideIds.map((ids, index) => ({
+    round: rounds[index],
+    matchups: bracketMatchupsByIds(rounds[index], ids),
+    depth: index,
+  }));
+  return left ? source : source.reverse();
+}
+
+function bracketGridRoundLabel(name) {
+  if (name === "Round of 16") return "R16";
+  if (name === "Quarterfinals") return "QF";
+  if (name === "Semifinals") return "SF";
+  return name;
+}
+
+function bracketSvgTeamRow(matchup, team, x, y, width, height, active, compact = false) {
+  const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
+  const flagCode = teamFlagCode(team);
+  const flag = flagCode
+    ? `<image href="https://flagcdn.com/${esc(flagCode)}.svg" x="${x + 10}" y="${y + 6}" width="22" height="15" preserveAspectRatio="xMidYMid slice" />`
+    : `<text class="bracket-svg-flag-text" x="${x + 21}" y="${y + 18}" text-anchor="middle">${esc(teamFlag(team))}</text>`;
+  const label = compact && width < 130 ? team.slice(0, 3).toUpperCase() : team;
+  const data = BRACKET_LOCKED_WINNERS[matchup.id] ? "" : `data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}"`;
+  return `
+    <g class="bracket-svg-team ${active ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && !bracketUserPick(matchup.id) && active ? "preset" : ""} ${locked && !active ? "locked-loser" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
+      <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" />
+      ${flag}
+      <text class="bracket-svg-team-name" x="${x + 40}" y="${y + height / 2 + 4}">${esc(label)}</text>
+    </g>
+  `;
+}
+
+function bracketSvgMatch(matchup, x, y, width, options = {}) {
+  const rowH = Number(options.rowH || 22);
+  const compact = Boolean(options.compact);
+  const winner = bracketWinner(matchup.id);
+  const teams = [...(matchup.teams || []), "", ""].slice(0, 2);
+  const empty = teams.every(team => !team);
+  if (empty) {
+    return `
+      <g class="bracket-svg-match waiting" data-matchup-id="${esc(matchup.id)}">
+        <rect x="${x}" y="${y}" width="${width}" height="${rowH * 2}" rx="10" />
+        <text x="${x + width / 2}" y="${y + rowH + 4}" text-anchor="middle">Awaiting</text>
+      </g>
+    `;
+  }
+  return `
+    <g class="bracket-svg-match ${winner ? "picked" : ""}" data-matchup-id="${esc(matchup.id)}">
+      <rect class="bracket-svg-shell-rect" x="${x}" y="${y}" width="${width}" height="${rowH * 2}" rx="10" />
+      ${teams.map((team, index) => team
+        ? bracketSvgTeamRow(matchup, team, x, y + index * rowH, width, rowH, winner === team, compact)
+        : `<g class="bracket-svg-team empty"><rect x="${x}" y="${y + index * rowH}" width="${width}" height="${rowH}" rx="8" /><text x="${x + width / 2}" y="${y + index * rowH + rowH / 2 + 4}" text-anchor="middle">Awaiting</text></g>`
+      ).join("")}
+    </g>
+  `;
+}
+
+function bracketSvgConnector(side, fromCenters, toCenter, fromX, toX) {
+  if (!fromCenters.length || !Number.isFinite(toCenter)) return "";
+  const midX = side === "left" ? fromX + (toX - fromX) * 0.52 : toX + (fromX - toX) * 0.52;
+  const first = fromCenters[0];
+  const last = fromCenters[fromCenters.length - 1];
+  const top = Math.min(first, last, toCenter);
+  const bottom = Math.max(first, last, toCenter);
+  const segments = fromCenters.map(y => `<path d="M ${fromX} ${y} H ${midX}" />`).join("");
+  return `
+    <g class="bracket-svg-lines">
+      ${segments}
+      <path d="M ${midX} ${top} V ${bottom}" />
+      <path d="M ${midX} ${toCenter} H ${toX}" />
+    </g>
+  `;
+}
+
+function bracketSvgRoundMap(rounds) {
+  return new Map(rounds.flatMap(round => round.matchups.map(matchup => [matchup.id, matchup])));
+}
+
+function bracketSvgHtml(rounds, champion) {
+  const lookup = bracketSvgRoundMap(rounds);
+  const sideConfig = {
+    left: {
+      ids: [
+        ["m74", "m77", "m73", "m75", "m81", "m82", "m83", "m84"],
+        ["m89", "m90", "m93", "m94"],
+        ["m97", "m98"],
+        ["m101"],
+      ],
+      x: [48, 310, 520, 670],
+      widths: [240, 180, 130, 105],
+      edge(match, stage) { return this.x[stage] + this.widths[stage]; },
+      targetEdge(stage) { return this.x[stage + 1]; },
+    },
+    right: {
+      ids: [
+        ["m76", "m78", "m79", "m80", "m86", "m88", "m85", "m87"],
+        ["m91", "m92", "m95", "m96"],
+        ["m99", "m100"],
+        ["m102"],
+      ],
+      x: [1312, 1110, 950, 825],
+      widths: [240, 180, 130, 105],
+      edge(match, stage) { return this.x[stage]; },
+      targetEdge(stage) { return this.x[stage + 1] + this.widths[stage + 1]; },
+    },
+  };
+  const y0 = 46;
+  const gap = 16;
+  const rowH = 29;
+  const cardH = rowH * 2;
+  const centers = { left: [], right: [] };
+  const cards = [];
+  const lines = [];
+
+  for (const side of ["left", "right"]) {
+    const cfg = sideConfig[side];
+    centers[side] = cfg.ids.map(() => []);
+    for (const [stage, ids] of cfg.ids.entries()) {
+      const width = cfg.widths[stage];
+      for (const [index, id] of ids.entries()) {
+        const matchup = lookup.get(id);
+        if (!matchup) continue;
+        let y;
+        if (stage === 0) {
+          y = y0 + index * (cardH + gap);
+        } else {
+          const parentA = centers[side][stage - 1][index * 2];
+          const parentB = centers[side][stage - 1][index * 2 + 1];
+          y = ((parentA + parentB) / 2) - cardH / 2;
+          lines.push(bracketSvgConnector(side, [parentA, parentB], y + cardH / 2, cfg.edge(null, stage - 1), cfg.targetEdge(stage - 1)));
+        }
+        centers[side][stage][index] = y + cardH / 2;
+        cards.push(bracketSvgMatch(matchup, cfg.x[stage], y, width, { rowH, compact: stage >= 2 }));
+      }
+    }
+  }
+
+  const finalMatch = lookup.get("final");
+  const finalX = 735;
+  const finalY = 526;
+  const finalW = 130;
+  const leftSf = centers.left[3][0];
+  const rightSf = centers.right[3][0];
+  lines.push(bracketSvgConnector("left", [leftSf], finalY + cardH / 2, sideConfig.left.x[3] + sideConfig.left.widths[3], finalX));
+  lines.push(bracketSvgConnector("right", [rightSf], finalY + cardH / 2, sideConfig.right.x[3], finalX + finalW));
+
+  return `
+    <svg class="bracket-svg" viewBox="0 0 1600 765" role="img" aria-label="World Cup bracket path">
+      <text class="bracket-svg-title" x="160" y="26" text-anchor="middle">ROUND OF 32</text>
+      <text class="bracket-svg-title" x="400" y="26" text-anchor="middle">R16</text>
+      <text class="bracket-svg-title" x="585" y="26" text-anchor="middle">QF</text>
+      <text class="bracket-svg-title" x="722" y="26" text-anchor="middle">SF</text>
+      <text class="bracket-svg-title" x="800" y="512" text-anchor="middle">FINAL</text>
+      <text class="bracket-svg-title" x="878" y="26" text-anchor="middle">SF</text>
+      <text class="bracket-svg-title" x="1015" y="26" text-anchor="middle">QF</text>
+      <text class="bracket-svg-title" x="1200" y="26" text-anchor="middle">R16</text>
+      <text class="bracket-svg-title" x="1438" y="26" text-anchor="middle">ROUND OF 32</text>
+      ${lines.join("")}
+      ${cards.join("")}
+      ${bracketSvgMatch(finalMatch, finalX, finalY, finalW, { rowH, compact: false })}
+      <g class="bracket-svg-champion">
+        <rect x="735" y="605" width="130" height="54" rx="14" />
+        <text x="800" y="627" text-anchor="middle">🏆</text>
+        <text x="800" y="648" text-anchor="middle">${champion ? esc(champion) : "Pick winner"}</text>
+      </g>
+    </svg>
+  `;
+}
+
+function bracketMobileSvgHtml(rounds, champion) {
+  const stageX = [12, 194, 274, 336, 382];
+  const widths = [166, 64, 46, 34, 36];
+  const rowH = 38;
+  const cardH = rowH * 2;
+  const gap = 6;
+  const y0 = 40;
+  const lookup = bracketSvgRoundMap(rounds);
+  const mobileRoundIds = [
+    ["m74", "m77", "m73", "m75", "m81", "m82", "m83", "m84", "m76", "m78", "m79", "m80", "m86", "m88", "m85", "m87"],
+    ["m89", "m90", "m93", "m94", "m91", "m92", "m95", "m96"],
+    ["m97", "m98", "m99", "m100"],
+    ["m101", "m102"],
+    ["final"],
+  ];
+  const mobileRounds = mobileRoundIds.map((ids, index) => ({
+    ...rounds[index],
+    matchups: ids.map(id => lookup.get(id)).filter(Boolean),
+  }));
+  const centers = [];
+  const cards = [];
+  const lines = [];
+  const mobileConnector = (fromY, toY, fromX, toX) => {
+    if (!Number.isFinite(fromY) || !Number.isFinite(toY)) return "";
+    const midX = fromX + (toX - fromX) * 0.58;
+    return `
+      <g class="bracket-svg-lines bracket-mobile-row-lines">
+        <path d="M ${fromX} ${fromY} H ${midX} V ${toY} H ${toX}" />
+      </g>
+    `;
+  };
+  const mobileAdvanceCenter = (matchup, y) => {
+    const winner = bracketWinner(matchup.id);
+    const teams = [...(matchup.teams || []), "", ""].slice(0, 2);
+    const winnerIndex = teams.findIndex(team => team && team === winner);
+    return winnerIndex >= 0 ? y + winnerIndex * rowH + rowH / 2 : y + cardH / 2;
+  };
+  const flagOnlyRow = (matchup, team, x, y, width, height, active) => {
+    if (!team) {
+      return `
+        <g class="bracket-svg-team empty bracket-mobile-flag-row">
+          <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" />
+          <text x="${x + width / 2}" y="${y + height / 2 + 4}" text-anchor="middle">·</text>
+        </g>
+      `;
+    }
+    const flagCode = teamFlagCode(team);
+    const flag = flagCode
+      ? `<image href="https://flagcdn.com/${esc(flagCode)}.svg" x="${x + Math.max(4, (width - 24) / 2)}" y="${y + 8}" width="24" height="18" preserveAspectRatio="xMidYMid slice" />`
+      : `<text class="bracket-svg-flag-text" x="${x + width / 2}" y="${y + height / 2 + 4}" text-anchor="middle">${esc(teamFlag(team))}</text>`;
+    const locked = Boolean(BRACKET_LOCKED_WINNERS[matchup.id]);
+    const data = locked ? "" : `data-bracket-pick="${esc(matchup.id)}" data-team="${esc(team)}"`;
+    return `
+      <g class="bracket-svg-team bracket-mobile-flag-row ${active ? "active" : ""} ${bracketTeamStatusClass(matchup, team)} ${locked && !bracketUserPick(matchup.id) && active ? "preset" : ""} ${locked && !active ? "locked-loser" : ""}" ${data} role="button" tabindex="0" aria-label="Pick ${esc(team)}">
+        <title>${esc(team)}</title>
+        <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" />
+        ${flag}
+      </g>
+    `;
+  };
+  const mobileMatch = (matchup, stage, x, y, width) => {
+    if (stage === 0) {
+      return bracketSvgMatch(matchup, x, y, width, { rowH, compact: false });
+    }
+    const winner = bracketWinner(matchup.id);
+    const teams = [...(matchup.teams || []), "", ""].slice(0, 2);
+    if (teams.every(team => !team)) {
+      return `
+        <g class="bracket-svg-match waiting bracket-mobile-flag-match" data-matchup-id="${esc(matchup.id)}">
+          <rect x="${x}" y="${y}" width="${width}" height="${cardH}" rx="10" />
+          <text x="${x + width / 2}" y="${y + cardH / 2 + 4}" text-anchor="middle">·</text>
+        </g>
+      `;
+    }
+    return `
+      <g class="bracket-svg-match ${winner ? "picked" : ""} bracket-mobile-flag-match" data-matchup-id="${esc(matchup.id)}">
+        <rect class="bracket-svg-shell-rect" x="${x}" y="${y}" width="${width}" height="${cardH}" rx="10" />
+        ${teams.map((team, index) => flagOnlyRow(matchup, team, x, y + index * rowH, width, rowH, winner === team)).join("")}
+      </g>
+    `;
+  };
+
+  mobileRounds.forEach((round, stage) => {
+    centers[stage] = [];
+    round.matchups.forEach((matchup, index) => {
+      let y;
+      if (stage === 0) {
+        y = y0 + index * (cardH + gap);
+      } else {
+        const parentA = centers[stage - 1]?.[index * 2];
+        const parentB = centers[stage - 1]?.[index * 2 + 1];
+        if (Number.isFinite(parentA) && Number.isFinite(parentB)) {
+          y = ((parentA + parentB) / 2) - cardH / 2;
+          lines.push(mobileConnector(parentA, y + rowH / 2, stageX[stage - 1] + widths[stage - 1], stageX[stage]));
+          lines.push(mobileConnector(parentB, y + rowH * 1.5, stageX[stage - 1] + widths[stage - 1], stageX[stage]));
+        } else {
+          y = y0 + index * (cardH + gap);
+        }
+      }
+      centers[stage][index] = mobileAdvanceCenter(matchup, y);
+      cards.push(mobileMatch(matchup, stage, stageX[stage], y, widths[stage]));
+    });
+  });
+
+  return `
+    <div class="bracket-mobile-svg-shell">
+      <svg class="bracket-svg bracket-mobile-svg" viewBox="0 0 430 1375" role="img" aria-label="One-sided World Cup bracket path">
+        <text class="bracket-svg-title" x="95" y="24" text-anchor="middle">ROUND OF 32</text>
+        <text class="bracket-svg-title" x="226" y="24" text-anchor="middle">R16</text>
+        <text class="bracket-svg-title" x="297" y="24" text-anchor="middle">QF</text>
+        <text class="bracket-svg-title" x="353" y="24" text-anchor="middle">SF</text>
+        <text class="bracket-svg-title" x="400" y="24" text-anchor="middle">FINAL</text>
+        ${lines.join("")}
+        ${cards.join("")}
+      </svg>
+    </div>
+  `;
+}
+
+function bracketWideStageHtml(stage, side) {
+  const readyMatchups = bracketStageReadyMatchups(stage);
+  const picked = stage.matchups.filter(matchup => Boolean(bracketWinner(matchup.id))).length;
+  const ready = readyMatchups.length;
+  const empty = ready === 0;
+  return `
+    <section class="bracket-wide-round bracket-wide-${side} bracket-depth-${stage.depth} ${empty ? "stage-empty" : "stage-ready"}" style="--match-count:${stage.matchups.length}; --stage-depth:${stage.depth}" data-match-count="${stage.matchups.length}" data-ready-count="${ready}">
+      <header>
+        <span>${esc(bracketGridRoundLabel(stage.round.name))}</span>
+        <em>${picked}/${stage.matchups.length}</em>
+      </header>
+      <div class="bracket-wide-list">
+        ${stage.matchups.map((_, index) => bracketIncomingConnectorHtml(stage, index)).join("")}
+        ${stage.matchups.map((matchup, index) => bracketMiniCellHtml(matchup, {
+          row: bracketGridRowForMatch(stage.matchups.length, index),
+          depth: stage.depth,
+        })).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function bracketMobileStageHtml(stage) {
+  const visibleMatchups = stage.depth === 0
+    ? stage.matchups
+    : stage.matchups.filter(matchup => matchup.teams.length > 0 || bracketWinner(matchup.id));
+  const picked = stage.matchups.filter(matchup => Boolean(bracketWinner(matchup.id))).length;
+  const locked = stage.depth > 0 && visibleMatchups.length === 0;
+  return `
+    <section class="bracket-mobile-stage ${locked ? "locked" : "active"}" data-depth="${stage.depth}">
+      <header>
+        <span>${esc(bracketGridRoundLabel(stage.round.name))}</span>
+        <em>${picked}/${stage.matchups.length}</em>
+      </header>
+      ${locked ? `
+        <div class="bracket-mobile-locked">
+          <span></span>
+          <strong>Unlocks after previous picks</strong>
+        </div>
+      ` : `
+        <div class="bracket-mobile-list">
+          ${visibleMatchups.map(matchup => bracketMiniCellHtml(matchup, {
+            depth: stage.depth,
+            mobile: true,
+          })).join("")}
+        </div>
+      `}
+    </section>
+  `;
+}
+
+function bracketMobilePathHtml(rounds, champion) {
+  return `
+    <div class="bracket-mobile-path" aria-label="Mobile one-sided bracket path">
+      <div class="bracket-mobile-path-head">
+        <p class="eyebrow">Bracket path</p>
+        <span>${champion ? `${teamFlag(champion)} ${esc(champion)} selected` : "Round of 32 to final"}</span>
+      </div>
+      ${bracketMobileSvgHtml(rounds, champion)}
+    </div>
+  `;
+}
+
+function bracketViewToggleHtml(bracketView) {
+  return `
+    <div class="bracket-view-toggle compact-icons motion-item" aria-label="Bracket view">
+      <button type="button" data-bracket-view="grid" class="${bracketView === "grid" ? "active" : ""}" aria-pressed="${bracketView === "grid"}" aria-label="Grid bracket view">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 5h6v6H4zM14 5h6v6h-6zM4 15h6v4H4zM14 15h6v4h-6z" />
+        </svg>
+      </button>
+      <button type="button" data-bracket-view="table" class="${bracketView === "table" ? "active" : ""}" aria-pressed="${bracketView === "table"}" aria-label="Round-by-round table view">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 6h14v2H5zM5 11h14v2H5zM5 16h14v2H5z" />
+        </svg>
+      </button>
+    </div>
+  `;
+}
+
+function bracketActionControlsHtml(champion) {
+  const locked = state.bracketSubmitted;
+  return `
+    <div class="bracket-graph-actions">
+      <div class="bracket-current-pick">
+        <span>Champion</span>
+        <strong>${champion ? `${teamFlag(champion)} ${esc(champion)}` : "TBD"}</strong>
+      </div>
+      <button class="btn btn-ghost btn-sm bracket-share-btn" type="button" data-share-bracket>${shareArrowIconSvg()}<span>Share</span></button>
+      <button class="btn btn-ghost btn-sm" type="button" data-reset-bracket ${locked ? "disabled" : ""}>Reset</button>
+      <button class="btn btn-primary btn-sm" type="button" data-submit-bracket ${locked ? "disabled" : ""}>${locked ? "Submitted" : "Submit bracket"}</button>
+    </div>
+  `;
+}
+
+function bracketWideGridHtml(rounds, champion, bracketView = "grid") {
+  const progress = bracketProgress(rounds);
+  return `
+    <section class="bracket-wide-preview motion-item" aria-label="Full bracket preview">
+      <div class="bracket-wide-head compact">
+        <div>
+          <p class="eyebrow">Progressive bracket</p>
+          <h2>See the whole path</h2>
+        </div>
+        <div class="bracket-graph-controls">
+          ${bracketViewToggleHtml(bracketView)}
+          ${bracketActionControlsHtml(champion)}
+        </div>
+      </div>
+      <div class="bracket-progress-bar bracket-progress-wide" aria-hidden="true">
+        <span style="width:${progress.pct}%"></span>
+      </div>
+      <div class="bracket-svg-shell">
+        ${bracketSvgHtml(rounds, champion)}
+      </div>
+      ${bracketMobilePathHtml(rounds, champion)}
+    </section>
+  `;
+}
+
+function renderBracketChallenge() {
+  const rounds = bracketRounds();
+  const champion = bracketWinner("final");
+  const complete = bracketComplete();
+  const bracketView = state.bracketView === "table" ? "table" : "grid";
+  const entry = loadBracketEntry();
+  const entryStatus = state.bracketSubmitted ? "Entry locked" : complete ? "Ready to submit" : "Build your bracket";
+  const entryHint = entry?.submittedAt
+    ? `Submitted ${new Date(entry.submittedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+    : complete
+      ? "Review the champion, then submit your entry."
+      : "Pick winners left to right. Later rounds unlock as you choose.";
+  dom.mainContent.innerHTML = `
+    <section class="bracket-page">
+      <div class="bracket-toolbar motion-item">
+      <div>
+          <p class="eyebrow">World Cup bracket challenge · ${BRACKET_CHALLENGE.prize} prize for perfect knockouts</p>
+          <h2>${entryStatus}</h2>
+          <p>${entryHint}</p>
+        </div>
+      </div>
+
+      ${bracketView === "grid" ? bracketWideGridHtml(rounds, champion, bracketView) : `
+        <section class="bracket-wide-preview table-mode motion-item" aria-label="Round table bracket">
+          <div class="bracket-wide-head compact">
+            <div>
+              <p class="eyebrow">Round view</p>
+              <h2>Pick one round at a time</h2>
+            </div>
+            <div class="bracket-graph-controls">
+              ${bracketViewToggleHtml(bracketView)}
+              ${bracketActionControlsHtml(champion)}
+            </div>
+          </div>
+          ${bracketRoundShellHtml(rounds, champion)}
+        </section>
+      `}
+    </section>`;
+}
+
 function renderAdminVerification() {
   const queue = adminVerificationQueue();
   const total = queue.reduce((sum, item) => sum + item.events.length, 0);
@@ -6052,13 +7895,16 @@ function adminGroupHtml({ group, events }) {
 function adminEventCard(group, event) {
   const market = event.markets[0];
   const outcomes = resolutionOutcomes(market);
-  const showAllCorrect = outcomes.length > 2;
+  const activeOutcomes = activeResolutionOutcomes(market);
+  const multiOutcome = outcomes.length > 2;
+  const showAllCorrect = activeOutcomes.length > 2;
   const source = market.resolutionSource || event.resolutionSource || "";
   const edgeCases = market.edgeCases || event.edgeCases || "";
   const rules = market.description || event.description || "No resolution rules saved.";
   const pending = state.pendingUi.resolveMarketId === market.id;
   const status = eventStatus(event);
   const isLive = status === "open";
+  const approvalNotice = adminApprovalNoticeHtml(market);
   const closeLabel = isLive ? `Live override · closes ${fmtDate(event.closesAt)}` : fmtClose({ closesAt: event.closesAt, status: "closed" });
   return `
     <article class="admin-resolve-card" data-market-id="${esc(market.id)}">
@@ -6071,6 +7917,7 @@ function adminEventCard(group, event) {
           </div>
         </div>
         ${isLive ? `<div class="admin-live-note">Resolve now only if the result is already knowable. This closes trading immediately.</div>` : ""}
+        ${approvalNotice}
         <div class="admin-rules">
           ${richRulesHtml({ rules, source, edgeCases, compact: true })}
         </div>
@@ -6081,14 +7928,43 @@ function adminEventCard(group, event) {
           <textarea data-resolution-reasoning maxlength="1200" placeholder="Optional: FotMob shows Wirtz finished with 2 G/A, so No resolves."></textarea>
         </label>
         <div class="admin-outcome-grid">
-          ${outcomes.map((outcome, index) => {
+          ${activeOutcomes.map((outcome, index) => {
             const cls = resolutionOutcomeClass(market, outcome.id, index);
             return `<button class="admin-outcome-btn ${cls}" type="button" data-resolve="${esc(outcome.id)}" ${pending ? "disabled" : ""}>${esc(outcome.title)}</button>`;
           }).join("")}
           ${showAllCorrect ? `<button class="admin-outcome-btn draw" type="button" data-resolve="${ALL_OUTCOMES_RESOLUTION}" ${pending ? "disabled" : ""}>Draw · all correct</button>` : ""}
         </div>
+        ${multiOutcome ? `
+          <div class="admin-eliminate-block">
+            <div>
+              <span>Remove impossible outcome</span>
+              <em>Keeps the market open and reprices the remaining active outcomes.</em>
+            </div>
+            <div class="admin-eliminate-grid">
+              ${outcomes.map(outcome => {
+                const eliminated = outcomeEliminated(outcome);
+                return `
+                  <button class="admin-eliminate-btn ${eliminated ? "is-eliminated" : ""}" type="button" data-eliminate-outcome="${esc(outcome.id)}" ${pending || eliminated ? "disabled" : ""}>
+                    ${esc(outcome.title)}${eliminated ? " · eliminated" : ""}
+                  </button>`;
+              }).join("")}
+            </div>
+          </div>` : ""}
       </div>
     </article>`;
+}
+
+function adminApprovalNoticeHtml(market) {
+  const attempts = Array.isArray(market.verificationAttempts) ? market.verificationAttempts : [];
+  const latest = [...attempts].reverse().find(item => item?.type === "manual_approval" && item.status && item.status !== "ready_to_resolve");
+  if (!latest) return "";
+  const cls = latest.status === "needs_review" ? "error" : "pending";
+  const missing = latest.missingResolvers?.length ? `Waiting on ${latest.missingResolvers.join(" + ")}.` : "Needs review before payout.";
+  return `
+    <div class="admin-approval-notice ${cls}">
+      <strong>${latest.status === "needs_review" ? "Approval conflict" : "Approval pending"}</strong>
+      <span>${esc(latest.outcomeTitle || "Outcome")} · ${esc(missing)}</span>
+    </div>`;
 }
 
 function adminEmptyHtml() {
@@ -6178,12 +8054,14 @@ function portfolioSnapshot() {
       const owner = positionOwnerForGroup(group);
       const open = positionRowsForGroup(group, "open", owner);
       const closed = positionRowsForGroup(group, "closed", owner);
-      const cash = owner ? Number(group.balances?.[owner] ?? DEFAULT_BALANCE) : 0;
       const markValue = owner ? currentMarkValue(group, owner) : 0;
       const cashOutValue = owner ? currentPositionValue(group, owner) : 0;
       const activity = owner ? portfolioActivityForGroup(group, owner) : [];
+      const rawCash = owner ? Number(group.balances?.[owner] ?? DEFAULT_BALANCE) : 0;
+      const hasLedgerActivity = activity.some(item => item.action !== "resolved") || markValue > 0.0001 || cashOutValue > 0.0001 || open.length || closed.length;
+      const cash = owner ? (hasLedgerActivity ? rawCash : DEFAULT_BALANCE) : 0;
       const cashFlow = owner ? portfolioCashFlowForGroup(group, owner) : { buys: 0, sells: 0, payouts: 0 };
-      const startingValue = owner ? inferredGroupStartingValue(cash, cashFlow) : 0;
+      const startingValue = owner ? DEFAULT_BALANCE : 0;
       return { group, owner, open, closed, cash, markValue, cashOutValue, activity, cashFlow, startingValue };
     })
     .filter(item => item.owner || item.open.length || item.closed.length || item.activity.length);
@@ -6276,6 +8154,37 @@ function inferredGroupStartingValue(cash, flow) {
 
 function tradeCashAmount(trade) {
   return Math.abs(Number(trade?.amount ?? trade?.cashAmount ?? 0));
+}
+
+function participantTradeRowsForGroup(group, participant) {
+  const rows = [];
+  const seenEvents = new Set();
+  for (const market of group.markets ?? []) {
+    if (market.eventId && Array.isArray(market.outcomes)) {
+      if (seenEvents.has(market.eventId)) continue;
+      seenEvents.add(market.eventId);
+      for (const trade of market.eventTrades ?? []) {
+        if (trade.participant !== participant) continue;
+        rows.push({
+          ...trade,
+          amount: tradeCashAmount(trade),
+          action: trade.action || "buy",
+          market,
+        });
+      }
+      continue;
+    }
+    for (const trade of market.trades ?? []) {
+      if (trade.participant !== participant) continue;
+      rows.push({
+        ...trade,
+        amount: tradeCashAmount(trade),
+        action: trade.action || "buy",
+        market,
+      });
+    }
+  }
+  return rows;
 }
 
 function portfolioActivityForGroup(group, participant) {
@@ -7241,18 +9150,15 @@ function leaderboardChart(entries) {
 
 function leaderboardEntries(group) {
   return (group.members ?? []).map(name => {
-    const cash = Number(group.balances?.[name] ?? DEFAULT_BALANCE);
-    const cashFlow = portfolioCashFlowForGroup(group, name);
-    const startingValue = inferredGroupStartingValue(cash, cashFlow);
-    const trades = (group.markets ?? []).flatMap(market =>
-      (market.trades ?? [])
-        .filter(t => t.participant === name)
-        .map(trade => ({ ...trade, market }))
-    );
-    const volume = trades.reduce((sum, t) => sum + Math.abs(Number(t.amount || 0)), 0);
-    const deployed = trades.reduce((sum, t) => sum + (isBuyTrade(t) ? Math.abs(Number(t.amount || 0)) : 0), 0);
+    const rawCash = Number(group.balances?.[name] ?? DEFAULT_BALANCE);
+    const startingValue = DEFAULT_BALANCE;
+    const trades = participantTradeRowsForGroup(group, name);
+    const volume = trades.reduce((sum, t) => sum + tradeCashAmount(t), 0);
+    const deployed = trades.reduce((sum, t) => sum + (isBuyTrade(t) ? tradeCashAmount(t) : 0), 0);
     const markValue = currentMarkValue(group, name);
     const cashOutValue = currentPositionValue(group, name);
+    const hasLedgerActivity = trades.length > 0 || markValue > 0.0001 || cashOutValue > 0.0001;
+    const cash = hasLedgerActivity ? rawCash : DEFAULT_BALANCE;
     const positionValue = markValue;
     const bal = cash + markValue;
     const cashOutPortfolio = cash + cashOutValue;
@@ -7797,7 +9703,9 @@ function displayMarketHistory(market, event) {
 }
 
 function hasMarketTrades(market) {
-  return (market.trades ?? []).some(trade => Math.abs(Number(trade.amount || 0)) > 0);
+  const legacyTrades = market.trades ?? [];
+  const eventTrades = market.eventTrades ?? [];
+  return [...legacyTrades, ...eventTrades].some(trade => Math.abs(tradeCashAmount(trade)) > 0);
 }
 
 function flatMarketHistory(history, market) {
@@ -8014,13 +9922,118 @@ function ammPreview(poolYes, poolNo, side, amount) {
   return { shares, newProb: newPoolNo / (newPoolYes + newPoolNo) };
 }
 
-function setGroups(groups) {
-  state.groups = groups ?? [];
+function setGroups(groups, { persist = true } = {}) {
+  state.groups = reconcileGroups(groups ?? []);
+  if (persist && !state.demoMode) persistBootCache();
   if (state.demoMode && !state.groups.some(g => g.id === DEMO_GROUP_ID)) {
     state.groups = state.groups.concat([buildDemoGroup(state.activeMember || "You")]);
   }
   tradeQuoteCache.clear();
   tradeQuoteInflight.clear();
+}
+
+function reconcileGroups(incomingGroups) {
+  const incoming = Array.isArray(incomingGroups) ? incomingGroups.filter(Boolean) : [];
+  const byId = new Map(incoming.map(group => [group.id, group]));
+  for (const existing of state.groups ?? []) {
+    if (!existing?.id || byId.has(existing.id)) continue;
+    if (isPbMyMarketsGroup(existing) && existing.id !== state.currentGroupId) continue;
+    if (existing.id === state.currentGroupId || groupHasCurrentMember(existing)) {
+      byId.set(existing.id, existing);
+    }
+  }
+  return [...byId.values()];
+}
+
+function upsertGroup(group) {
+  if (!group?.id) return;
+  const next = [...state.groups];
+  const index = next.findIndex(item => item.id === group.id);
+  if (index >= 0) {
+    next[index] = group;
+  } else {
+    next.unshift(group);
+  }
+  setGroups(next);
+}
+
+function mergeFocusedGroupContext(group) {
+  if (!group?.id) return;
+  const focusedMarkets = group.markets ?? [];
+  if (!focusedMarkets.length) {
+    upsertGroup(group);
+    return;
+  }
+
+  const next = [...state.groups];
+  const index = next.findIndex(item => item.id === group.id);
+  if (index < 0) {
+    upsertGroup(group);
+    return;
+  }
+
+  const focusedEventIds = new Set(focusedMarkets.map(market => market.eventId || market.id).filter(Boolean));
+  const focusedMarketIds = new Set(focusedMarkets.map(market => market.id).filter(Boolean));
+  const existing = next[index];
+  const remainingMarkets = (existing.markets ?? []).filter(market => {
+    const eventId = market.eventId || market.id;
+    return !focusedEventIds.has(eventId) && !focusedMarketIds.has(market.id);
+  });
+
+  next[index] = {
+    ...existing,
+    ...group,
+    markets: [...focusedMarkets, ...remainingMarkets],
+  };
+  setGroups(next);
+}
+
+function persistBootCache() {
+  if (!Array.isArray(state.groups) || !state.groups.length) return;
+  try {
+    localStorage.setItem(STORAGE_KEYS.bootCache, JSON.stringify({
+      groups: state.groups,
+      currentGroupId: state.currentGroupId,
+      activeMember: state.activeMember,
+      savedAt: Date.now(),
+    }));
+  } catch {
+    // Cache is best-effort; app correctness must not depend on storage quota.
+  }
+}
+
+function readBootCache() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.bootCache);
+    if (!raw) return null;
+    const cache = JSON.parse(raw);
+    if (!Array.isArray(cache?.groups) || !cache.groups.length) return null;
+    return cache;
+  } catch {
+    return null;
+  }
+}
+
+function restoreBootCacheForRoute(route) {
+  const cache = readBootCache();
+  if (!cache) return false;
+  // Market links need fresh event trade history for charts. Rendering cached
+  // groups first causes a visible straight-line chart before hydration.
+  if (route.name === "market") return false;
+  setGroups(cache.groups, { persist: false });
+  if (cache.currentGroupId && state.groups.some(group => group.id === cache.currentGroupId)) {
+    state.currentGroupId = cache.currentGroupId;
+  }
+  if (!state.activeMember && cache.activeMember) state.activeMember = cache.activeMember;
+  normalizeSelection();
+  if (route.name === "market" && state.sharedMarketId) {
+    const cachedMarket = findMarketForRoute(state.sharedMarketId);
+    if (cachedMarket) {
+      openSharedMarket(state.sharedMarketId);
+      return true;
+    }
+  }
+  return state.shell === "app" && Boolean(getCurrentGroup());
 }
 
 function isPbMyMarketsGroup(group) {
@@ -8078,7 +10091,15 @@ function normalizeSelection() {
   if (state.currentGroupId && !state.groups.some(g => g.id === state.currentGroupId)) {
     state.currentGroupId = null;
   }
-  const group = getCurrentGroup();
+  let group = getCurrentGroup();
+  if (group && isPbMyMarketsGroup(group)) {
+    const replacement = firstSelectableGroup();
+    if (replacement) {
+      state.currentGroupId = replacement.id;
+      localStorage.setItem(STORAGE_KEYS.groupId, replacement.id);
+      group = replacement;
+    }
+  }
   if (group) {
     const resolved = memberAliasForGroup(group);
     if (resolved && resolved !== state.activeMember) {
@@ -8314,6 +10335,9 @@ function applyAuthSession(session, { renderNow = true } = {}) {
   if (renderNow) {
     normalizeSelection();
     render();
+    if (state.authUser && state.view === "bracket") {
+      void loadRemoteBracketEntry({ refresh: true });
+    }
   }
 }
 

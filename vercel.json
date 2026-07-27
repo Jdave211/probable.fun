@@ -1,6 +1,14 @@
 {
   "rewrites": [
     {
+      "source": "/market/:path*",
+      "destination": "https://probable-fun.onrender.com/market/:path*"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "https://probable-fun.onrender.com/api/:path*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

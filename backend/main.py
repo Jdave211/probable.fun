@@ -7,19 +7,22 @@ import io
 import math
 import os
 import re
+import threading
+import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote_plus, urlparse, urlunparse
 from uuid import uuid4
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -41,6 +44,7 @@ class GroupCreate(BaseModel):
     emoji: str = Field(default="📣", max_length=4)
     members: list[str] = Field(min_length=1)
     mode: Literal["fake", "real"] = "fake"
+    createdBy: str | None = Field(default=None, max_length=80)
 
 
 class JoinGroup(BaseModel):
@@ -110,6 +114,19 @@ class ResolveMarket(BaseModel):
     outcome: str = Field(min_length=1, max_length=80)
     reasoning: str | None = Field(default=None, max_length=1200)
     resolvedBy: str | None = Field(default=None, max_length=80)
+    resolverAliases: list[str] | None = None
+
+
+class EliminateOutcome(BaseModel):
+    reasoning: str | None = Field(default=None, max_length=1200)
+    eliminatedBy: str | None = Field(default=None, max_length=80)
+
+
+class BracketEntrySave(BaseModel):
+    participant: str = Field(min_length=1, max_length=80)
+    userEmail: str | None = Field(default=None, max_length=240)
+    picks: dict[str, str] = Field(default_factory=dict)
+    submitted: bool = False
 
 
 class OracleVote(BaseModel):
@@ -649,6 +666,68 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def clean_person(value: str | None, fallback: str = "") -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())[:80]
+    return text or fallback
+
+
+def person_key(value: str | None) -> str:
+    return clean_person(value).casefold()
+
+
+def expand_member_aliases(aliases: set[str]) -> set[str]:
+    expanded = {alias for alias in aliases if alias}
+    emails = sorted(alias for alias in expanded if "@" in alias)
+    if not emails:
+        return expanded
+    try:
+        rows = (
+            get_db()
+            .table("bracket_entries")
+            .select("participant,user_email")
+            .in_("user_email", emails)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        print("Could not expand member aliases from bracket entries", exc)
+        return expanded
+    for row in rows:
+        email = clean_person(row.get("user_email"), "").casefold()
+        if email not in expanded:
+            continue
+        participant = clean_person(row.get("participant"), "").casefold()
+        if participant:
+            expanded.add(participant)
+    return expanded
+
+
+def clean_bracket_picks(picks: dict[str, str] | None) -> dict[str, str]:
+    cleaned: dict[str, str] = {}
+    for key, value in (picks or {}).items():
+        clean_key = re.sub(r"[^a-zA-Z0-9_-]", "", str(key or ""))[:64]
+        clean_value = re.sub(r"\s+", " ", str(value or "").strip())[:80]
+        if clean_key and clean_value:
+            cleaned[clean_key] = clean_value
+    return cleaned
+
+
+def assemble_bracket_entry(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    return {
+        "id": row.get("id"),
+        "challengeId": row.get("challenge_id"),
+        "participant": row.get("participant"),
+        "userEmail": row.get("user_email"),
+        "picks": row.get("picks") or {},
+        "submittedAt": row.get("submitted_at"),
+        "createdAt": row.get("created_at"),
+        "updatedAt": row.get("updated_at"),
+    }
+
+
 def parse_iso_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -662,22 +741,40 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
-def close_expired_markets(db) -> None:
-    now = datetime.now(timezone.utc)
-    r = db.table("markets").select("id, closes_at").eq("status", "open").execute()
-    for market in r.data or []:
-        closes_at = parse_iso_datetime(market.get("closes_at"))
-        if closes_at and closes_at <= now:
-            db.table("markets").update({"status": "closed"}).eq("id", market["id"]).execute()
+_last_close_expired_at = 0.0
+_close_expired_lock = threading.Lock()
+CLOSE_EXPIRED_INTERVAL_SECONDS = int(os.environ.get("CLOSE_EXPIRED_INTERVAL_SECONDS", "60"))
 
-    try:
-        er = db.table("market_events").select("id, closes_at").eq("status", "open").execute()
-    except Exception:
+
+def close_expired_markets(db, *, force: bool = False) -> None:
+    global _last_close_expired_at
+    monotonic_now = time.monotonic()
+    if not force and monotonic_now - _last_close_expired_at < CLOSE_EXPIRED_INTERVAL_SECONDS:
         return
-    for event in er.data or []:
-        closes_at = parse_iso_datetime(event.get("closes_at"))
-        if closes_at and closes_at <= now:
-            db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
+    if not _close_expired_lock.acquire(blocking=False):
+        return
+    try:
+        if not force and monotonic_now - _last_close_expired_at < CLOSE_EXPIRED_INTERVAL_SECONDS:
+            return
+        _last_close_expired_at = monotonic_now
+
+        now = datetime.now(timezone.utc)
+        r = db.table("markets").select("id, closes_at").eq("status", "open").execute()
+        for market in r.data or []:
+            closes_at = parse_iso_datetime(market.get("closes_at"))
+            if closes_at and closes_at <= now:
+                db.table("markets").update({"status": "closed"}).eq("id", market["id"]).execute()
+
+        try:
+            er = db.table("market_events").select("id, closes_at").eq("status", "open").execute()
+        except Exception:
+            return
+        for event in er.data or []:
+            closes_at = parse_iso_datetime(event.get("closes_at"))
+            if closes_at and closes_at <= now:
+                db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
+    finally:
+        _close_expired_lock.release()
 
 
 # ── Supabase client ────────────────────────────────────────────────────
@@ -916,7 +1013,11 @@ def assemble_event_markets(event: dict) -> list[dict]:
         positions.setdefault(position["participant"], {})[position["outcome_id"]] = float(position.get("shares") or 0)
 
     liquidity = float(event.get("liquidity_b") or 0)
-    volume = round(sum(abs(float(trade.get("cash_amount") or 0)) for trade in trades_raw), 4)
+    volume = round(
+        sum(abs(float(trade.get("cash_amount") or 0)) for trade in trades_raw)
+        if trades_raw else float(event.get("total_volume") or 0),
+        4,
+    )
     status = event["status"]
     markets: list[dict] = []
     for outcome in outcomes:
@@ -940,6 +1041,10 @@ def assemble_event_markets(event: dict) -> list[dict]:
             "verificationAttempts": event.get("verification_attempts") or [],
             "resolvedBy": event.get("resolved_by"),
             "resolutionNotes": event.get("resolution_notes"),
+            "outcomeStatus": outcome.get("status") or "active",
+            "eliminatedAt": outcome.get("eliminated_at"),
+            "eliminatedBy": outcome.get("eliminated_by"),
+            "eliminationNotes": outcome.get("elimination_notes"),
             "probability": probability,
             "pool_yes": None,
             "pool_no": None,
@@ -962,6 +1067,10 @@ def assemble_event_markets(event: dict) -> list[dict]:
                     "price": round(float(item.get("price") or 0), 6),
                     "quantity": round(float(item.get("quantity") or 0), 6),
                     "sortOrder": item.get("sort_order") or 0,
+                    "status": item.get("status") or "active",
+                    "eliminatedAt": item.get("eliminated_at"),
+                    "eliminatedBy": item.get("eliminated_by"),
+                    "eliminationNotes": item.get("elimination_notes"),
                 }
                 for item in outcomes
             ],
@@ -1041,6 +1150,7 @@ def assemble_group(g: dict) -> dict:
         "name":      g["name"],
         "emoji":     g["emoji"],
         "mode":      g["mode"],
+        "createdBy": g.get("created_by"),
         "createdAt": g["created_at"],
         "members":   [m["name"] for m in members_raw],
         "balances":  {m["name"]: m["balance"] for m in members_raw},
@@ -1048,21 +1158,123 @@ def assemble_group(g: dict) -> dict:
     }
 
 
-def load_all_groups() -> list[dict]:
+GROUPS_SELECT_FULL = "*, group_members(*), market_events(*, market_outcomes(*), event_trades(*), event_positions(*)), markets(*, trades(*))"
+EVENT_SELECT_COMPACT = (
+    "id,group_id,title,description,status,mode,oracle_type,liquidity_b,total_volume,"
+    "image_url,"
+    "closes_at,created_at,outcome_id,resolved_at,oracle_proposal,legacy_key,"
+    "resolution_source,edge_cases,verification_status,verification_attempts,"
+    "resolved_by,resolution_notes,created_by,"
+    "market_outcomes(*),event_trades(*),event_positions(*)"
+)
+EVENT_SELECT_CONTEXT = (
+    "id,group_id,title,description,status,mode,oracle_type,liquidity_b,total_volume,"
+    "image_url,"
+    "closes_at,created_at,outcome_id,resolved_at,oracle_proposal,legacy_key,"
+    "resolution_source,edge_cases,verification_status,verification_attempts,"
+    "resolved_by,resolution_notes,created_by,"
+    "market_outcomes(*),event_trades(*),event_positions(*)"
+)
+GROUPS_SELECT_COMPACT = (
+    "id,name,emoji,mode,created_by,created_at,"
+    "group_members(*),"
+    f"market_events({EVENT_SELECT_COMPACT}),"
+    "markets(*)"
+)
+
+
+def compact_market_image_url(market_id: str) -> str:
+    return f"{public_base_url().rstrip('/')}/api/markets/{market_id}/image"
+
+
+def strip_data_url_images(groups: list[dict]) -> list[dict]:
+    for group in groups:
+        for market in group.get("markets", []):
+            image_url = market.get("imageUrl")
+            if isinstance(image_url, str) and image_url.startswith("data:"):
+                market["imageUrl"] = compact_market_image_url(market["id"])
+    return groups
+
+
+def load_all_groups(*, compact: bool = True, group_id: str | None = None, limit: int | None = None) -> list[dict]:
     db = get_db()
     close_expired_markets(db)
-    result = db.table("groups").select(
-        "*, group_members(*), market_events(*, market_outcomes(*), event_trades(*), event_positions(*)), markets(*, trades(*))"
-    ).order("created_at", desc=True).execute()
-    return [assemble_group(deepcopy(g)) for g in result.data]
+    query = db.table("groups").select(GROUPS_SELECT_COMPACT if compact else GROUPS_SELECT_FULL)
+    if group_id:
+        query = query.eq("id", group_id)
+    if compact and limit:
+        query = query.limit(max(1, min(int(limit), 50)))
+    result = query.order("created_at", desc=True).execute()
+    groups = [assemble_group(deepcopy(g)) for g in result.data]
+    return strip_data_url_images(groups) if compact else groups
 
 
-def groups_response(**extra) -> dict:
-    return {"groups": load_all_groups(), **extra}
+def groups_response(
+    *,
+    compact: bool = True,
+    group_id: str | None = None,
+    include: str | None = None,
+    limit: int | None = None,
+    members: str | None = None,
+    **extra,
+) -> dict:
+    aliases = {
+        clean_person(item).casefold()
+        for item in (members or "").split(",")
+        if clean_person(item)
+    }
+    aliases = expand_member_aliases(aliases)
+    groups = load_all_groups(compact=compact, group_id=group_id, limit=None if aliases else limit)
+    if aliases:
+        def matches_member_alias(group: dict) -> bool:
+            creator = clean_person(group.get("createdBy"))
+            if creator.casefold() in aliases:
+                return True
+            return any(clean_person(member).casefold() in aliases for member in group.get("members", []))
+
+        groups = [
+            group for group in groups
+            if matches_member_alias(group)
+        ]
+        if limit:
+            groups = groups[:max(1, min(int(limit), 50))]
+    if include and not any(group.get("id") == include for group in groups):
+        groups.extend(load_all_groups(compact=compact, group_id=include))
+    return {"groups": groups, **extra}
+
+
+def load_market_context_group(market_id: str) -> dict:
+    db = get_db()
+    close_expired_markets(db)
+    try:
+        event, _route_outcome = require_event_or_outcome(market_id)
+        group_id = event["group_id"]
+        group_rows = db.table("groups").select("id,name,emoji,mode,created_by,created_at,group_members(*)").eq("id", group_id).execute().data or []
+        event_rows = db.table("market_events").select(EVENT_SELECT_CONTEXT).eq("id", event["id"]).execute().data or []
+        if not group_rows or not event_rows:
+            raise HTTPException(404, "Market group not found")
+        group = deepcopy(group_rows[0])
+        group["market_events"] = event_rows
+        group["markets"] = []
+        return strip_data_url_images([assemble_group(group)])[0]
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        legacy_rows = db.table("markets").select("*, trades(*)").eq("id", market_id).execute().data or []
+        if not legacy_rows:
+            raise
+        group_id = legacy_rows[0]["group_id"]
+        group_rows = db.table("groups").select("id,name,emoji,mode,created_by,created_at,group_members(*)").eq("id", group_id).execute().data or []
+        if not group_rows:
+            raise HTTPException(404, "Market group not found")
+        group = deepcopy(group_rows[0])
+        group["market_events"] = []
+        group["markets"] = legacy_rows
+        return strip_data_url_images([assemble_group(group)])[0]
 
 
 def find_assembled_market(market_id: str) -> tuple[dict, dict, dict]:
-    for group in load_all_groups():
+    for group in load_all_groups(compact=False):
         for market in group.get("markets", []):
             if market.get("id") == market_id or market.get("eventId") == market_id:
                 event_markets = [item for item in group.get("markets", []) if item.get("eventId") == market.get("eventId")]
@@ -1081,7 +1293,7 @@ def find_assembled_market(market_id: str) -> tuple[dict, dict, dict]:
 
 
 def find_assembled_event(event_id: str) -> tuple[dict, dict]:
-    for group in load_all_groups():
+    for group in load_all_groups(compact=False):
         event_markets = [item for item in group.get("markets", []) if item.get("eventId") == event_id]
         if event_markets:
             head = event_markets[0]
@@ -1118,12 +1330,20 @@ def request_base_url(request: Request | None) -> str | None:
 
 
 def frontend_base_url(request: Request | None = None) -> str:
-    explicit = os.environ.get("FRONTEND_BASE_URL") or os.environ.get("VITE_PUBLIC_APP_BASE_URL")
+    explicit = (
+        os.environ.get("FRONTEND_BASE_URL")
+        or os.environ.get("APP_BASE_URL")
+        or os.environ.get("SITE_URL")
+        or os.environ.get("VITE_PUBLIC_APP_BASE_URL")
+    )
     if explicit:
         return explicit.rstrip("/")
     base = request_base_url(request)
     if base:
         parsed = urlparse(base)
+        host = (parsed.hostname or "").lower()
+        if host.endswith(".onrender.com"):
+            return os.environ.get("PROBABLE_FRONTEND_FALLBACK", "https://www.probable.live").rstrip("/")
         if parsed.port == 8000:
             netloc = parsed.hostname or "localhost"
             if parsed.username:
@@ -1135,6 +1355,35 @@ def frontend_base_url(request: Request | None = None) -> str:
 
 def share_base_url(request: Request | None = None) -> str:
     return configured_public_base_url() or request_base_url(request) or public_base_url()
+
+
+CRAWLER_USER_AGENT_MARKERS = (
+    "bot",
+    "crawler",
+    "spider",
+    "facebookexternalhit",
+    "facebot",
+    "twitterbot",
+    "slackbot",
+    "discordbot",
+    "linkedinbot",
+    "telegrambot",
+    "whatsapp",
+    "applebot",
+    "google-structured-data-testing-tool",
+)
+
+
+def is_crawler_request(request: Request) -> bool:
+    user_agent = (request.headers.get("user-agent") or "").casefold()
+    if not user_agent:
+        return False
+    return any(marker in user_agent for marker in CRAWLER_USER_AGENT_MARKERS)
+
+
+def app_market_url(market_id: str, request: Request | None = None) -> str:
+    app_base = frontend_base_url(request).rstrip("/")
+    return f"{app_base}/?market={quote_plus(market_id)}"
 
 
 def is_binary_no_row(market: dict) -> bool:
@@ -1155,7 +1404,6 @@ def share_yes_no_prices(market: dict) -> tuple[float, float]:
 def share_market_payload(market_id: str, request: Request | None = None) -> dict:
     group, event, market = find_assembled_market(market_id)
     share_base = share_base_url(request)
-    app_base = frontend_base_url(request)
     title = event["title"]
     if share_card_is_multi(event):
         share_title = title
@@ -1175,7 +1423,7 @@ def share_market_payload(market_id: str, request: Request | None = None) -> dict
             "title": share_title,
             "description": share_description,
             "url": f"{share_base}/market/{market['id']}",
-            "appUrl": f"{app_base}/market/{market['id']}",
+            "appUrl": app_market_url(market["id"], request),
             "embedUrl": f"{share_base}/embed/market/{market['id']}",
             "imageUrl": f"{share_base}/api/markets/{market['id']}/share-card.png",
         },
@@ -1505,14 +1753,26 @@ def clamp_price(value: float) -> float:
     return max(0.001, min(0.999, float(value or 0)))
 
 
+def outcome_status(outcome: dict) -> str:
+    return str(outcome.get("status") or "active").strip().lower() or "active"
+
+
+def outcome_is_eliminated(outcome: dict | None) -> bool:
+    return outcome_status(outcome or {}) == "eliminated"
+
+
+def active_outcomes(outcomes: list[dict]) -> list[dict]:
+    return [item for item in outcomes if not outcome_is_eliminated(item)]
+
+
 def event_sum_exp(outcomes: list[dict], b: float) -> float:
-    return sum(math.exp(float(item.get("quantity") or 0) / b) for item in outcomes)
+    return sum(math.exp(float(item.get("quantity") or 0) / b) for item in active_outcomes(outcomes))
 
 
 def lmsr_buy_shares(outcomes: list[dict], b: float, outcome_id: str, cash: float) -> float:
     if cash <= 0:
         return 0.0
-    target = next((item for item in outcomes if item["id"] == outcome_id), None)
+    target = next((item for item in active_outcomes(outcomes) if item["id"] == outcome_id), None)
     if not target or b <= 0:
         return 0.0
     sum_exp = event_sum_exp(outcomes, b)
@@ -1523,7 +1783,7 @@ def lmsr_buy_shares(outcomes: list[dict], b: float, outcome_id: str, cash: float
 def lmsr_sell_cash_for_shares(outcomes: list[dict], b: float, outcome_id: str, shares: float) -> float:
     if shares <= 0:
         return 0.0
-    target = next((item for item in outcomes if item["id"] == outcome_id), None)
+    target = next((item for item in active_outcomes(outcomes) if item["id"] == outcome_id), None)
     if not target or b <= 0:
         return 0.0
     sum_exp = event_sum_exp(outcomes, b)
@@ -1538,7 +1798,7 @@ def lmsr_complement_buy_shares(outcomes: list[dict], b: float, excluded_outcome_
     net_cash = trade_net_cash(gross_cash)
     if net_cash <= 0 or b <= 0:
         return 0.0
-    values = [(item["id"], math.exp(float(item.get("quantity") or 0) / b)) for item in outcomes]
+    values = [(item["id"], math.exp(float(item.get("quantity") or 0) / b)) for item in active_outcomes(outcomes)]
     sum_exp = sum(value for _id, value in values)
     target_exp = next((value for oid, value in values if oid == excluded_outcome_id), None)
     if not target_exp or sum_exp <= 0:
@@ -1557,7 +1817,7 @@ def lmsr_complement_sell_cash_for_shares(outcomes: list[dict], b: float, exclude
     amount = max(0.0, float(shares or 0))
     if amount <= 0 or b <= 0:
         return 0.0
-    values = [(item["id"], math.exp(float(item.get("quantity") or 0) / b)) for item in outcomes]
+    values = [(item["id"], math.exp(float(item.get("quantity") or 0) / b)) for item in active_outcomes(outcomes)]
     sum_exp = sum(value for _id, value in values)
     target_exp = next((value for oid, value in values if oid == excluded_outcome_id), None)
     if not target_exp or sum_exp <= 0:
@@ -1587,9 +1847,15 @@ def lmsr_complement_sell_shares_for_cash(outcomes: list[dict], b: float, exclude
 
 
 def lmsr_prices_for_quantities(outcomes: list[dict], b: float) -> dict[str, float]:
-    exps = {item["id"]: math.exp(float(item.get("quantity") or 0) / b) for item in outcomes}
+    exps = {
+        item["id"]: math.exp(float(item.get("quantity") or 0) / b)
+        for item in active_outcomes(outcomes)
+    }
     total = sum(exps.values()) or 1.0
-    return {oid: value / total for oid, value in exps.items()}
+    prices = {oid: value / total for oid, value in exps.items()}
+    for item in outcomes:
+        prices.setdefault(item["id"], 0.0)
+    return prices
 
 
 def trade_net_cash(cash: float) -> float:
@@ -1625,9 +1891,14 @@ def event_trade_quote(event: dict, outcomes: list[dict], outcome_id: str, payloa
     target = next((item for item in outcomes if item["id"] == outcome_id), None)
     if not target:
         raise HTTPException(400, "Outcome not found")
+    if outcome_is_eliminated(target):
+        raise HTTPException(400, f"{target.get('title') or 'This outcome'} has been eliminated")
+    active = active_outcomes(outcomes)
+    if len(active) < 2:
+        raise HTTPException(400, "Market does not have enough active outcomes to trade")
     b = float(event.get("liquidity_b") or DEFAULT_FAKE_BALANCE)
     amount = float(payload.amount or 0)
-    is_complement = len(outcomes) > 2 and payload.side == "no"
+    is_complement = len(outcomes) > 2 and len(active) > 1 and payload.side == "no"
     target_price = float(target.get("price") or 0)
     price = max(0.0, 1.0 - target_price) if is_complement else target_price
     fee = amount * MARKET_FEE_RATE if payload.action == "buy" else max(0.0, sell_gross_cash_for_net(amount) - amount)
@@ -1651,24 +1922,24 @@ def event_trade_quote(event: dict, outcomes: list[dict], outcome_id: str, payloa
     if amount <= 0:
         return quote
     if is_complement:
-        complement = [item for item in outcomes if item["id"] != outcome_id]
+        complement = [item for item in active if item["id"] != outcome_id]
         if payload.action == "buy":
-            shares = lmsr_complement_buy_shares(outcomes, b, outcome_id, amount)
+            shares = lmsr_complement_buy_shares(active, b, outcome_id, amount)
             quote["shares"] = round(shares, 8)
             quote["allocations"] = weighted_allocations(complement, amount)
         else:
             holdings = positions or {}
             max_shares = min([float(holdings.get(item["id"], 0)) for item in complement] or [0.0])
-            max_cash = lmsr_complement_sell_cash_for_shares(outcomes, b, outcome_id, max_shares)
+            max_cash = lmsr_complement_sell_cash_for_shares(active, b, outcome_id, max_shares)
             quote["maxCash"] = round(max_cash, 4)
             quote["cashReceived"] = round(min(amount, max_cash), 4)
-            quote["shares"] = round(lmsr_complement_sell_shares_for_cash(outcomes, b, outcome_id, min(amount, max_cash), max_shares), 8)
+            quote["shares"] = round(lmsr_complement_sell_shares_for_cash(active, b, outcome_id, min(amount, max_cash), max_shares), 8)
         return quote
     if payload.action == "buy":
-        quote["shares"] = round(lmsr_buy_shares(outcomes, b, outcome_id, trade_net_cash(amount)), 8)
+        quote["shares"] = round(lmsr_buy_shares(active, b, outcome_id, trade_net_cash(amount)), 8)
     else:
         held = float((positions or {}).get(outcome_id, 0))
-        max_cash = trade_net_cash(lmsr_sell_cash_for_shares(outcomes, b, outcome_id, held))
+        max_cash = trade_net_cash(lmsr_sell_cash_for_shares(active, b, outcome_id, held))
         quote["maxCash"] = round(max_cash, 4)
         quote["cashReceived"] = round(min(amount, max_cash), 4)
     return quote
@@ -2005,16 +2276,228 @@ def resolve_event_market_all_outcomes(
     }
 
 
+def group_founder_for_event(db, event: dict) -> str:
+    group_rows = db.table("groups").select("created_by").eq("id", event["group_id"]).limit(1).execute().data or []
+    founder = clean_person(group_rows[0].get("created_by") if group_rows else None)
+    if founder:
+        return founder
+    members = (
+        db.table("group_members")
+        .select("name")
+        .eq("group_id", event["group_id"])
+        .order("joined_at")
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return clean_person(members[0].get("name") if members else None, clean_person(event.get("created_by"), "manual"))
+
+
+def event_admins(db, event: dict) -> list[str]:
+    founder = group_founder_for_event(db, event)
+    creator = clean_person(event.get("created_by"), founder)
+    admins: list[str] = []
+    seen: set[str] = set()
+    for person in [founder, creator]:
+        key = person_key(person)
+        if person and key not in seen:
+            admins.append(person)
+            seen.add(key)
+    return admins or ["manual"]
+
+
+def approval_role(resolver: str, founder: str, creator: str) -> str:
+    key = person_key(resolver)
+    founder_key = person_key(founder)
+    creator_key = person_key(creator)
+    if key and key == founder_key and key == creator_key:
+        return "founder_creator"
+    if key and key == founder_key:
+        return "founder"
+    if key and key == creator_key:
+        return "creator"
+    return "admin"
+
+
+def append_event_verification_attempt(db, event: dict, attempt: dict) -> None:
+    attempts = event.get("verification_attempts") or []
+    if not isinstance(attempts, list):
+        attempts = []
+    attempts.append(attempt)
+    db.table("market_events").update({
+        "verification_attempts": attempts[-20:],
+        "verification_status": attempt.get("status") or "approval_pending",
+    }).eq("id", event["id"]).execute()
+    event["verification_attempts"] = attempts[-20:]
+    event["verification_status"] = attempt.get("status") or "approval_pending"
+
+
+def record_resolution_approval(
+    db,
+    event: dict,
+    *,
+    outcome_id: str,
+    outcome_title: str,
+    resolver: str,
+    resolver_aliases: list[str] | None = None,
+    notes: str | None = None,
+) -> dict:
+    resolver_clean = clean_person(resolver, "manual")
+    founder = group_founder_for_event(db, event)
+    creator = clean_person(event.get("created_by"), founder)
+    admins = event_admins(db, event)
+    admin_keys = {person_key(item) for item in admins}
+    resolver_keys = {person_key(resolver_clean)}
+    resolver_keys.update(person_key(alias) for alias in (resolver_aliases or []) if clean_person(alias))
+    matched_admin = next((admin for admin in admins if person_key(admin) in resolver_keys), "")
+    if not matched_admin:
+        raise HTTPException(403, "Only the group founder or market creator can resolve this market.")
+
+    role = approval_role(matched_admin, founder, creator)
+    note = (notes or "").strip()[:1200] or None
+    db.table("market_resolution_approvals").upsert({
+        "event_id": event["id"],
+        "outcome_id": outcome_id,
+        "resolver": matched_admin,
+        "role": role,
+        "notes": note,
+    }, on_conflict="event_id,resolver").execute()
+
+    rows = (
+        db.table("market_resolution_approvals")
+        .select("*")
+        .eq("event_id", event["id"])
+        .execute()
+        .data
+        or []
+    )
+    relevant = [row for row in rows if person_key(row.get("resolver")) in admin_keys]
+    approval_by_key = {person_key(row.get("resolver")): row for row in relevant}
+    missing = [person for person in admins if person_key(person) not in approval_by_key]
+    approved_outcomes = {str(row.get("outcome_id") or "") for row in relevant if str(row.get("outcome_id") or "")}
+    ready = not missing and len(approved_outcomes) == 1 and outcome_id in approved_outcomes
+    mismatch = len(approved_outcomes) > 1
+    status = "ready_to_resolve" if ready else "needs_review" if mismatch else "approval_pending"
+    approval = {
+        "eventId": event["id"],
+        "outcomeId": outcome_id,
+        "outcomeTitle": outcome_title,
+        "resolver": resolver_clean,
+        "approver": matched_admin,
+        "role": role,
+        "status": status,
+        "requiredResolvers": admins,
+        "missingResolvers": missing,
+        "approvals": [
+            {
+                "resolver": row.get("resolver"),
+                "role": row.get("role"),
+                "outcomeId": row.get("outcome_id"),
+                "notes": row.get("notes"),
+                "createdAt": row.get("created_at"),
+            }
+            for row in relevant
+        ],
+    }
+    append_event_verification_attempt(db, event, {
+        "type": "manual_approval",
+        "status": status,
+        "outcomeId": outcome_id,
+        "outcomeTitle": outcome_title,
+        "resolvedBy": resolver_clean,
+        "approver": matched_admin,
+        "notes": note,
+        "createdAt": now_iso(),
+        "requiredResolvers": admins,
+        "missingResolvers": missing,
+    })
+    return approval
+
+
+def eliminate_event_outcome(
+    db,
+    event: dict,
+    outcome_id: str,
+    *,
+    eliminated_by: str = "manual",
+    notes: str | None = None,
+) -> dict:
+    event_id = event["id"]
+    if event.get("status") == "resolved":
+        raise HTTPException(400, "Resolved markets cannot be edited")
+    if event.get("status") not in ("open", "closed"):
+        raise HTTPException(400, "Market must be open or closed before eliminating an outcome")
+
+    outcomes = db.table("market_outcomes").select("*").eq("event_id", event_id).order("sort_order").execute().data or []
+    if len(outcomes) <= 2:
+        raise HTTPException(400, "Outcome elimination is only for multi-outcome markets")
+    outcome = next((item for item in outcomes if item["id"] == outcome_id), None)
+    if not outcome:
+        raise HTTPException(400, "Outcome not found")
+    if outcome_is_eliminated(outcome):
+        raise HTTPException(400, f"{outcome.get('title') or 'This outcome'} is already eliminated")
+
+    active = active_outcomes(outcomes)
+    if len(active) <= 2:
+        raise HTTPException(400, "Only two outcomes remain. Resolve the market instead.")
+
+    eliminated_by_clean = (eliminated_by or "manual").strip()[:80] or "manual"
+    note = (notes or "").strip()[:1200] or f"{outcome['title']} eliminated from contention."
+    eliminated_at = now_iso()
+
+    try:
+        db.table("market_outcomes").update({
+            "status": "eliminated",
+            "eliminated_at": eliminated_at,
+            "eliminated_by": eliminated_by_clean,
+            "elimination_notes": note,
+            "price": 0,
+            "quantity": -1_000_000_000,
+        }).eq("id", outcome_id).eq("event_id", event_id).execute()
+        attempts = event.get("verification_attempts") or []
+        if not isinstance(attempts, list):
+            attempts = []
+        attempts.append({
+            "type": "elimination",
+            "outcomeId": outcome_id,
+            "outcomeTitle": outcome.get("title"),
+            "by": eliminated_by_clean,
+            "notes": note,
+            "at": eliminated_at,
+        })
+        db.table("market_events").update({
+            "verification_status": "in_progress",
+            "verification_attempts": attempts,
+        }).eq("id", event_id).execute()
+        db.rpc("probable_reprice_event", {"p_event_id": event_id}).execute()
+    except Exception as exc:
+        raise HTTPException(400, rpc_error_message(exc)) from exc
+
+    return {
+        "eventId": event_id,
+        "outcomeId": outcome_id,
+        "outcomeTitle": outcome["title"],
+        "eliminatedBy": eliminated_by_clean,
+        "eliminationNotes": note,
+        "eliminatedAt": eliminated_at,
+    }
+
+
 # ── Lifespan ───────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
-    try:
-        db = get_db()
-        close_expired_markets(db)
-        migrate_legacy_events(db)
-    except Exception as exc:
-        print(f"Startup warning: {exc}")
+    def run_boot_maintenance() -> None:
+        try:
+            db = get_db()
+            close_expired_markets(db, force=True)
+            if os.environ.get("RUN_LEGACY_MIGRATION_ON_BOOT", "").lower() in {"1", "true", "yes"}:
+                migrate_legacy_events(db)
+        except Exception as exc:
+            print(f"Startup maintenance warning: {exc}")
+
+    threading.Thread(target=run_boot_maintenance, daemon=True).start()
     yield
 
 
@@ -2044,6 +2527,7 @@ app.add_middleware(
     allow_origins=allowed_cors_origins(),
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 @app.get("/api/health")
@@ -2052,8 +2536,59 @@ def health() -> dict:
 
 
 @app.get("/api/groups")
-def list_groups() -> dict:
-    return groups_response()
+def list_groups(
+    compact: bool = True,
+    limit: int | None = None,
+    include: str | None = None,
+    members: str | None = None,
+) -> dict:
+    return groups_response(compact=compact, limit=limit, include=include, members=members)
+
+
+@app.get("/api/markets/{market_id}/context")
+def get_market_context(market_id: str) -> dict:
+    group = load_market_context_group(market_id)
+    groups = groups_response(compact=True, limit=20, include=group["id"]).get("groups", [])
+    return {"group": group, "groups": groups}
+
+
+@app.get("/api/markets/{market_id}/image")
+def get_market_image(market_id: str) -> Response:
+    image_url: str | None = None
+    try:
+        event, _route_outcome = require_event_or_outcome(market_id)
+        image_url = event.get("image_url")
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        legacy = require_market(market_id)
+        image_url = legacy.get("image_url")
+
+    if not image_url:
+        raise HTTPException(404, "Market image not found")
+
+    if image_url.startswith("data:image") and "," in image_url:
+        header, encoded = image_url.split(",", 1)
+        media_type = header[5:].split(";", 1)[0] or "image/png"
+        try:
+            raw = base64.b64decode(encoded)
+        except Exception:
+            raise HTTPException(422, "Market image is invalid")
+        return Response(
+            content=raw,
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=86400, stale-while-revalidate=604800"},
+        )
+
+    if image_url.startswith(("http://", "https://")):
+        return RedirectResponse(image_url, status_code=307)
+
+    if image_url.startswith("/"):
+        path = BASE_DIR / "public" / image_url.lstrip("/")
+        if path.exists() and path.is_file():
+            return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
+
+    raise HTTPException(404, "Market image not found")
 
 
 @app.post("/api/groups", status_code=201)
@@ -2064,12 +2599,22 @@ def create_group(payload: GroupCreate) -> dict:
         raise HTTPException(400, "At least one member is required")
 
     group_id = create_id()
-    db.table("groups").insert({
+    founder = (payload.createdBy or cleaned[0]).strip()[:80] or cleaned[0]
+    group_row = {
         "id":    group_id,
         "name":  payload.name.strip(),
         "emoji": payload.emoji.strip() or "📣",
         "mode":  payload.mode,
-    }).execute()
+        "created_by": founder,
+    }
+    try:
+        db.table("groups").insert(group_row).execute()
+    except Exception:
+        # Older live databases may not have groups.created_by until the migration
+        # is applied. Creation should still work; admin hardening uses the first
+        # member as founder fallback in that case.
+        group_row.pop("created_by", None)
+        db.table("groups").insert(group_row).execute()
 
     db.table("group_members").insert([
         {"group_id": group_id, "name": m, "balance": DEFAULT_FAKE_BALANCE}
@@ -2077,6 +2622,719 @@ def create_group(payload: GroupCreate) -> dict:
     ]).execute()
 
     return groups_response(groupId=group_id)
+
+
+@app.get("/api/brackets/{challenge_id}/entry")
+def get_bracket_entry(challenge_id: str, participant: str | None = None, entry: str | None = None) -> dict:
+    db = get_db()
+    clean_challenge = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id)[:80]
+    if entry:
+        return {"entry": get_bracket_entry_by_id(clean_challenge, entry)}
+    clean_participant = clean_person(participant)
+    if not clean_challenge or not clean_participant:
+        raise HTTPException(400, "Bracket entry identity is missing")
+    rows = (
+        db.table("bracket_entries")
+        .select("*")
+        .eq("challenge_id", clean_challenge)
+        .eq("participant", clean_participant)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return {"entry": assemble_bracket_entry(rows[0] if rows else None)}
+
+
+@app.post("/api/brackets/{challenge_id}/entry", status_code=201)
+def save_bracket_entry(challenge_id: str, payload: BracketEntrySave) -> dict:
+    db = get_db()
+    clean_challenge = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id)[:80]
+    participant = clean_person(payload.participant)
+    if not clean_challenge or not participant:
+        raise HTTPException(400, "Bracket entry identity is missing")
+    cleaned_picks = clean_bracket_picks(payload.picks)
+    existing_rows = (
+        db.table("bracket_entries")
+        .select("*")
+        .eq("challenge_id", clean_challenge)
+        .eq("participant", participant)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing_rows and existing_rows[0].get("submitted_at"):
+        existing_entry = assemble_bracket_entry(existing_rows[0])
+        existing_picks = clean_bracket_picks(existing_entry.get("picks") if existing_entry else {})
+        if existing_picks != cleaned_picks or not payload.submitted:
+            raise HTTPException(409, "Bracket already submitted and locked.")
+        return {"entry": existing_entry}
+    row = {
+        "challenge_id": clean_challenge,
+        "participant": participant,
+        "user_email": clean_person(payload.userEmail, "") or None,
+        "picks": cleaned_picks,
+        "submitted_at": now_iso() if payload.submitted else None,
+        "updated_at": now_iso(),
+    }
+    result = (
+        db.table("bracket_entries")
+        .upsert(row, on_conflict="challenge_id,participant")
+        .execute()
+    )
+    saved = None
+    if result.data:
+        saved = result.data[0]
+    else:
+        saved_rows = (
+            db.table("bracket_entries")
+            .select("*")
+            .eq("challenge_id", clean_challenge)
+            .eq("participant", participant)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        saved = saved_rows[0] if saved_rows else row
+    return {"entry": assemble_bracket_entry(saved)}
+
+
+BRACKET_CHALLENGE_META = {
+    "id": "wc26-bracket-r32",
+    "prize": "up to $500",
+    "title": "World Cup Bracket Challenge",
+    "subtitle": "Free to enter. Submit the cleanest knockout bracket from the Round of 32 onward.",
+}
+
+
+def bracket_entry_count(challenge_id: str) -> int:
+    db = get_db()
+    try:
+        result = (
+            db.table("bracket_entries")
+            .select("id", count="exact")
+            .eq("challenge_id", challenge_id)
+            .not_.is_("submitted_at", "null")
+            .execute()
+        )
+        return int(result.count or 0)
+    except Exception:
+        return 0
+
+
+def bracket_card_payload(challenge_id: str, request: Request | None = None) -> dict:
+    share_base = share_base_url(request)
+    app_base = frontend_base_url(request)
+    meta = BRACKET_CHALLENGE_META
+    entries = bracket_entry_count(challenge_id)
+    joined = f"{entries:,} bracket{'s' if entries != 1 else ''} submitted" if entries else "Be the first to submit a bracket"
+    return {
+        "title": f"{meta['title']} · {meta['prize']} for perfect knockouts",
+        "description": f"{meta['subtitle']} {joined}.",
+        "entries": entries,
+        "url": f"{share_base}/bracket",
+        "appUrl": f"{app_base}/bracket",
+        "imageUrl": f"{share_base}/api/brackets/{challenge_id}/share-card.png",
+    }
+
+
+BRACKET_BASE_MATCHUPS = [
+    {"id": "m73", "teams": ["South Africa", "Canada"], "winner": "Canada", "completed": True},
+    {"id": "m74", "teams": ["Germany", "Paraguay"], "winner": "Paraguay", "completed": True},
+    {"id": "m75", "teams": ["Netherlands", "Morocco"], "winner": "Morocco", "completed": True},
+    {"id": "m76", "teams": ["Brazil", "Japan"], "winner": "Brazil", "completed": True},
+    {"id": "m77", "teams": ["France", "Sweden"], "winner": "France", "completed": True},
+    {"id": "m78", "teams": ["Ivory Coast", "Norway"], "winner": "Norway", "completed": True},
+    {"id": "m79", "teams": ["Mexico", "Ecuador"], "winner": "Mexico", "completed": True},
+    {"id": "m80", "teams": ["England", "DR Congo"], "winner": "England", "completed": True},
+    {"id": "m81", "teams": ["USA", "Bosnia and Herzegovina"], "winner": "USA", "completed": True},
+    {"id": "m82", "teams": ["Belgium", "Senegal"], "winner": "Belgium", "completed": True},
+    {"id": "m83", "teams": ["Portugal", "Croatia"], "winner": "Portugal", "completed": True},
+    {"id": "m84", "teams": ["Spain", "Austria"], "winner": "Spain", "completed": True},
+    {"id": "m85", "teams": ["Switzerland", "Algeria"], "winner": "Switzerland", "completed": True},
+    {"id": "m86", "teams": ["Argentina", "Cabo Verde"], "winner": "Argentina", "completed": True},
+    {"id": "m87", "teams": ["Colombia", "Ghana"], "winner": "Colombia", "completed": True},
+    {"id": "m88", "teams": ["Australia", "Egypt"], "winner": "Egypt", "completed": True},
+]
+
+BRACKET_DERIVED_MATCHUPS = {
+    "m89": ("m74", "m77"),
+    "m90": ("m73", "m75"),
+    "m91": ("m76", "m78"),
+    "m92": ("m79", "m80"),
+    "m93": ("m81", "m82"),
+    "m94": ("m83", "m84"),
+    "m95": ("m86", "m88"),
+    "m96": ("m85", "m87"),
+    "m97": ("m89", "m90"),
+    "m98": ("m93", "m94"),
+    "m99": ("m91", "m92"),
+    "m100": ("m95", "m96"),
+    "m101": ("m97", "m98"),
+    "m102": ("m99", "m100"),
+    "final": ("m101", "m102"),
+}
+
+BRACKET_DERIVED_WINNERS = {
+    "m89": "France",
+    "m90": "Morocco",
+    "m91": "Norway",
+    "m92": "England",
+    "m93": "Belgium",
+    "m94": "Spain",
+    "m95": "Argentina",
+    "m96": "Switzerland",
+    "m97": "France",
+    "m98": "Spain",
+    "m99": "England",
+    "m100": "Argentina",
+    "m101": "Spain",
+    "m102": "Argentina",
+    "final": "Spain",
+}
+
+BRACKET_SAMPLE_PICKS = {
+    "m74": "Paraguay", "m75": "Morocco", "m77": "France", "m78": "Norway",
+    "m79": "Mexico", "m80": "England", "m81": "USA", "m82": "Belgium",
+    "m83": "Portugal", "m84": "Spain", "m85": "Switzerland", "m86": "Argentina",
+    "m87": "Colombia", "m88": "Egypt", "m89": "France", "m90": "Morocco",
+    "m91": "Norway", "m92": "England", "m93": "Belgium", "m94": "Spain",
+    "m95": "Argentina", "m96": "Switzerland", "m97": "France", "m98": "Spain",
+    "m99": "England", "m100": "Argentina", "m101": "Spain", "m102": "Argentina", "final": "Spain",
+}
+
+BRACKET_FLAG = {
+    "Algeria": "🇩🇿", "Argentina": "🇦🇷", "Australia": "🇦🇺", "Austria": "🇦🇹",
+    "Belgium": "🇧🇪", "Bosnia and Herzegovina": "🇧🇦", "Brazil": "🇧🇷", "Cabo Verde": "🇨🇻",
+    "Canada": "🇨🇦", "Colombia": "🇨🇴", "Croatia": "🇭🇷", "DR Congo": "🇨🇩",
+    "Ecuador": "🇪🇨", "Egypt": "🇪🇬", "England": "🏴", "France": "🇫🇷",
+    "Germany": "🇩🇪", "Ghana": "🇬🇭", "Ivory Coast": "🇨🇮", "Japan": "🇯🇵",
+    "Mexico": "🇲🇽", "Morocco": "🇲🇦", "Netherlands": "🇳🇱", "Norway": "🇳🇴",
+    "Paraguay": "🇵🇾", "Portugal": "🇵🇹", "Senegal": "🇸🇳", "South Africa": "🇿🇦",
+    "Spain": "🇪🇸", "Sweden": "🇸🇪", "Switzerland": "🇨🇭", "USA": "🇺🇸",
+}
+
+
+def get_bracket_entry_for_participant(challenge_id: str, participant: str | None) -> dict | None:
+    clean_challenge = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id)[:80]
+    clean_participant = clean_person(participant)
+    if not clean_challenge or not clean_participant:
+        return None
+    try:
+        rows = (
+            get_db()
+            .table("bracket_entries")
+            .select("*")
+            .eq("challenge_id", clean_challenge)
+            .eq("participant", clean_participant)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return assemble_bracket_entry(rows[0]) if rows else None
+    except Exception:
+        return None
+
+
+def get_bracket_entry_by_id(challenge_id: str, entry_id: str | None) -> dict | None:
+    clean_challenge = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id)[:80]
+    clean_entry_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(entry_id or ""))[:80]
+    if not clean_challenge or not clean_entry_id:
+        return None
+    try:
+        rows = (
+            get_db()
+            .table("bracket_entries")
+            .select("*")
+            .eq("challenge_id", clean_challenge)
+            .eq("id", clean_entry_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return assemble_bracket_entry(rows[0]) if rows else None
+    except Exception:
+        return None
+
+
+def bracket_locked_winners() -> dict[str, str]:
+    winners = {
+        item["id"]: item["winner"]
+        for item in BRACKET_BASE_MATCHUPS
+        if item.get("completed") and item.get("winner")
+    }
+    winners.update(BRACKET_DERIVED_WINNERS)
+    return winners
+
+
+def bracket_official_winner(matchup_id: str) -> str | None:
+    return bracket_locked_winners().get(matchup_id)
+
+
+def bracket_user_pick(matchup_id: str, picks: dict[str, str]) -> str | None:
+    value = clean_person((picks or {}).get(matchup_id))
+    return value or None
+
+
+def bracket_winner(matchup_id: str, picks: dict[str, str]) -> str | None:
+    return bracket_user_pick(matchup_id, picks) or bracket_official_winner(matchup_id)
+
+
+def bracket_eliminated_teams() -> set[str]:
+    eliminated: set[str] = set()
+    for item in BRACKET_BASE_MATCHUPS:
+        winner = item.get("winner") if item.get("completed") else None
+        if not winner:
+            continue
+        for team in item.get("teams") or []:
+            if team and team != winner:
+                eliminated.add(team)
+    for matchup_id, winner in bracket_locked_winners().items():
+        for team in bracket_matchup_teams(matchup_id, {}):
+            if team and team != winner:
+                eliminated.add(team)
+    return eliminated
+
+
+def bracket_team_status(matchup_id: str, team: str, picks: dict[str, str]) -> str:
+    official = bracket_official_winner(matchup_id)
+    user_pick = bracket_user_pick(matchup_id, picks)
+    if official:
+        if user_pick and user_pick == team:
+            return "correct" if team == official else "wrong"
+        if not user_pick and team == official:
+            return "auto"
+        return "official_loser"
+    if team in bracket_eliminated_teams():
+        return "dead"
+    if user_pick == team:
+        return "user"
+    return ""
+
+
+def bracket_matchup_teams(matchup_id: str, picks: dict[str, str]) -> list[str]:
+    base = next((item for item in BRACKET_BASE_MATCHUPS if item["id"] == matchup_id), None)
+    if base:
+        return list(base["teams"])
+    parents = BRACKET_DERIVED_MATCHUPS.get(matchup_id)
+    if not parents:
+        return []
+    return [team for team in (bracket_winner(parents[0], picks), bracket_winner(parents[1], picks)) if team]
+
+
+def decode_bracket_picks_param(value: str | None) -> dict[str, str] | None:
+    if not value:
+        return None
+    try:
+        padded = value + ("=" * (-len(value) % 4))
+        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        decoded = json.loads(raw)
+        if isinstance(decoded, dict):
+            return clean_bracket_picks(decoded)
+    except Exception:
+        return None
+    return None
+
+
+def bracket_render_payload(
+    challenge_id: str,
+    participant: str | None,
+    sample: bool,
+    picks_param: str | None = None,
+    entry_id: str | None = None,
+) -> tuple[dict[str, str], str, str]:
+    if entry_id:
+        entry = get_bracket_entry_by_id(challenge_id, entry_id)
+        if entry:
+            picks = clean_bracket_picks(entry.get("picks") or {})
+            return picks, clean_person(entry.get("participant"), "Bracket"), bracket_winner("final", picks) or "TBD"
+    url_picks = decode_bracket_picks_param(picks_param)
+    if url_picks:
+        owner = clean_person(participant, "Shared Bracket")
+        return url_picks, owner, bracket_winner("final", url_picks) or "TBD"
+    if sample:
+        return dict(BRACKET_SAMPLE_PICKS), "Sample Bracket", "France"
+    entry = get_bracket_entry_for_participant(challenge_id, participant)
+    if entry:
+        picks = clean_bracket_picks(entry.get("picks") or {})
+        return picks, clean_person(entry.get("participant"), "Bracket"), bracket_winner("final", picks) or "TBD"
+    return {}, "World Cup Bracket", "TBD"
+
+
+@app.head("/api/brackets/{challenge_id}/share-card.png")
+@app.get("/api/brackets/{challenge_id}/share-card.png")
+def bracket_share_card_png(
+    challenge_id: str,
+    participant: str | None = None,
+    sample: bool = False,
+    picks: str | None = None,
+    entry: str | None = None,
+) -> Response:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception as exc:
+        raise HTTPException(503, "PNG share cards require Pillow. Run pip install -r requirements.txt") from exc
+
+    picks, owner, champion = bracket_render_payload(challenge_id, participant, sample, picks, entry)
+    meta = BRACKET_CHALLENGE_META
+
+    def font(size: int, bold: bool = False):
+        candidates = [
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/Library/Fonts/Arial Bold.ttf" if bold else "/Library/Fonts/Arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
+        for path in candidates:
+            try:
+                if path and Path(path).exists():
+                    return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    team_codes = {
+        "South Africa": "RSA", "Canada": "CAN", "Germany": "GER", "Paraguay": "PAR",
+        "France": "FRA", "Sweden": "SWE", "Netherlands": "NED", "Morocco": "MAR",
+        "USA": "USA", "Bosnia and Herzegovina": "BIH", "Belgium": "BEL", "Senegal": "SEN",
+        "Portugal": "POR", "Croatia": "CRO", "Spain": "ESP", "Austria": "AUT",
+        "Brazil": "BRA", "Japan": "JPN", "Ivory Coast": "CIV", "Norway": "NOR",
+        "Mexico": "MEX", "Ecuador": "ECU", "England": "ENG", "DR Congo": "COD",
+        "Argentina": "ARG", "Cabo Verde": "CPV", "Australia": "AUS", "Egypt": "EGY",
+        "Switzerland": "SUI", "Algeria": "ALG", "Colombia": "COL", "Ghana": "GHA",
+    }
+    flag_patterns = {
+        "Algeria": ("vertical", ["#006233", "#ffffff"], "#d21034"),
+        "Argentina": ("horizontal", ["#75aadb", "#ffffff", "#75aadb"], "#f6c343"),
+        "Australia": ("solid", ["#012169"], "#e6eef7"),
+        "Austria": ("horizontal", ["#ed2939", "#ffffff", "#ed2939"], None),
+        "Belgium": ("vertical", ["#000000", "#ffd90c", "#ef3340"], None),
+        "Bosnia and Herzegovina": ("solid", ["#002f6c"], "#f7d117"),
+        "Brazil": ("brazil", ["#009b3a", "#ffdf00", "#002776"], None),
+        "Cabo Verde": ("horizontal", ["#003893", "#003893", "#ffffff", "#cf2027", "#003893"], None),
+        "Canada": ("vertical", ["#ff0000", "#ffffff", "#ff0000"], "#ff0000"),
+        "Colombia": ("horizontal", ["#fcd116", "#003893", "#ce1126"], None),
+        "Croatia": ("horizontal", ["#ff0000", "#ffffff", "#171796"], None),
+        "DR Congo": ("diagonal", ["#00a3e0", "#f7d618", "#ce1021"], None),
+        "Ecuador": ("horizontal", ["#ffdd00", "#034ea2", "#ed1c24"], None),
+        "Egypt": ("horizontal", ["#ce1126", "#ffffff", "#000000"], None),
+        "England": ("england", ["#ffffff", "#cf142b"], None),
+        "France": ("vertical", ["#0055a4", "#ffffff", "#ef4135"], None),
+        "Germany": ("horizontal", ["#000000", "#dd0000", "#ffce00"], None),
+        "Ghana": ("horizontal", ["#ce1126", "#fcd116", "#006b3f"], "#111111"),
+        "Ivory Coast": ("vertical", ["#f77f00", "#ffffff", "#009e60"], None),
+        "Japan": ("solid", ["#ffffff"], "#bc002d"),
+        "Mexico": ("vertical", ["#006847", "#ffffff", "#ce1126"], None),
+        "Morocco": ("solid", ["#c1272d"], "#006233"),
+        "Netherlands": ("horizontal", ["#ae1c28", "#ffffff", "#21468b"], None),
+        "Norway": ("cross", ["#ba0c2f", "#ffffff", "#00205b"], None),
+        "Paraguay": ("horizontal", ["#d52b1e", "#ffffff", "#0038a8"], None),
+        "Portugal": ("vertical", ["#006600", "#ff0000"], "#ffcc00"),
+        "Senegal": ("vertical", ["#00853f", "#fdef42", "#e31b23"], "#00853f"),
+        "South Africa": ("horizontal", ["#007a4d", "#ffb81c", "#de3831", "#002395"], None),
+        "Spain": ("horizontal", ["#aa151b", "#f1bf00", "#aa151b"], None),
+        "Sweden": ("cross", ["#006aa7", "#fecc00", "#fecc00"], None),
+        "Switzerland": ("swiss", ["#ff0000", "#ffffff"], None),
+        "USA": ("usa", ["#b22234", "#ffffff", "#3c3b6e"], None),
+    }
+
+    def team_code(team: str) -> str:
+        return team_codes.get(team, re.sub(r"[^A-Z]", "", str(team).upper())[:3] or "---")
+
+    def fit_text(draw, text: str, fnt, max_width: int) -> str:
+        text = str(text or "")
+        if draw.textlength(text, font=fnt) <= max_width:
+            return text
+        while text and draw.textlength(text + "…", font=fnt) > max_width:
+            text = text[:-1]
+        return (text + "…") if text else "…"
+
+    def draw_flag_badge(team: str, x: int, y: int, w: int, h: int, dim: bool = False) -> None:
+        pattern, colors, accent = flag_patterns.get(team, ("solid", ["#17242c"], None))
+        draw.rounded_rectangle((x, y, x + w, y + h), radius=4, fill="#0b1216", outline="#24313a", width=1)
+        inset = 1
+        x1, y1, x2, y2 = x + inset, y + inset, x + w - inset, y + h - inset
+        if pattern == "vertical":
+            stripe_w = max(1, (x2 - x1) / len(colors))
+            for idx, color in enumerate(colors):
+                draw.rectangle((x1 + idx * stripe_w, y1, x1 + (idx + 1) * stripe_w, y2), fill=color)
+        elif pattern == "horizontal":
+            stripe_h = max(1, (y2 - y1) / len(colors))
+            for idx, color in enumerate(colors):
+                draw.rectangle((x1, y1 + idx * stripe_h, x2, y1 + (idx + 1) * stripe_h), fill=color)
+        elif pattern == "cross":
+            draw.rectangle((x1, y1, x2, y2), fill=colors[0])
+            draw.rectangle((x1, y1 + h * 0.38, x2, y1 + h * 0.62), fill=colors[1])
+            draw.rectangle((x1 + w * 0.32, y1, x1 + w * 0.48, y2), fill=colors[1])
+            if len(colors) > 2 and colors[2] != colors[1]:
+                draw.rectangle((x1, y1 + h * 0.44, x2, y1 + h * 0.56), fill=colors[2])
+                draw.rectangle((x1 + w * 0.36, y1, x1 + w * 0.44, y2), fill=colors[2])
+        elif pattern == "england":
+            draw.rectangle((x1, y1, x2, y2), fill=colors[0])
+            draw.rectangle((x1, y1 + h * 0.42, x2, y1 + h * 0.58), fill=colors[1])
+            draw.rectangle((x1 + w * 0.42, y1, x1 + w * 0.58, y2), fill=colors[1])
+        elif pattern == "swiss":
+            draw.rectangle((x1, y1, x2, y2), fill=colors[0])
+            draw.rectangle((x1 + w * 0.38, y1 + h * 0.22, x1 + w * 0.62, y2 - h * 0.22), fill=colors[1])
+            draw.rectangle((x1 + w * 0.24, y1 + h * 0.39, x2 - w * 0.24, y1 + h * 0.61), fill=colors[1])
+        elif pattern == "brazil":
+            draw.rectangle((x1, y1, x2, y2), fill=colors[0])
+            draw.polygon([(x1 + w / 2, y1 + 2), (x2 - 3, y1 + h / 2), (x1 + w / 2, y2 - 2), (x1 + 3, y1 + h / 2)], fill=colors[1])
+            draw.ellipse((x1 + w * 0.38, y1 + h * 0.28, x1 + w * 0.62, y1 + h * 0.72), fill=colors[2])
+        elif pattern == "diagonal":
+            draw.rectangle((x1, y1, x2, y2), fill=colors[0])
+            draw.line((x1 - 2, y2, x2 + 2, y1), fill=colors[1], width=max(2, h // 4))
+            draw.line((x1 - 2, y2, x2 + 2, y1), fill=colors[2], width=max(1, h // 7))
+        elif pattern == "usa":
+            stripe_h = max(1, (y2 - y1) / 7)
+            for idx in range(7):
+                draw.rectangle((x1, y1 + idx * stripe_h, x2, y1 + (idx + 1) * stripe_h), fill=colors[idx % 2])
+            draw.rectangle((x1, y1, x1 + w * 0.45, y1 + h * 0.56), fill=colors[2])
+        else:
+            draw.rectangle((x1, y1, x2, y2), fill=colors[0])
+        if accent:
+            r = max(2, min(w, h) // 5)
+            draw.ellipse((x + w / 2 - r, y + h / 2 - r, x + w / 2 + r, y + h / 2 + r), fill=accent)
+        if dim:
+            draw.rounded_rectangle((x, y, x + w, y + h), radius=4, outline="#3c474f", width=1)
+
+    image = Image.new("RGB", (1600, 900), "#090f13")
+    draw = ImageDraw.Draw(image)
+    for y in range(900):
+        shade = int(10 + y / 900 * 18)
+        draw.line((0, y, 1600, y), fill=(6, shade, min(42, shade + 18)))
+    draw.rounded_rectangle((1040, -80, 1680, 330), radius=120, fill="#071426")
+
+    logo_font = font(28, True)
+    title_font = font(44, True)
+    label_font = font(18, True)
+    name_font = font(16, True)
+    small_font = font(14, False)
+    compact_font = font(15, True)
+
+    draw.text((52, 34), "probable.", fill="#f2f7fb", font=logo_font)
+    draw.ellipse((174, 55, 182, 63), fill="#149cff")
+    owner_title = "Sample World Cup bracket" if owner == "Sample Bracket" else (f"{owner}'s World Cup bracket" if owner not in {"World Cup Bracket", "Bracket"} else "World Cup bracket")
+    draw.text((52, 82), owner_title, fill="#f6fbff", font=title_font)
+    draw.text((54, 136), f"{meta['prize']} for perfect knockouts · Champion: {champion}", fill="#a8b5c0", font=font(24, False))
+
+    line_color = "#168eea"
+    muted_line = "#24414f"
+    card_bg = "#071114"
+    card_stroke = "#1f4153"
+    selected_bg = "#104b82"
+    locked_bg = "#37434b"
+    correct_bg = "#156f4c"
+    wrong_bg = "#5a2028"
+    auto_bg = "#303a43"
+    text = "#eef5fb"
+    muted = "#8e9ca7"
+
+    left_ids = ["m74", "m77", "m73", "m75", "m81", "m82", "m83", "m84"]
+    right_ids = ["m76", "m78", "m79", "m80", "m86", "m88", "m85", "m87"]
+    left_r16 = ["m89", "m90", "m93", "m94"]
+    right_r16 = ["m91", "m92", "m95", "m96"]
+    left_qf = ["m97", "m98"]
+    right_qf = ["m99", "m100"]
+    left_sf = ["m101"]
+    right_sf = ["m102"]
+
+    centers: dict[str, tuple[int, int]] = {}
+    sizes: dict[str, tuple[int, int]] = {}
+    rendered_matchups: list[tuple[str, int, int, int, str, bool]] = []
+
+    def row_y(index: int) -> int:
+        return 205 + index * 78
+
+    def matchup_center(matchup_id: str, default_y: int | None = None) -> int:
+        parents = BRACKET_DERIVED_MATCHUPS.get(matchup_id)
+        if parents and parents[0] in centers and parents[1] in centers:
+            return int((centers[parents[0]][1] + centers[parents[1]][1]) / 2)
+        return int(default_y or 450)
+
+    def draw_matchup(matchup_id: str, x: int, cy: int, width: int, side: str, compact: bool = False, record: bool = True) -> None:
+        teams = bracket_matchup_teams(matchup_id, picks)
+        winner = bracket_winner(matchup_id, picks)
+        height = 54 if not compact else 44
+        y = int(cy - height / 2)
+        centers[matchup_id] = (x + width // 2, cy)
+        sizes[matchup_id] = (width, height)
+        if record:
+            rendered_matchups.append((matchup_id, x, cy, width, side, compact))
+        draw.rounded_rectangle((x, y, x + width, y + height), radius=13, fill=card_bg, outline=card_stroke, width=2)
+        if len(teams) < 2:
+            draw.text((x + width / 2 - draw.textlength("Awaiting", font=small_font) / 2, y + height / 2 - 8), "Awaiting", fill="#5f6d76", font=small_font)
+            return
+        row_h = height / 2
+        for idx, team in enumerate(teams[:2]):
+            row_top = y + int(idx * row_h)
+            active = bool(winner and winner == team)
+            status = bracket_team_status(matchup_id, team, picks)
+            if active:
+                fill = selected_bg
+                stripe = "#159cff"
+                if status == "correct":
+                    fill = correct_bg
+                    stripe = "#35c46f"
+                elif status in {"wrong", "dead"}:
+                    fill = wrong_bg
+                    stripe = "#ff5d6c"
+                elif status == "auto":
+                    fill = auto_bg
+                    stripe = "#9aa7af"
+                draw.rounded_rectangle((x + 1, row_top + 1, x + width - 1, row_top + int(row_h) - 1), radius=10 if idx in (0, 1) else 4, fill=fill)
+                draw.rectangle((x + 1, row_top + 4, x + 5, row_top + int(row_h) - 4), fill=stripe)
+            elif status in {"wrong", "dead"}:
+                draw.rounded_rectangle((x + 1, row_top + 1, x + width - 1, row_top + int(row_h) - 1), radius=10 if idx in (0, 1) else 4, fill="#171116")
+            badge_w = 31 if compact else 36
+            badge_h = 17 if compact else 18
+            badge_x = x + 12
+            badge_y = row_top + (5 if not compact else 4)
+            draw_flag_badge(team, badge_x, badge_y, badge_w, badge_h, dim=status in {"official_loser", "wrong", "dead"})
+            team_label = fit_text(draw, team if not compact else team_code(team), compact_font if compact else name_font, width - badge_w - 32)
+            label_fill = text if active else muted
+            if status in {"wrong", "dead"}:
+                label_fill = "#a8757b"
+            elif status in {"auto", "official_loser"}:
+                label_fill = "#c4ced7"
+            draw.text((badge_x + badge_w + 10, row_top + (4 if not compact else 3)), team_label, fill=label_fill, font=compact_font if compact else name_font)
+
+    def edge(matchup_id: str, side: str) -> tuple[int, int]:
+        x, y = centers[matchup_id]
+        w, _ = sizes[matchup_id]
+        return (x + w // 2, y) if side == "left" else (x - w // 2, y)
+
+    def connect(parent: str, child: str, side: str) -> None:
+        if parent not in centers or child not in centers:
+            return
+        p_x, p_y = edge(parent, "right" if side == "left" else "left")
+        c_x, c_y = edge(child, "left" if side == "left" else "right")
+        mid_x = int((p_x + c_x) / 2)
+        color = line_color if bracket_winner(parent, picks) else muted_line
+        draw.line((p_x, p_y, mid_x, p_y), fill=color, width=3)
+        draw.line((mid_x, p_y, mid_x, c_y), fill=color, width=3)
+        draw.line((mid_x, c_y, c_x, c_y), fill=color, width=3)
+
+    # Round labels
+    labels = [(52, "ROUND OF 32"), (350, "R16"), (575, "QF"), (748, "SF"), (795, "FINAL"), (960, "SF"), (1125, "QF"), (1330, "R16"), (1410, "ROUND OF 32")]
+    for x, label in labels:
+        draw.text((x, 178), label, fill="#71808a", font=label_font)
+
+    for index, matchup_id in enumerate(left_ids):
+        draw_matchup(matchup_id, 52, row_y(index), 240, "left")
+    for index, matchup_id in enumerate(right_ids):
+        draw_matchup(matchup_id, 1308, row_y(index), 240, "right")
+    for index, matchup_id in enumerate(left_r16):
+        draw_matchup(matchup_id, 335, matchup_center(matchup_id), 185, "left")
+        for parent in BRACKET_DERIVED_MATCHUPS[matchup_id]:
+            connect(parent, matchup_id, "left")
+    for index, matchup_id in enumerate(right_r16):
+        draw_matchup(matchup_id, 1080, matchup_center(matchup_id), 185, "right")
+        for parent in BRACKET_DERIVED_MATCHUPS[matchup_id]:
+            connect(parent, matchup_id, "right")
+    for matchup_id in left_qf:
+        draw_matchup(matchup_id, 560, matchup_center(matchup_id), 160, "left", compact=True)
+        for parent in BRACKET_DERIVED_MATCHUPS[matchup_id]:
+            connect(parent, matchup_id, "left")
+    for matchup_id in right_qf:
+        draw_matchup(matchup_id, 880, matchup_center(matchup_id), 160, "right", compact=True)
+        for parent in BRACKET_DERIVED_MATCHUPS[matchup_id]:
+            connect(parent, matchup_id, "right")
+    for matchup_id in left_sf:
+        draw_matchup(matchup_id, 660, matchup_center(matchup_id), 125, "left", compact=True)
+        for parent in BRACKET_DERIVED_MATCHUPS[matchup_id]:
+            connect(parent, matchup_id, "left")
+    for matchup_id in right_sf:
+        draw_matchup(matchup_id, 815, matchup_center(matchup_id), 125, "right", compact=True)
+        for parent in BRACKET_DERIVED_MATCHUPS[matchup_id]:
+            connect(parent, matchup_id, "right")
+
+    final_y = max(620, matchup_center("final"))
+    draw_matchup("final", 720, final_y, 160, "left", compact=True)
+    for parent in BRACKET_DERIVED_MATCHUPS["final"]:
+        if parent in centers:
+            parent_is_left = parent == "m101"
+            p_x, p_y = edge(parent, "right" if parent_is_left else "left")
+            f_x, f_y = edge("final", "left" if parent_is_left else "right")
+            color = line_color if bracket_winner(parent, picks) else muted_line
+            mid_x = int((p_x + f_x) / 2)
+            draw.line((p_x, p_y, mid_x, p_y), fill=color, width=3)
+            draw.line((mid_x, p_y, mid_x, f_y), fill=color, width=3)
+            draw.line((mid_x, f_y, f_x, f_y), fill=color, width=3)
+
+    # Keep connector rails behind the actual selections.
+    for matchup_id, x, cy, width, side, compact in rendered_matchups:
+        draw_matchup(matchup_id, x, cy, width, side, compact, record=False)
+
+    if champion and champion != "TBD":
+        trophy_y = min(815, final_y + 78)
+        draw.rounded_rectangle((714, trophy_y - 24, 886, trophy_y + 56), radius=18, fill="#0a2439", outline="#145ca8", width=2)
+        draw.text((800 - draw.textlength("CHAMPION", font=font(14, True)) / 2, trophy_y - 6), "CHAMPION", fill="#f8d56c", font=font(14, True))
+        champ_label = fit_text(draw, champion, font(24, True), 140)
+        draw.text((800 - draw.textlength(champ_label, font=font(24, True)) / 2, trophy_y + 20), champ_label, fill="#f4f8fb", font=font(24, True))
+
+    # Footer CTA
+    draw.rounded_rectangle((1180, 805, 1538, 858), radius=18, fill="#145ca8", outline="#2c9aff", width=1)
+    draw.text((1210, 820), "Build yours on probable.live", fill="#ffffff", font=font(24, True))
+
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return Response(output.getvalue(), media_type="image/png")
+
+
+@app.head("/b/{entry_id}", response_class=HTMLResponse)
+@app.get("/b/{entry_id}", response_class=HTMLResponse)
+def short_bracket_open_graph_page(request: Request, entry_id: str) -> str:
+    return bracket_open_graph_page(request=request, entry=entry_id)
+
+
+@app.head("/bracket", response_class=HTMLResponse)
+@app.get("/bracket", response_class=HTMLResponse)
+def bracket_open_graph_page(
+    request: Request,
+    participant: str | None = None,
+    picks: str | None = None,
+    entry: str | None = None,
+) -> str:
+    challenge_id = BRACKET_CHALLENGE_META["id"]
+    card = bracket_card_payload(challenge_id, request)
+    safe_participant = clean_person(participant or "", "")
+    image_url = card["imageUrl"]
+    title = card["title"]
+    description = card["description"]
+    query_parts = []
+    if entry:
+        query_parts.append(f"entry={quote_plus(entry)}")
+    if safe_participant:
+        query_parts.append(f"participant={quote_plus(safe_participant)}")
+    if picks:
+        query_parts.append(f"picks={quote_plus(picks)}")
+    if query_parts:
+        image_url = f"{image_url}?{'&'.join(query_parts)}"
+    entry_record = get_bracket_entry_by_id(challenge_id, entry) if entry else None
+    if entry_record and not safe_participant:
+        safe_participant = clean_person(entry_record.get("participant"), "")
+    if safe_participant or picks or entry:
+        display_name = safe_participant or "Shared Bracket"
+        title = f"{display_name}'s World Cup bracket · {BRACKET_CHALLENGE_META['prize']} for perfect knockouts"
+        description = "See their World Cup bracket, then build yours on Probable."
+    return f"""<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>{esc_html(title)} · Probable</title>
+<meta name="description" content="{esc_html(description)}"/>
+<meta property="og:type" content="website"/><meta property="og:site_name" content="Probable"/>
+<meta property="og:title" content="{esc_html(title)}"/>
+<meta property="og:description" content="{esc_html(description)}"/>
+<meta property="og:image" content="{esc_html(image_url)}"/>
+<meta property="og:image:width" content="1600"/><meta property="og:image:height" content="900"/>
+<meta property="og:url" content="{esc_html(card['url'])}"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="{esc_html(title)}"/>
+<meta name="twitter:description" content="{esc_html(description)}"/>
+<meta name="twitter:image" content="{esc_html(image_url)}"/>
+<style>body{{margin:0;background:#0d1216;color:#f4f7fa;font-family:Arial,sans-serif;display:grid;place-items:center;min-height:100vh}}a{{background:#145ca8;color:white;text-decoration:none;padding:14px 18px;border-radius:12px;font-weight:800}}main{{max-width:720px;padding:28px;text-align:center}}img{{width:100%;border-radius:18px;border:1px solid #2b3944}}</style></head><body><main><img src="{esc_html(image_url)}" alt="World Cup bracket challenge preview"/><h1>{esc_html(title)}</h1><p>{esc_html(description)}</p><a href="{esc_html(card['appUrl'])}">Open bracket</a></main></body></html>"""
 
 
 @app.post("/api/groups/{group_id}/join")
@@ -2154,7 +3412,15 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
         db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
         raise HTTPException(400, "Market is closed for trading")
 
-    complement = [item for item in outcomes if item["id"] != excluded_outcome_id]
+    target = next((item for item in outcomes if item["id"] == excluded_outcome_id), None)
+    if not target:
+        raise HTTPException(400, "Outcome not found")
+    if outcome_is_eliminated(target):
+        raise HTTPException(400, f"{target.get('title') or 'This outcome'} has been eliminated")
+    active = active_outcomes(outcomes)
+    if len(active) < 2:
+        raise HTTPException(400, "NO basket trades require at least two active outcomes")
+    complement = [item for item in active if item["id"] != excluded_outcome_id]
     if not complement:
         raise HTTPException(400, "No complement outcomes available")
 
@@ -2183,7 +3449,7 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
     if payload.action == "buy":
         if amount > balance:
             raise HTTPException(400, f"{participant} only has ${round(balance, 0)}")
-        shares = lmsr_complement_buy_shares(outcomes, b, excluded_outcome_id, amount)
+        shares = lmsr_complement_buy_shares(active, b, excluded_outcome_id, amount)
         if shares <= 0:
             raise HTTPException(400, "Trade amount is too small")
         cash_delta = -amount
@@ -2199,10 +3465,10 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
         )
         positions = {row["outcome_id"]: float(row.get("shares") or 0) for row in position_rows}
         max_shares = min([positions.get(item["id"], 0.0) for item in complement] or [0.0])
-        max_cash = lmsr_complement_sell_cash_for_shares(outcomes, b, excluded_outcome_id, max_shares)
+        max_cash = lmsr_complement_sell_cash_for_shares(active, b, excluded_outcome_id, max_shares)
         if amount > max_cash + 0.0001:
             raise HTTPException(400, f"{participant} can cash out up to ${round(max_cash, 2)} on this NO basket")
-        shares = lmsr_complement_sell_shares_for_cash(outcomes, b, excluded_outcome_id, amount, max_shares)
+        shares = lmsr_complement_sell_shares_for_cash(active, b, excluded_outcome_id, amount, max_shares)
         if shares <= 0 or shares > max_shares + 0.0001:
             raise HTTPException(400, f"{participant} does not have enough NO shares to sell")
         cash_delta = amount
@@ -2562,11 +3828,13 @@ def market_share_card_svg(market_id: str, request: Request) -> Response:
     return Response(svg, media_type="image/svg+xml")
 
 
+@app.head("/api/markets/{market_id}/share-card")
 @app.get("/api/markets/{market_id}/share-card")
 def market_share_card(market_id: str, request: Request) -> Response:
     return market_share_card_svg(market_id, request)
 
 
+@app.head("/api/markets/{market_id}/share-card.png")
 @app.get("/api/markets/{market_id}/share-card.png")
 def market_share_card_png(market_id: str, request: Request) -> Response:
     try:
@@ -2817,11 +4085,14 @@ def embed_event(event_id: str, request: Request, chart: int = 1, buttons: int = 
     return embed_market_html(market, event, group, chart=bool(chart), buttons=bool(buttons), dark=bool(dark), border=bool(border), app_base=frontend_base_url(request))
 
 
+@app.head("/market/{market_id}", response_class=HTMLResponse)
 @app.get("/market/{market_id}", response_class=HTMLResponse)
-def market_open_graph_page(market_id: str, request: Request) -> str:
+def market_open_graph_page(market_id: str, request: Request):
     payload = share_market_payload(market_id, request)
     share = payload["share"]
     app_url = share.get("appUrl") or share["url"]
+    if request.method == "GET" and not is_crawler_request(request):
+        return RedirectResponse(app_url, status_code=307)
     return f"""<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>{esc_html(share['title'])} · Probable</title>
 <meta name="description" content="{esc_html(share['description'])}"/>
@@ -2842,6 +4113,7 @@ def place_trade(market_id: str, payload: TradeCreate) -> dict:
     db = get_db()
     event, route_outcome = require_event_or_outcome(market_id)
     outcomes = db.table("market_outcomes").select("*").eq("event_id", event["id"]).order("sort_order").execute().data or []
+    active = active_outcomes(outcomes)
 
     if payload.action == "buy":
         b = float(event.get("liquidity_b") or DEFAULT_FAKE_BALANCE)
@@ -2856,11 +4128,16 @@ def place_trade(market_id: str, payload: TradeCreate) -> dict:
     if not payload.outcomeId:
         raise HTTPException(400, "Choose an outcome to trade")
     outcome_id = payload.outcomeId
-    if not any(outcome["id"] == outcome_id for outcome in outcomes):
+    selected_outcome = next((outcome for outcome in outcomes if outcome["id"] == outcome_id), None)
+    if not selected_outcome:
         raise HTTPException(400, "Outcome does not belong to this market")
+    if outcome_is_eliminated(selected_outcome):
+        raise HTTPException(400, f"{selected_outcome.get('title') or 'This outcome'} has been eliminated")
+    if len(active) < 2:
+        raise HTTPException(400, "Market does not have enough active outcomes to trade")
 
     try:
-        if len(outcomes) > 2 and payload.side == "no":
+        if len(outcomes) > 2 and len(active) > 1 and payload.side == "no":
             trade_result_data = place_complement_event_trade(db, event, outcomes, outcome_id, payload)
         else:
             trade_result = db.rpc("place_event_trade", {
@@ -2901,13 +4178,24 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
             if event["status"] == "open":
                 db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
                 event["status"] = "closed"
+            approval = record_resolution_approval(
+                db,
+                event,
+                outcome_id=ALL_OUTCOMES_RESOLUTION,
+                outcome_title="Draw / all outcomes correct",
+                resolver=resolver,
+                resolver_aliases=payload.resolverAliases,
+                notes=note,
+            )
+            if approval["status"] != "ready_to_resolve":
+                return groups_response(resolutionApproval=approval)
             settlement = resolve_event_market_all_outcomes(
                 db,
                 event,
                 resolved_by=resolver,
                 notes=note,
             )
-            return groups_response(settlement=settlement)
+            return groups_response(settlement=settlement, resolutionApproval=approval)
 
         outcome = (
             next((item for item in outcomes if item["id"] == payload.outcome), None)
@@ -2918,6 +4206,8 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
             outcome = next((item for item in outcomes if item["title"].strip().lower() == wanted), None)
         if not outcome:
             raise HTTPException(400, "Resolution outcome not found")
+        if outcome_is_eliminated(outcome):
+            raise HTTPException(400, "Cannot resolve to an eliminated outcome")
 
         if not note:
             note = f"Manually resolved to {outcome['title']}."
@@ -2925,6 +4215,18 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
             # Manual admin override: if an outcome is already knowable before
             # maturity, close trading immediately and let the settlement RPC pay.
             db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
+            event["status"] = "closed"
+        approval = record_resolution_approval(
+            db,
+            event,
+            outcome_id=outcome["id"],
+            outcome_title=outcome["title"],
+            resolver=resolver,
+            resolver_aliases=payload.resolverAliases,
+            notes=note,
+        )
+        if approval["status"] != "ready_to_resolve":
+            return groups_response(resolutionApproval=approval)
         settlement = resolve_event_market_rpc(
             db,
             event["id"],
@@ -2932,7 +4234,7 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
             resolved_by=resolver,
             notes=note,
         )
-        return groups_response(settlement=settlement)
+        return groups_response(settlement=settlement, resolutionApproval=approval)
     except HTTPException as exc:
         if exc.status_code != 404:
             raise
@@ -2969,6 +4271,20 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
     _credit_winners(db, market["group_id"], market, trades_res.data)
 
     return groups_response(settlement=settlement)
+
+
+@app.post("/api/markets/{market_id}/outcomes/{outcome_id}/eliminate")
+def eliminate_market_outcome(market_id: str, outcome_id: str, payload: EliminateOutcome) -> dict:
+    db = get_db()
+    event, _route_outcome = require_event_or_outcome(market_id)
+    elimination = eliminate_event_outcome(
+        db,
+        event,
+        outcome_id,
+        eliminated_by=payload.eliminatedBy or "manual",
+        notes=payload.reasoning,
+    )
+    return groups_response(elimination=elimination)
 
 
 # ── AI Oracle ──────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 # Probable Groups
 
-A lightweight MVP for private, group-native prediction markets, built with Vite, Tailwind CSS, and FastAPI.
+A private, group-native prediction markets, built with Vite, Tailwind CSS, and FastAPI.
 
 ## What it does
 
