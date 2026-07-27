@@ -2467,7 +2467,7 @@ async function loadQuestionSuggestions(groupId) {
   state.questionSuggestions = [];
   render();
   try {
-    const data = await api(`/api/groups/${groupId}/questions/suggest`, { method: "POST" });
+    const data = await api(`/api/groups/${groupId}/questions/suggest`, { method: "POST", timeoutMs: 35000 });
     if (state.currentGroupId === groupId) {
       state.questionSuggestions = data.questions || [];
       state.questionSuggestionsGroupId = groupId;
