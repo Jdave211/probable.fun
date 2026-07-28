@@ -3555,6 +3555,91 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
     }
 
 
+@app.post("/api/groups/{group_id}/questions/suggest")
+async def suggest_market_questions(group_id: str) -> dict:
+    group = require_group(group_id)
+    group_name = group["name"]
+
+    db = get_db()
+    events_row = (
+        db.table("market_events")
+        .select("title")
+        .eq("group_id", group_id)
+        .order("created_at", desc=True)
+        .limit(5)
+        .execute()
+    )
+    recent_titles = [e["title"] for e in (events_row.data or [])]
+
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if not openai_key or openai_key.startswith("sk-...") or openai_key == "sk-":
+        # Dev fallback: return plausible-looking questions based on group name
+        return {"questions": [
+            f"Will {group_name} hit a new record this month?",
+            "Will there be a surprise result this weekend?",
+            "Will the favourite win by more than 10 points?",
+            "Will a newcomer top the leaderboard this week?",
+            "Will the next event go to extra time?",
+        ]}
+
+    from datetime import date
+    today = date.today().isoformat()
+    titles_block = "\n".join(f"- {t}" for t in recent_titles) if recent_titles else "No markets yet."
+    already_asked = (
+        f"Already asked (do not repeat these or close variations):\n{titles_block}"
+        if recent_titles else ""
+    )
+    system = (
+        "You are a prediction market question generator for friend groups. "
+        "Use web search to find current news and upcoming events before generating questions. "
+        "Return only valid JSON — no markdown, no explanation."
+    )
+    user = (
+        f"Today's date: {today}\n"
+        f'Group name: "{group_name}"\n'
+        f"{already_asked}\n\n"
+        "Search the web for the latest sports, entertainment, or current-events news relevant to this group. "
+        "Then suggest 5 short, specific yes/no prediction market questions grounded in real, current news. "
+        "Avoid anything that has already been decided or resolved as of today. "
+        'Respond with exactly this JSON and nothing else: {"questions": ["...", "...", "...", "...", "..."]}'
+    )
+
+    # Use the Responses API with web_search_preview so the model can look up current news.
+    suggest_model = os.environ.get("OPENAI_SUGGEST_MODEL", os.environ.get("OPENAI_RULES_MODEL", "gpt-4o-mini"))
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.openai.com/v1/responses",
+                headers={
+                    "Authorization": f"Bearer {openai_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": suggest_model,
+                    "tools": [{"type": "web_search_preview"}],
+                    "input": f"{system}\n\n{user}",
+                },
+            )
+        if response.status_code >= 400:
+            return {"questions": []}
+        data = response.json()
+        # Responses API: find the assistant message in output[]
+        text = ""
+        for item in data.get("output", []):
+            if item.get("type") == "message":
+                for block in item.get("content", []):
+                    if block.get("type") == "output_text":
+                        text = block.get("text", "").strip()
+                        break
+        parsed = parse_json_object_text(text)
+        questions = parsed.get("questions") or []
+        questions = [str(q).strip() for q in questions if str(q).strip()][:5]
+        return {"questions": questions}
+    except Exception:
+        return {"questions": []}
+
+
 @app.post("/api/groups/{group_id}/markets", status_code=201)
 def create_market(group_id: str, payload: MarketCreate) -> dict:
     db = get_db()

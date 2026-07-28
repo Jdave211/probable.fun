@@ -11,6 +11,8 @@ import {
 } from "chart.js";
 import { animate, stagger } from "motion";
 import { supabase } from "./supabase.js";
+import { DEMO_GROUP_ID, buildDemoGroup, simulateDemoApi, resolveDemoMarket } from "./demo.js";
+import { startTutorial, stopTutorial, tutorialOnRender } from "./tutorial.js";
 
 const probableCursorShadePlugin = {
   id: "probableCursorShade",
@@ -378,7 +380,11 @@ const state = {
   bracketRemoteLoaded: false,
   bracketLastPickedId: "",
   bracketSaving: false,
-  pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, tradeMarketId: null, resolveMarketId: null },
+  pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, suggestions: false, suggestionPreview: null, tradeMarketId: null, resolveMarketId: null },
+  demoMode: false,
+  demoPrevGroupId: null,
+  questionSuggestions: [],
+  questionSuggestionsGroupId: null,
   loaded: false,
 };
 
@@ -636,6 +642,21 @@ document.querySelector("#app").innerHTML = `
     </div>
   </div>
 
+  <div class="modal-overlay hidden" id="suggestPreviewModalOverlay">
+    <div class="modal suggest-preview-modal" id="suggestPreviewModal">
+      <div class="modal-header">
+        <span class="modal-title">Question preview</span>
+        <button class="modal-x" type="button" id="closeSuggestPreviewModal" aria-label="Close">×</button>
+      </div>
+      <p class="suggest-preview-question" id="suggestPreviewQuestion"></p>
+      <div class="suggest-preview-rules" id="suggestPreviewRules"></div>
+      <div class="suggest-preview-actions">
+        <button class="btn btn-ghost" type="button" id="dismissSuggestPreview">Dismiss</button>
+        <button class="btn btn-primary" type="button" id="createFromSuggestion">Create this market</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay hidden" id="marketModalOverlay">
     <div class="modal">
       <div class="modal-header">
@@ -657,6 +678,7 @@ document.querySelector("#app").innerHTML = `
           <div class="field">
             <label class="field-label">Question</label>
             <input name="question" placeholder="Will Wirtz get 3+ GA tomorrow?" maxlength="100" required />
+            <div class="form-suggest-chips hidden" data-form-suggest-chips></div>
           </div>
           <div class="field prediction-field">
             <label class="field-label">Predictions</label>
@@ -755,6 +777,9 @@ const dom = {
   tradeHistoryModalBody: document.querySelector("#tradeHistoryModalBody"),
   loginModalOverlay: document.querySelector("#loginModalOverlay"),
   marketModalOverlay: document.querySelector("#marketModalOverlay"),
+  suggestPreviewModalOverlay: document.querySelector("#suggestPreviewModalOverlay"),
+  suggestPreviewQuestion: document.querySelector("#suggestPreviewQuestion"),
+  suggestPreviewRules: document.querySelector("#suggestPreviewRules"),
   groupForm: document.querySelector("#groupForm"),
   joinForm: document.querySelector("#joinForm"),
   loginForm: document.querySelector("#loginForm"),
@@ -785,6 +810,9 @@ document.querySelector("#closeLeaderProfileModal").addEventListener("click", () 
 document.querySelector("#closeTradeHistoryModal").addEventListener("click", () => closeModal("tradeHistory"));
 document.querySelector("#closeLoginModal").addEventListener("click", () => closeModal("login"));
 document.querySelector("#closeMarketModal").addEventListener("click", () => closeModal("market"));
+document.querySelector("#closeSuggestPreviewModal").addEventListener("click", () => closeModal("suggestPreview"));
+document.querySelector("#dismissSuggestPreview").addEventListener("click", () => closeModal("suggestPreview"));
+dom.suggestPreviewModalOverlay.addEventListener("click", e => { if (e.target === dom.suggestPreviewModalOverlay) closeModal("suggestPreview"); });
 dom.groupModalOverlay.addEventListener("click", e => { if (e.target === dom.groupModalOverlay) closeModal("group"); });
 dom.joinModalOverlay.addEventListener("click", e => { if (e.target === dom.joinModalOverlay) closeModal("join"); });
 dom.inviteModalOverlay.addEventListener("click", e => { if (e.target === dom.inviteModalOverlay) closeModal("invite"); });
@@ -810,6 +838,10 @@ document.addEventListener("input", onGlobalInput);
 document.addEventListener("submit", onGlobalSubmit);
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
+    if (state.demoMode) {
+      exitDemo();
+      return;
+    }
     closeModal("group");
     closeModal("join");
     closeModal("invite");
@@ -819,6 +851,7 @@ document.addEventListener("keydown", e => {
     closeModal("tradeHistory");
     closeModal("login");
     closeModal("market");
+    closeModal("suggestPreview");
   }
 });
 window.addEventListener("popstate", () => {
@@ -888,7 +921,21 @@ async function init() {
     .finally(() => {
       if (!keepInitialLoading) state.loaded = true;
       render();
-      if (!keepInitialLoading) runStoredPendingAuthAction();
+      if (!keepInitialLoading) {
+        if (state.currentGroupId) loadQuestionSuggestions(state.currentGroupId);
+        if (
+          isLoggedIn() &&
+          !state.bootError &&
+          !state.groups.some(groupHasCurrentMember) &&
+          !state.inviteToken &&
+          !state.sharedMarketId &&
+          !localStorage.getItem("probable_demo_done") &&
+          !sessionStorage.getItem("probable_pending_auth_action")
+        ) {
+          enterDemo();
+        }
+        runStoredPendingAuthAction();
+      }
     });
 }
 
@@ -932,7 +979,7 @@ async function loadInitialAppData() {
   if (state.shell === "app" && !state.currentGroupId && state.groups.length && !state.sharedMarketId) {
     const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
     const saved = state.groups.find(group => group.id === savedGroup && groupHasCurrentMember(group) && !isPbMyMarketsGroup(group));
-    state.currentGroupId = saved?.id ?? firstSelectableGroup()?.id ?? state.groups[0].id;
+    state.currentGroupId = saved?.id ?? firstSelectableGroup()?.id ?? null;
     normalizeSelection();
   }
   if (state.authUser && !state.inviteToken && !state.sharedMarketId && (state.currentGroupId || state.groups.length)) {
@@ -1172,6 +1219,13 @@ function routeToBracket({ replace = false } = {}) {
 }
 
 function routeToMarket(marketId, { replace = false } = {}) {
+  if (state.demoMode) {
+    // The demo market only exists in client-side state, so it can never be
+    // resolved as a shared-market link. Keep the URL at /app instead of
+    // leaking a demo-* id into the address bar (breaks on refresh/share).
+    routeToApp({ replace });
+    return;
+  }
   navigateTo(`/market/${encodeURIComponent(marketId)}`, { replace });
 }
 
@@ -1220,6 +1274,10 @@ async function onGlobalClick(e) {
   const openPositionsBtn = e.target.closest("[data-open-positions]");
   if (openPositionsBtn) {
     e.preventDefault();
+    if (state.demoMode) {
+      toast("Finish or skip the demo first.");
+      return;
+    }
     state.accountMenuOpen = false;
     state.shell = "app";
     state.view = "positions";
@@ -1234,6 +1292,10 @@ async function onGlobalClick(e) {
   const openAdminBtn = e.target.closest("[data-open-admin]");
   if (openAdminBtn) {
     e.preventDefault();
+    if (state.demoMode) {
+      toast("Finish or skip the demo first.");
+      return;
+    }
     state.accountMenuOpen = false;
     state.shell = "app";
     state.view = "admin";
@@ -1242,6 +1304,12 @@ async function onGlobalClick(e) {
     routeToAdmin();
     normalizeSelection();
     render();
+    return;
+  }
+
+  if (e.target.closest("[data-demo-replay]")) {
+    state.accountMenuOpen = false;
+    enterDemo();
     return;
   }
 
@@ -1365,6 +1433,7 @@ async function onGlobalClick(e) {
   }
 
   if (e.target.closest("[data-go-welcome]")) {
+    if (state.demoMode) exitDemo();
     enterWelcomeShell();
     render();
     return;
@@ -1492,6 +1561,10 @@ async function onGlobalClick(e) {
 
   const groupBtn = e.target.closest("[data-group-id]");
   if (groupBtn) {
+    if (state.demoMode) {
+      toast("Finish or skip the demo first.");
+      return;
+    }
     const gid = groupBtn.dataset.groupId;
     if (gid === "__new") {
       if (requireLogin("add-menu")) openGeneralMarketStartModal();
@@ -1513,6 +1586,12 @@ async function onGlobalClick(e) {
     routeToApp();
     normalizeSelection();
     render();
+    loadQuestionSuggestions(gid);
+    return;
+  }
+
+  if (e.target.closest("[data-try-demo]")) {
+    enterDemo();
     return;
   }
 
@@ -1577,7 +1656,94 @@ async function onGlobalClick(e) {
     return;
   }
 
+  if (e.target.closest("[data-refresh-suggestions]")) {
+    const group = getCurrentGroup();
+    if (!group) return;
+    state.questionSuggestions = [];
+    state.questionSuggestionsGroupId = null;
+    loadQuestionSuggestions(group.id);
+    return;
+  }
+
+  if (e.target.closest("[data-form-suggestion]")) {
+    const btn = e.target.closest("[data-form-suggestion]");
+    const idx = parseInt(btn.dataset.formSuggestionIndex, 10);
+    const question = state.questionSuggestions[idx];
+    if (!question) return;
+    const qInput = dom.marketForm?.querySelector("[name=question]");
+    if (qInput) {
+      qInput.value = question;
+      qInput.dispatchEvent(new Event("input", { bubbles: true }));
+      qInput.focus();
+    }
+    updateFormSuggestChips();
+    return;
+  }
+
+  if (e.target.closest("[data-suggestion-chip]")) {
+    const btn = e.target.closest("[data-suggestion-chip]");
+    const idx = parseInt(btn.dataset.suggestionIndex, 10);
+    const question = state.questionSuggestions[idx];
+    if (!question) return;
+    const group = getCurrentGroup();
+    if (!group) return;
+    state.pendingUi.suggestionPreview = { question, rules: null, loading: true };
+    render();
+    openModal("suggestPreview");
+    // Fetch AI rules draft for the preview
+    api(`/api/markets/rules/draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question,
+        brief: question,
+        outcomes: ["Yes", "No"],
+        oracleType: "ai",
+      }),
+    })
+      .then(data => {
+        if (data) {
+          state.pendingUi.suggestionPreview = { question, rules: data.draft?.description || "", loading: false };
+        } else {
+          state.pendingUi.suggestionPreview = { question, rules: "", loading: false };
+        }
+        render();
+      })
+      .catch(() => {
+        state.pendingUi.suggestionPreview = { question, rules: "", loading: false };
+        render();
+      });
+    return;
+  }
+
+  if (e.target.closest("#createFromSuggestion")) {
+    if (!requireLogin("create-market")) return;
+    const preview = state.pendingUi.suggestionPreview;
+    if (!preview) return;
+    closeModal("suggestPreview");
+    await ensureMarketGroup();
+    setMarketMinDate();
+    openModal("market");
+    const qInput = dom.marketForm?.querySelector("[name=question]");
+    if (qInput) {
+      qInput.value = preview.question;
+      qInput.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    if (preview.rules) {
+      const descInput = dom.marketForm?.querySelector("[name=description]");
+      if (descInput) {
+        descInput.value = preview.rules;
+        descInput.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    }
+    return;
+  }
+
   if (e.target.closest("[data-new-market]")) {
+    if (state.demoMode) {
+      toast("Finish or skip the demo first.");
+      return;
+    }
     if (!requireLogin("create-market")) return;
     closeModal("generalMarket");
     await ensureMarketGroup();
@@ -1602,6 +1768,10 @@ async function onGlobalClick(e) {
 
   const inviteBtn = e.target.closest("[data-open-invite]");
   if (inviteBtn) {
+    if (state.demoMode) {
+      toast("Finish or skip the demo first.");
+      return;
+    }
     await openInviteModal(inviteBtn.dataset.openInvite);
     return;
   }
@@ -1618,6 +1788,10 @@ async function onGlobalClick(e) {
 
   const marketShareBtn = e.target.closest("[data-share-market]");
   if (marketShareBtn) {
+    if (state.demoMode) {
+      toast("Finish or skip the demo first.");
+      return;
+    }
     openMarketEmbedModal(marketShareBtn.dataset.shareMarket);
     await copyMarketLink(marketShareBtn.dataset.shareMarket);
     return;
@@ -1923,6 +2097,7 @@ function onGlobalInput(e) {
   }
   if (e.target.matches("#marketForm [name=description], #marketForm [name=question], #marketForm [name=closesAt]")) {
     if (e.target.matches("#marketForm [name=question], #marketForm [name=closesAt]")) resetMarketOddsSeed();
+    if (e.target.matches("#marketForm [name=question]")) updateFormSuggestChips();
     updateMarketOddsPanel();
     if (state.marketFormStep === marketReviewStep()) updateMarketReview();
   }
@@ -2047,7 +2222,7 @@ async function onGlobalSubmit(e) {
     toast("Enter a valid amount.");
     return;
   }
-  if (!requireLogin()) return;
+  if (!state.demoMode && !requireLogin()) return;
   if (!state.activeMember) {
     toast("Select a member first.");
     return;
@@ -2168,6 +2343,10 @@ function runPendingAuthAction() {
   }
   if (action === "welcome-create-market") {
     createStoredWelcomeMarket().catch(err => toast(err.message || "Failed to create market."));
+    return;
+  }
+  if (action === "demo-create-group") {
+    openModal("group");
     return;
   }
   if (action === "submit-bracket") {
@@ -2661,6 +2840,29 @@ function selectedMarketOddsSeed(outcomes) {
   return Object.keys(values).length ? values : null;
 }
 
+async function loadQuestionSuggestions(groupId) {
+  if (!groupId || groupId === DEMO_GROUP_ID || state.pendingUi.suggestions) return;
+  if (state.questionSuggestionsGroupId === groupId && state.questionSuggestions.length) return;
+  state.pendingUi.suggestions = true;
+  state.questionSuggestions = [];
+  render();
+  try {
+    const data = await api(`/api/groups/${groupId}/questions/suggest`, { method: "POST", timeoutMs: 35000 });
+    if (state.currentGroupId === groupId) {
+      state.questionSuggestions = data.questions || [];
+      state.questionSuggestionsGroupId = groupId;
+    }
+  } catch {
+    state.questionSuggestions = [];
+  } finally {
+    state.pendingUi.suggestions = false;
+    render();
+    if (state.currentGroupId && state.currentGroupId !== groupId) {
+      loadQuestionSuggestions(state.currentGroupId);
+    }
+  }
+}
+
 function resetMarketOddsSeed() {
   state.marketOddsSeed = null;
 }
@@ -2839,6 +3041,23 @@ async function goMarketFormStep(step) {
   }
 }
 
+function updateFormSuggestChips() {
+  const container = dom.marketForm?.querySelector("[data-form-suggest-chips]");
+  if (!container) return;
+  const onStep1 = state.marketFormStep === 1;
+  const qInput = dom.marketForm?.querySelector("[name=question]");
+  const hasTyped = (qInput?.value || "").trim().length > 0;
+  const questions = state.questionSuggestions;
+  if (!onStep1 || hasTyped || !questions.length) {
+    container.classList.add("hidden");
+    return;
+  }
+  container.innerHTML = questions.map((q, i) =>
+    `<button class="form-suggest-chip" type="button" data-form-suggestion data-form-suggestion-index="${i}">${esc(q)}</button>`
+  ).join("");
+  container.classList.remove("hidden");
+}
+
 function updateMarketFormStep() {
   const totalSteps = marketFormTotalSteps();
   const step = Math.max(1, Math.min(totalSteps, state.marketFormStep || 1));
@@ -2863,6 +3082,7 @@ function updateMarketFormStep() {
   dom.marketForm.querySelector("[data-market-step-back]")?.classList.toggle("hidden", step === 1);
   dom.marketForm.querySelector("[data-market-step-next]")?.classList.toggle("hidden", step === totalSteps);
   dom.marketForm.querySelector("[data-market-submit]")?.classList.toggle("hidden", step !== totalSteps);
+  updateFormSuggestChips();
 }
 
 function setMarketType(type) {
@@ -3961,6 +4181,7 @@ async function onOracleVote(market, outcome) {
 
 function render() {
   destroyCharts();
+  updateSuggestPreviewModal();
   const waitingForInitialAppData = state.shell === "app" && !state.loaded && (state.currentGroupId || isLoggedIn() || state.sharedMarketId || shouldHoldAppShell());
   const unresolvedMarketLink = Boolean(state.sharedMarketId && !findMarketForRoute(state.sharedMarketId));
   if (state.shell === "app" && state.view !== "bracket" && !getCurrentGroup() && !waitingForInitialAppData && !unresolvedMarketLink && !state.bootError) {
@@ -3993,6 +4214,7 @@ function render() {
     renderCharts();
     animateIn();
     hydrateWelcomeVideos();
+    if (state.demoMode) tutorialOnRender();
   });
 }
 
@@ -4051,7 +4273,7 @@ function visibleNavGroups() {
 function selectableNavGroups() {
   const activeId = state.currentGroupId;
   const byLabel = new Map();
-  state.groups.filter(group => groupHasCurrentMember(group) && !isPbMyMarketsGroup(group)).forEach(group => {
+  state.groups.filter(group => group.id !== DEMO_GROUP_ID && groupHasCurrentMember(group) && !isPbMyMarketsGroup(group)).forEach(group => {
     const key = `${String(group.emoji || "").trim().toLowerCase()}::${String(group.name || "").trim().toLowerCase()}`;
     const current = byLabel.get(key);
     if (!current || groupNavSortScore(group, activeId) > groupNavSortScore(current, activeId)) byLabel.set(key, group);
@@ -4196,6 +4418,7 @@ function accountIndicatorHtml() {
           <div class="account-popover">
             <button class="account-popover-name" type="button" data-open-positions>My Portfolio</button>
             <button type="button" data-open-admin>Admin verify</button>
+            <button type="button" data-demo-replay>How it works</button>
             <button type="button" data-account-signout>Sign out</button>
           </div>` : ""}
       </div>`;
@@ -4230,6 +4453,49 @@ function leaderLevel(entry) {
   if (entry.bal >= DEFAULT_BALANCE) return "Level 3";
   if (entry.bal >= DEFAULT_BALANCE - 500) return "Level 2";
   return "Level 1";
+}
+
+function suggestedQuestionsHtml() {
+  const loading = state.pendingUi.suggestions;
+  const questions = state.questionSuggestions;
+  if (!loading && !questions.length) return "";
+  const chipsHtml = loading
+    ? `<div class="suggest-skeleton-row">
+        <span class="suggest-skeleton"></span>
+        <span class="suggest-skeleton"></span>
+        <span class="suggest-skeleton"></span>
+        <span class="suggest-skeleton"></span>
+      </div>`
+    : questions.map((q, i) =>
+        `<button class="suggest-chip" type="button" data-suggestion-chip data-suggestion-index="${i}">${esc(q)}</button>`
+      ).join("");
+  return `
+    <div class="suggest-panel motion-item">
+      <div class="suggest-panel-head">
+        <p class="eyebrow">Suggested questions</p>
+        <button class="btn-icon" type="button" data-refresh-suggestions aria-label="Refresh suggestions">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M1 7a6 6 0 1 0 1.2-3.6"/><path d="M1 2v2.4h2.4"/>
+          </svg>
+        </button>
+      </div>
+      <div class="suggest-chips">${chipsHtml}</div>
+    </div>
+  `;
+}
+
+function updateSuggestPreviewModal() {
+  const preview = state.pendingUi.suggestionPreview;
+  if (!dom.suggestPreviewQuestion || !dom.suggestPreviewRules) return;
+  if (!preview) return;
+  dom.suggestPreviewQuestion.textContent = preview.question || "";
+  if (preview.loading) {
+    dom.suggestPreviewRules.innerHTML = `<p class="suggest-rules-loading">✨ Drafting rules…</p>`;
+  } else if (preview.rules) {
+    dom.suggestPreviewRules.innerHTML = `<pre class="suggest-rules-text">${esc(preview.rules)}</pre>`;
+  } else {
+    dom.suggestPreviewRules.innerHTML = "";
+  }
 }
 
 function renderDashboard() {
@@ -4298,6 +4564,7 @@ function renderDashboard() {
 
         <aside class="side-panel motion-item">
           ${leaderboardPanel(group, { limit: compactLeaderboardLimit(), compact: true })}
+          ${suggestedQuestionsHtml()}
         </aside>
       </div>
     </section>
@@ -4709,7 +4976,8 @@ function renderEmptyDashboard() {
     <div class="welcome-button-row">
       <button class="btn btn-primary btn-lg" type="button" data-create-market-welcome>Create market</button>
       <button class="btn btn-ghost btn-lg" type="button" data-join-group>Join group</button>
-    </div>`;
+    </div>
+    <button class="welcome-demo-link" type="button" data-try-demo>New here? Try the 2-minute demo</button>`;
   const bracketPromo = `
     <button class="welcome-bracket-card" type="button" data-go-bracket>
       <span class="welcome-bracket-copy">
@@ -9656,9 +9924,12 @@ function ammPreview(poolYes, poolNo, side, amount) {
 
 function setGroups(groups, { persist = true } = {}) {
   state.groups = reconcileGroups(groups ?? []);
+  if (persist && !state.demoMode) persistBootCache();
+  if (state.demoMode && !state.groups.some(g => g.id === DEMO_GROUP_ID)) {
+    state.groups = state.groups.concat([buildDemoGroup(state.activeMember || "You")]);
+  }
   tradeQuoteCache.clear();
   tradeQuoteInflight.clear();
-  if (persist) persistBootCache();
 }
 
 function reconcileGroups(incomingGroups) {
@@ -9912,6 +10183,61 @@ function renderMarketLinkLoading({ error = "" } = {}) {
         </div>
       </div>
     </section>`;
+}
+
+function enterDemo() {
+  if (state.demoMode) return;
+  const memberName = isLoggedIn() ? (authDisplayName() || "You") : "You";
+  const group = buildDemoGroup(memberName);
+  state.demoPrevGroupId = state.currentGroupId;
+  state.groups = state.groups.filter(g => g.id !== DEMO_GROUP_ID).concat([group]);
+  state.demoMode = true;
+  state.shell = "app";
+  state.view = "dashboard";
+  state.currentGroupId = DEMO_GROUP_ID;
+  state.activeMember = memberName;
+  state.trade = emptyTrade();
+  render();
+  startTutorial({
+    getGroup: () => state.groups.find(g => g.id === DEMO_GROUP_ID),
+    getMember: () => memberName,
+    resolveDemo: outcomeId => {
+      const demoGroup = state.groups.find(g => g.id === DEMO_GROUP_ID);
+      if (demoGroup) resolveDemoMarket(demoGroup, outcomeId);
+      render();
+    },
+    exitDemo: handoff => exitDemo(handoff),
+  });
+}
+
+function exitDemo(handoff = false) {
+  if (!state.demoMode) return;
+  stopTutorial();
+  ["group", "join", "invite", "embed", "leaderProfile", "tradeHistory", "login", "market", "suggestPreview"].forEach(closeModal);
+  state.demoMode = false;
+  state.groups = state.groups.filter(g => g.id !== DEMO_GROUP_ID);
+  localStorage.setItem("probable_demo_done", "1");
+  state.trade = emptyTrade();
+  state.mobileTradeOpen = false;
+  state.currentGroupId = state.demoPrevGroupId && state.groups.some(g => g.id === state.demoPrevGroupId)
+    ? state.demoPrevGroupId
+    : null;
+  state.demoPrevGroupId = null;
+  if (!state.currentGroupId) {
+    const memberGroup = isLoggedIn() ? state.groups.find(groupHasCurrentMember) : null;
+    if (memberGroup) {
+      state.currentGroupId = memberGroup.id;
+    } else {
+      state.shell = "welcome";
+      state.welcomeMode = "actions";
+    }
+  }
+  normalizeSelection();
+  render();
+  if (handoff) {
+    if (isLoggedIn()) openModal("group");
+    else requireLogin("demo-create-group");
+  }
 }
 
 function enterWelcomeShell({ updateUrl = true } = {}) {
@@ -10169,6 +10495,10 @@ function toastSettlement(settlement, fallback = "Market resolved.") {
 }
 
 async function api(path, opts = {}) {
+  if (state.demoMode && (path.includes("/markets/demo-") || path.includes(`/groups/${DEMO_GROUP_ID}/`))) {
+    const demoGroup = state.groups.find(g => g.id === DEMO_GROUP_ID);
+    return simulateDemoApi(path, opts, demoGroup, state.groups);
+  }
   if (!API && import.meta.env.PROD && !isLocalHost()) {
     throw new Error(API_CONFIG_ERROR);
   }
