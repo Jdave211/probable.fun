@@ -386,7 +386,6 @@ const state = {
   plSubmitted: false,
   plRemoteLoaded: false,
   plSaving: false,
-  plDraggedIndex: null,
   plSharedEntryId: "",
   pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, suggestions: false, suggestionPreview: null, tradeMarketId: null, resolveMarketId: null },
   demoMode: false,
@@ -883,10 +882,6 @@ document.addEventListener("click", onTradeAmountChipClick, true);
 document.addEventListener("change", onGlobalChange);
 document.addEventListener("input", onGlobalInput);
 document.addEventListener("submit", onGlobalSubmit);
-document.addEventListener("dragstart", onPremierLeagueDragStart);
-document.addEventListener("dragover", onPremierLeagueDragOver);
-document.addEventListener("drop", onPremierLeagueDrop);
-document.addEventListener("dragend", onPremierLeagueDragEnd);
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
     if (state.demoMode) {
@@ -1551,10 +1546,25 @@ async function onGlobalClick(e) {
     return;
   }
 
-  const plMoveBtn = e.target.closest("[data-pl-move]");
-  if (plMoveBtn) {
+  const plClubPick = e.target.closest("[data-pl-club-pick]");
+  if (plClubPick) {
     e.preventDefault();
-    movePremierLeagueClub(Number(plMoveBtn.dataset.plIndex), plMoveBtn.dataset.plMove);
+    selectPremierLeagueClub(plClubPick.dataset.plClubPick);
+    renderPremierLeaguePredictor();
+    return;
+  }
+
+  const plClearPick = e.target.closest("[data-pl-clear-position]");
+  if (plClearPick) {
+    e.preventDefault();
+    clearPremierLeaguePosition(Number(plClearPick.dataset.plClearPosition));
+    renderPremierLeaguePredictor();
+    return;
+  }
+
+  if (e.target.closest("[data-pl-undo]")) {
+    e.preventDefault();
+    undoPremierLeaguePick();
     renderPremierLeaguePredictor();
     return;
   }
@@ -1565,7 +1575,7 @@ async function onGlobalClick(e) {
       toast("Predictor is locked.");
       return;
     }
-    state.plRanking = defaultPremierLeagueRanking();
+    state.plRanking = [];
     state.plSubmitted = false;
     savePremierLeagueDraft();
     renderPremierLeaguePredictor();
@@ -4548,12 +4558,8 @@ function generalMarketPoolRow(item, group) {
   `;
 }
 
-function defaultPremierLeagueRanking() {
-  return PL_CLUBS.map(club => club.id);
-}
-
 function premierLeagueClubById(id) {
-  return PL_CLUBS.find(club => club.id === id) || PL_CLUBS[0];
+  return PL_CLUBS.find(club => club.id === id) || null;
 }
 
 function normalizePremierLeagueRanking(ranking) {
@@ -4567,18 +4573,18 @@ function normalizePremierLeagueRanking(ranking) {
       seen.add(value);
     }
   });
-  PL_CLUBS.forEach(club => {
-    if (!seen.has(club.id)) cleaned.push(club.id);
-  });
   return cleaned;
 }
 
 function loadPremierLeagueDraftIntoState() {
-  if (state.plRemoteLoaded && state.plRanking.length === PL_CLUBS.length) return;
+  if (state.plRemoteLoaded) return;
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.plPredictorDraft);
     const parsed = raw ? JSON.parse(raw) : {};
-    state.plRanking = normalizePremierLeagueRanking(parsed.ranking || state.plRanking || defaultPremierLeagueRanking());
+    const savedRanking = parsed.mode === "sequential" || parsed.submitted
+      ? parsed.ranking
+      : state.plRanking;
+    state.plRanking = normalizePremierLeagueRanking(savedRanking || []);
     state.plSubmitted = Boolean(parsed.submitted && !state.plRemoteLoaded);
     state.plEntryId = state.plEntryId || parsed.entryId || "";
   } catch {
@@ -4589,6 +4595,7 @@ function loadPremierLeagueDraftIntoState() {
 function savePremierLeagueDraft() {
   localStorage.setItem(STORAGE_KEYS.plPredictorDraft, JSON.stringify({
     ranking: normalizePremierLeagueRanking(state.plRanking),
+    mode: "sequential",
     submitted: state.plSubmitted,
     entryId: state.plEntryId,
     updatedAt: new Date().toISOString(),
@@ -4613,64 +4620,44 @@ function premierLeagueOrdinal(rank) {
   return `${rank}${suffix}`;
 }
 
-function movePremierLeagueClub(index, direction) {
+function selectPremierLeagueClub(clubId) {
+  if (premierLeaguePredictorLocked()) {
+    toast("Predictor is locked.");
+    return;
+  }
+  const ranking = normalizePremierLeagueRanking(state.plRanking);
+  const club = premierLeagueClubById(clubId);
+  if (!club || ranking.includes(club.id) || ranking.length >= PL_CLUBS.length) return;
+  ranking.push(club.id);
+  state.plRanking = ranking;
+  state.plSubmitted = false;
+  savePremierLeagueDraft();
+}
+
+function clearPremierLeaguePosition(index) {
   if (premierLeaguePredictorLocked()) {
     toast("Predictor is locked.");
     return;
   }
   const ranking = normalizePremierLeagueRanking(state.plRanking);
   if (!Number.isInteger(index) || index < 0 || index >= ranking.length) return;
-  let target = index;
-  if (direction === "up") target = index - 1;
-  if (direction === "down") target = index + 1;
-  if (direction === "top") target = 0;
-  if (direction === "bottom") target = ranking.length - 1;
-  target = Math.max(0, Math.min(ranking.length - 1, target));
-  if (target === index) return;
-  const [item] = ranking.splice(index, 1);
-  ranking.splice(target, 0, item);
+  ranking.splice(index, 1);
   state.plRanking = ranking;
   state.plSubmitted = false;
   savePremierLeagueDraft();
 }
 
-function onPremierLeagueDragStart(e) {
-  const row = e.target.closest?.("[data-pl-row]");
-  if (!row || state.view !== "plPredictor" || premierLeaguePredictorLocked()) return;
-  state.plDraggedIndex = Number(row.dataset.plIndex);
-  row.classList.add("dragging");
-  e.dataTransfer.effectAllowed = "move";
-  e.dataTransfer.setData("text/plain", String(state.plDraggedIndex));
-}
-
-function onPremierLeagueDragOver(e) {
-  if (state.plDraggedIndex === null || state.view !== "plPredictor") return;
-  if (e.target.closest?.("[data-pl-row]")) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
+function undoPremierLeaguePick() {
+  if (premierLeaguePredictorLocked()) {
+    toast("Predictor is locked.");
+    return;
   }
-}
-
-function onPremierLeagueDrop(e) {
-  const row = e.target.closest?.("[data-pl-row]");
-  if (!row || state.plDraggedIndex === null || premierLeaguePredictorLocked()) return;
-  e.preventDefault();
-  const from = Number(state.plDraggedIndex);
-  const to = Number(row.dataset.plIndex);
-  if (!Number.isInteger(from) || !Number.isInteger(to) || from === to) return;
   const ranking = normalizePremierLeagueRanking(state.plRanking);
-  const [item] = ranking.splice(from, 1);
-  ranking.splice(to, 0, item);
+  if (!ranking.length) return;
+  ranking.pop();
   state.plRanking = ranking;
   state.plSubmitted = false;
-  state.plDraggedIndex = null;
   savePremierLeagueDraft();
-  renderPremierLeaguePredictor();
-}
-
-function onPremierLeagueDragEnd() {
-  state.plDraggedIndex = null;
-  document.querySelectorAll(".pl-ranking-row.dragging").forEach(row => row.classList.remove("dragging"));
 }
 
 function premierLeagueClubBadge(club, small = false) {
@@ -4687,6 +4674,9 @@ function renderPremierLeaguePredictor() {
   state.plRanking = normalizePremierLeagueRanking(state.plRanking);
   const locked = premierLeaguePredictorLocked();
   const status = locked ? "Locked" : state.plSubmitted ? "Submitted" : "Draft";
+  const picked = new Set(state.plRanking);
+  const nextRank = Math.min(state.plRanking.length + 1, PL_CLUBS.length);
+  const complete = state.plRanking.length === PL_CLUBS.length;
   const lockLabel = new Date(PL_PREDICTOR.lockAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   dom.mainContent.innerHTML = `
     <section class="pl-predictor-page">
@@ -4697,7 +4687,7 @@ function renderPremierLeaguePredictor() {
           <div>
             <p class="eyebrow">Probable challenge · ${esc(PL_PREDICTOR.season)}</p>
             <h1>Predict the table</h1>
-            <p class="pl-predictor-subtitle">Put all 20 clubs in order before the first whistle.</p>
+            <p class="pl-predictor-subtitle">Pick your champion first, then fill the table one club at a time.</p>
           </div>
         </div>
         <div class="pl-predictor-actions">
@@ -4707,57 +4697,89 @@ function renderPremierLeaguePredictor() {
           </div>
           <button class="btn btn-ghost btn-sm" type="button" data-share-pl-predictor>Share</button>
           <button class="btn btn-ghost btn-sm" type="button" data-pl-reset ${locked ? "disabled" : ""}>Reset</button>
-          <button class="btn btn-primary btn-sm" type="button" data-pl-submit ${state.plSaving || locked ? "disabled" : ""}>${state.plSaving ? "Saving..." : state.plSubmitted ? "Save changes" : "Submit"}</button>
+          <button class="btn btn-primary btn-sm" type="button" data-pl-submit ${state.plSaving || locked || !complete ? "disabled" : ""}>${state.plSaving ? "Saving..." : state.plSubmitted ? "Save changes" : "Submit"}</button>
         </div>
       </header>
 
-      <div class="pl-ranking-shell motion-item">
-        <div class="pl-table-titlebar">
-          <div>
-            <p>Your prediction</p>
-            <strong>Final table</strong>
+      <div class="pl-pick-layout motion-item">
+        <div class="pl-ranking-shell">
+          <div class="pl-table-titlebar">
+            <div>
+              <p>Your prediction</p>
+              <strong>Final table</strong>
+            </div>
+            <span>${state.plRanking.length} of ${PL_CLUBS.length} picked</span>
           </div>
-          <span>Drag to reorder · ${esc(PL_PREDICTOR.season)}</span>
+          <div class="pl-ranking-head">
+            <span>Pos</span>
+            <span>Club</span>
+            <span></span>
+          </div>
+          <div class="pl-ranking-list">
+            ${Array.from({ length: PL_CLUBS.length }, (_, index) => premierLeagueRankingRow(state.plRanking[index] || "", index, { locked, current: index === state.plRanking.length })).join("")}
+          </div>
+          <div class="pl-zone-strip">
+            <span class="champion">1 Champion · UCL</span>
+            <span class="ucl">2-5 Champions League</span>
+            <span class="europa">6-7 Europa League</span>
+            <span class="conference">8 Conference League</span>
+            <span class="relegation">18-20 Relegation</span>
+          </div>
         </div>
-        <div class="pl-ranking-head">
-          <span>Pos</span>
-          <span>Club</span>
-          <span>Move</span>
-        </div>
-        <div class="pl-ranking-list">
-          ${state.plRanking.map((clubId, index) => premierLeagueRankingRow(clubId, index, { locked })).join("")}
-        </div>
-        <div class="pl-zone-strip">
-          <span class="champion">1 Champion · UCL</span>
-          <span class="ucl">2-5 Champions League</span>
-          <span class="europa">6-7 Europa League</span>
-          <span class="conference">8 Conference League</span>
-          <span class="relegation">18-20 Relegation</span>
-        </div>
+
+        <aside class="pl-club-picker" aria-label="Available Premier League clubs">
+          <div class="pl-club-picker-head">
+            <div>
+              <p class="eyebrow">${complete ? "Table complete" : `Pick ${esc(premierLeagueOrdinal(nextRank))}`}</p>
+              <h2>${complete ? "Review your table" : "Choose a club"}</h2>
+            </div>
+            <button type="button" data-pl-undo ${locked || !state.plRanking.length ? "disabled" : ""}>Undo</button>
+          </div>
+          <div class="pl-pick-progress" aria-label="${state.plRanking.length} of ${PL_CLUBS.length} clubs picked">
+            <span style="width:${(state.plRanking.length / PL_CLUBS.length) * 100}%"></span>
+          </div>
+          <div class="pl-club-picker-grid">
+            ${PL_CLUBS.map(club => {
+              const selected = picked.has(club.id);
+              return `
+                <button class="pl-club-choice ${selected ? "selected" : ""}" type="button"
+                  data-pl-club-pick="${esc(club.id)}"
+                  aria-label="${selected ? `${esc(club.name)} already picked` : `Pick ${esc(club.name)} ${esc(premierLeagueOrdinal(nextRank))}`}"
+                  title="${esc(club.name)}" ${locked || selected || complete ? "disabled" : ""}>
+                  ${premierLeagueClubBadge(club)}
+                  <span>${esc(club.shortName)}</span>
+                  ${selected ? '<i aria-hidden="true">✓</i>' : ""}
+                </button>`;
+            }).join("")}
+          </div>
+          <p class="pl-picker-note">${complete ? "Every club has a position. Check the table before submitting." : "Select clubs in the exact order you think they will finish."}</p>
+        </aside>
       </div>
       <p class="pl-attribution">Premier League club marks are used for identification.</p>
     </section>
   `;
 }
 
-function premierLeagueRankingRow(clubId, index, { locked = false } = {}) {
-  const club = premierLeagueClubById(clubId);
+function premierLeagueRankingRow(clubId, index, { locked = false, current = false } = {}) {
+  const club = clubId ? premierLeagueClubById(clubId) : null;
   const rank = index + 1;
   const zone = premierLeagueZone(rank);
   return `
-    <article class="pl-ranking-row ${zone.className}" draggable="${!locked}" data-pl-row data-pl-index="${index}">
+    <article class="pl-ranking-row ${zone.className} ${club ? "filled" : "empty"} ${current ? "current" : ""}">
       <div class="pl-rank-number">${rank}</div>
-      <div class="pl-club-main">
-        ${premierLeagueClubBadge(club)}
-        <div>
-          <strong>${esc(club.name)}</strong>
-          <small>${esc(club.shortName)}</small>
+      ${club ? `
+        <div class="pl-club-main">
+          ${premierLeagueClubBadge(club)}
+          <div>
+            <strong>${esc(club.name)}</strong>
+            <small>${esc(club.shortName)}</small>
+          </div>
         </div>
-      </div>
-      <div class="pl-move-controls">
-        <button type="button" aria-label="Move ${esc(club.name)} up" data-pl-index="${index}" data-pl-move="up" ${locked || index === 0 ? "disabled" : ""}>↑</button>
-        <button type="button" aria-label="Move ${esc(club.name)} down" data-pl-index="${index}" data-pl-move="down" ${locked || index === PL_CLUBS.length - 1 ? "disabled" : ""}>↓</button>
-      </div>
+        <button class="pl-clear-pick" type="button" aria-label="Remove ${esc(club.name)}" data-pl-clear-position="${index}" ${locked ? "disabled" : ""}>×</button>
+      ` : `
+        <div class="pl-empty-club">${current ? `Choose the ${esc(premierLeagueOrdinal(rank))} place club` : "—"}</div>
+        <span></span>
+      `}
     </article>
   `;
 }
@@ -4788,6 +4810,10 @@ async function submitPremierLeagueEntry() {
   }
   state.plRanking = normalizePremierLeagueRanking(state.plRanking);
   savePremierLeagueDraft();
+  if (state.plRanking.length !== PL_CLUBS.length) {
+    toast(`Pick all ${PL_CLUBS.length} clubs before submitting.`);
+    return;
+  }
   if (!isLoggedIn()) {
     requireLogin("submit-pl-predictor");
     return;
