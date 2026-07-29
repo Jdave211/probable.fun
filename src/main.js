@@ -506,6 +506,7 @@ const GENERAL_MARKET_POOL = [
     predictorId: predictor.id,
     route: predictor.route,
     leagueMark: predictor.leagueMark,
+    logoUrl: predictor.logoUrl,
     title: predictor.title,
     subtitle: `Rank all ${predictor.clubs.length} clubs before kickoff.`,
     eyebrow: "General pool",
@@ -4548,10 +4549,12 @@ function renderGeneralMarketPoolModal() {
 
 function generalMarketPoolRow(item, group) {
   const added = group?.id ? groupAddonIds(group.id).includes(item.id) : false;
-  const icon = item.type === "league-predictor" ? item.leagueMark : "🏆";
+  const icon = item.type === "league-predictor" && item.logoUrl
+    ? `<img src="${esc(item.logoUrl)}" alt="" loading="lazy" />`
+    : esc(item.type === "league-predictor" ? item.leagueMark : "🏆");
   return `
     <article class="general-market-pool-row">
-      <div class="general-market-pool-icon" aria-hidden="true">${esc(icon)}</div>
+      <div class="general-market-pool-icon" aria-hidden="true">${icon}</div>
       <div class="general-market-pool-copy">
         <p>${esc(item.eyebrow)}</p>
         <h3>${esc(item.title)}</h3>
@@ -5099,7 +5102,9 @@ function generalMarketCard(item) {
       <article class="event-card general-market-card motion-item" data-go-league-predictor="${esc(item.predictorId)}">
         <div class="event-card-inner">
           <div class="event-card-head">
-            <div class="event-thumb event-thumb-image general-league-mark" aria-hidden="true">${esc(item.leagueMark)}</div>
+            <div class="event-thumb event-thumb-image general-league-mark" aria-hidden="true">
+              ${item.logoUrl ? `<img src="${esc(item.logoUrl)}" alt="" loading="lazy" />` : esc(item.leagueMark)}
+            </div>
             <div class="event-title-wrap">
               <p class="event-title">${esc(item.title)}</p>
             </div>
@@ -8604,7 +8609,9 @@ function portfolioLeaguePredictorCard(predictor) {
   const leader = predictor.clubs.find(club => club.id === ranking[0])?.name || "Start your table";
   return `
     <button class="portfolio-challenge-card" type="button" data-go-league-predictor="${esc(predictor.id)}">
-      <span class="portfolio-challenge-icon league-mark">${esc(predictor.leagueMark)}</span>
+      <span class="portfolio-challenge-icon league-mark">
+        ${predictor.logoUrl ? `<img src="${esc(predictor.logoUrl)}" alt="" loading="lazy" />` : esc(predictor.leagueMark)}
+      </span>
       <span>
         <strong>${esc(predictor.title)}</strong>
         <em>${esc(predictor.season)} · ${esc(status)}</em>

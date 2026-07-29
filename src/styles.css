@@ -815,6 +815,20 @@ button { color: inherit; }
   letter-spacing: -0.04em;
 }
 
+.portfolio-challenge-icon.league-mark img,
+.general-league-mark img,
+.general-market-pool-icon img {
+  display: block;
+  width: 76%;
+  height: 76%;
+  object-fit: contain;
+}
+
+.general-league-mark img {
+  width: 82%;
+  height: 82%;
+}
+
 .portfolio-challenge-card strong,
 .portfolio-challenge-card em {
   display: block;
@@ -5538,9 +5552,9 @@ button { color: inherit; }
 
 .pl-league-logo {
   width: 166px;
-  height: auto;
+  height: 82px;
   flex: 0 0 auto;
-  filter: brightness(0) invert(1);
+  object-fit: contain;
   opacity: 0.94;
 }
 

@@ -2832,7 +2832,19 @@ def league_predictor_share_card(challenge_id: str, participant: str | None = Non
         draw.rounded_rectangle((52, 52, width - 52, height - 52), radius=40, fill="#101820", outline="#243240", width=3)
         draw.text((92, 88), "probable.", fill="#eef5fb", font=h2_font)
         league_name = str(config.get("leagueName") or "League")
-        draw.text((92, 152), f"{league_name.upper()} TABLE PREDICTOR", fill="#7f91a4", font=small_font)
+        league_logo_url = str(config.get("logoUrl") or "")
+        league_logo = None
+        if league_logo_url.startswith("/"):
+            try:
+                league_logo = Image.open(BASE_DIR / "public" / league_logo_url.lstrip("/")).convert("RGBA")
+                league_logo.thumbnail((230, 52), Image.LANCZOS)
+            except Exception:
+                league_logo = None
+        if league_logo:
+            image.paste(league_logo, (92, 140 + (52 - league_logo.height) // 2), league_logo)
+        else:
+            draw.text((92, 152), league_name.upper(), fill="#eef5fb", font=small_font)
+        draw.text((340, 154), "TABLE PREDICTOR", fill="#7f91a4", font=small_font)
         draw.text((92, 190), f"{owner}'s {config.get('season')} table", fill="#f4f8fb", font=title_font)
         badge = "Submitted" if submitted_at else "Draft preview"
         draw.rounded_rectangle((892, 138, 1086, 188), radius=18, fill="#0f559b")
