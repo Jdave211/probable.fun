@@ -2631,60 +2631,51 @@ def create_group(payload: GroupCreate) -> dict:
     return groups_response(groupId=group_id)
 
 
-PL_PREDICTOR_ID = "pl-2026-27"
-PL_PREDICTOR_LOCK_AT = "2026-08-15T11:30:00+00:00"
-PL_PREDICTOR_SOURCE_URL = "https://www.premierleague.com/en/clubs"
-PL_CLUBS = [
-    {"id": "arsenal", "name": "Arsenal", "shortName": "ARS", "color": "#ef0107", "teamCode": 3, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t3.png"},
-    {"id": "aston-villa", "name": "Aston Villa", "shortName": "AVL", "color": "#95bfe5", "teamCode": 7, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t7.png"},
-    {"id": "bournemouth", "name": "AFC Bournemouth", "shortName": "BOU", "color": "#da291c", "teamCode": 91, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t91.png"},
-    {"id": "brentford", "name": "Brentford", "shortName": "BRE", "color": "#e30613", "teamCode": 94, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t94.png"},
-    {"id": "brighton", "name": "Brighton & Hove Albion", "shortName": "BHA", "color": "#0057b8", "teamCode": 36, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t36.png"},
-    {"id": "chelsea", "name": "Chelsea", "shortName": "CHE", "color": "#034694", "teamCode": 8, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t8.png"},
-    {"id": "coventry", "name": "Coventry City", "shortName": "COV", "color": "#77bbff", "teamCode": 9, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t9.png"},
-    {"id": "crystal-palace", "name": "Crystal Palace", "shortName": "CRY", "color": "#1b458f", "teamCode": 31, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t31.png"},
-    {"id": "everton", "name": "Everton", "shortName": "EVE", "color": "#003399", "teamCode": 11, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t11.png"},
-    {"id": "fulham", "name": "Fulham", "shortName": "FUL", "color": "#ffffff", "teamCode": 54, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t54.png"},
-    {"id": "hull-city", "name": "Hull City", "shortName": "HUL", "color": "#f6a800", "teamCode": 88, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t88.png"},
-    {"id": "ipswich-town", "name": "Ipswich Town", "shortName": "IPS", "color": "#0057b8", "teamCode": 40, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t40.png"},
-    {"id": "leeds-united", "name": "Leeds United", "shortName": "LEE", "color": "#ffcd00", "teamCode": 2, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t2.png"},
-    {"id": "liverpool", "name": "Liverpool", "shortName": "LIV", "color": "#c8102e", "teamCode": 14, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t14.png"},
-    {"id": "manchester-city", "name": "Manchester City", "shortName": "MCI", "color": "#6cabdd", "teamCode": 43, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t43.png"},
-    {"id": "manchester-united", "name": "Manchester United", "shortName": "MUN", "color": "#da291c", "teamCode": 1, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t1.png"},
-    {"id": "newcastle", "name": "Newcastle United", "shortName": "NEW", "color": "#241f20", "teamCode": 4, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t4.png"},
-    {"id": "nottingham-forest", "name": "Nottingham Forest", "shortName": "NFO", "color": "#dd0000", "teamCode": 17, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t17.png"},
-    {"id": "tottenham", "name": "Tottenham Hotspur", "shortName": "TOT", "color": "#132257", "teamCode": 6, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t6.png"},
-    {"id": "sunderland", "name": "Sunderland", "shortName": "SUN", "color": "#eb172b", "teamCode": 56, "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t56.png"},
-]
-PL_CLUB_IDS = {club["id"] for club in PL_CLUBS}
+PREDICTOR_DATA_PATH = BASE_DIR / "data" / "league-predictors.json"
+try:
+    _predictor_rows = json.loads(PREDICTOR_DATA_PATH.read_text(encoding="utf-8"))
+except Exception as exc:
+    raise RuntimeError(f"Could not load league predictor data: {exc}") from exc
+
+LEAGUE_PREDICTORS = {
+    str(row.get("id")): row
+    for row in _predictor_rows
+    if isinstance(row, dict) and row.get("id")
+}
 
 
 def clean_predictor_id(challenge_id: str) -> str:
     clean = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id or "")[:80]
-    if clean != PL_PREDICTOR_ID:
+    if clean not in LEAGUE_PREDICTORS:
         raise HTTPException(404, "Predictor not found")
     return clean
 
 
-def pl_predictor_locked_at() -> datetime:
-    return datetime.fromisoformat(PL_PREDICTOR_LOCK_AT)
+def league_predictor(challenge_id: str) -> dict:
+    return LEAGUE_PREDICTORS[clean_predictor_id(challenge_id)]
 
 
-def pl_predictor_locked() -> bool:
-    return datetime.now(timezone.utc) >= pl_predictor_locked_at()
+def predictor_locked_at(config: dict) -> datetime:
+    return datetime.fromisoformat(str(config["lockAt"]))
 
 
-def normalize_pl_ranking(ranking: list[str]) -> list[str]:
+def predictor_locked(config: dict) -> bool:
+    return datetime.now(timezone.utc) >= predictor_locked_at(config)
+
+
+def normalize_predictor_ranking(ranking: list[str], config: dict) -> list[str]:
+    clubs = config.get("clubs") or []
+    club_ids = {str(club.get("id")) for club in clubs}
     cleaned: list[str] = []
     seen: set[str] = set()
     for item in ranking or []:
         club_id = re.sub(r"[^a-z0-9_-]", "", str(item).strip().lower())
-        if club_id in PL_CLUB_IDS and club_id not in seen:
+        if club_id in club_ids and club_id not in seen:
             cleaned.append(club_id)
             seen.add(club_id)
-    if len(cleaned) != len(PL_CLUBS):
-        missing = [club["id"] for club in PL_CLUBS if club["id"] not in seen]
-        raise HTTPException(400, f"Rank all {len(PL_CLUBS)} clubs once. Missing: {', '.join(missing[:3])}.")
+    if len(cleaned) != len(clubs):
+        missing = [club["id"] for club in clubs if club["id"] not in seen]
+        raise HTTPException(400, f"Rank all {len(clubs)} clubs once. Missing: {', '.join(missing[:3])}.")
     return cleaned
 
 
@@ -2725,34 +2716,25 @@ def season_prediction_count(challenge_id: str) -> int:
         return 0
 
 
-def pl_predictor_config(request: Request | None = None) -> dict:
+def league_predictor_config(challenge_id: str, request: Request | None = None) -> dict:
+    clean_challenge = clean_predictor_id(challenge_id)
+    predictor = LEAGUE_PREDICTORS[clean_challenge]
     share_base = share_base_url(request)
     app_base = frontend_base_url(request)
     return {
-        "id": PL_PREDICTOR_ID,
-        "title": "Premier League Table Predictor",
-        "season": "2026/27",
-        "subtitle": "Rank all 20 clubs from 1st to 20th before kickoff.",
-        "lockAt": PL_PREDICTOR_LOCK_AT,
-        "locked": pl_predictor_locked(),
-        "clubs": PL_CLUBS,
-        "source": {"label": "Official Premier League clubs page", "url": PL_PREDICTOR_SOURCE_URL},
-        "entries": season_prediction_count(PL_PREDICTOR_ID),
-        "url": f"{app_base}/premier-league-predictor",
-        "shareCardUrl": f"{share_base}/api/predictors/{PL_PREDICTOR_ID}/share-card.png",
-        "marketDesign": [
-            "Who wins the Premier League?",
-            "Will Arsenal finish top 4?",
-            "Will Sunderland be relegated?",
-            "Chelsea vs Spurs: who finishes higher?",
-            "Team finish over/under 6.5 position",
-        ],
+        **predictor,
+        "subtitle": f"Rank all {len(predictor.get('clubs') or [])} clubs before kickoff.",
+        "locked": predictor_locked(predictor),
+        "source": {"label": predictor.get("sourceLabel"), "url": predictor.get("sourceUrl")},
+        "entries": season_prediction_count(clean_challenge),
+        "url": f"{app_base}{predictor.get('route')}",
+        "shareCardUrl": f"{share_base}/api/predictors/{clean_challenge}/share-card.png",
     }
 
 
-@app.get("/api/predictors/pl-2026-27/config")
-def get_pl_predictor_config(request: Request) -> dict:
-    return pl_predictor_config(request)
+@app.get("/api/predictors/{challenge_id}/config")
+def get_league_predictor_config(challenge_id: str, request: Request) -> dict:
+    return league_predictor_config(challenge_id, request)
 
 
 @app.get("/api/predictors/{challenge_id}/entry")
@@ -2773,12 +2755,13 @@ def get_season_prediction_entry(challenge_id: str, participant: str | None = Non
 @app.post("/api/predictors/{challenge_id}/entry", status_code=201)
 def save_season_prediction_entry(challenge_id: str, payload: SeasonPredictionSave) -> dict:
     clean_challenge = clean_predictor_id(challenge_id)
-    if pl_predictor_locked():
-        raise HTTPException(423, "Premier League predictor is locked.")
+    config = LEAGUE_PREDICTORS[clean_challenge]
+    if predictor_locked(config):
+        raise HTTPException(423, f"{config.get('leagueName')} predictor is locked.")
     participant = clean_person(payload.participant)
     if not participant:
         raise HTTPException(400, "Prediction entry identity is missing")
-    ranking = normalize_pl_ranking(payload.ranking)
+    ranking = normalize_predictor_ranking(payload.ranking, config)
     db = get_db()
     existing_rows = (
         db.table("season_predictions")
@@ -2802,14 +2785,16 @@ def save_season_prediction_entry(challenge_id: str, payload: SeasonPredictionSav
     }
     result = db.table("season_predictions").upsert(row, on_conflict="challenge_id,participant").execute()
     saved = result.data[0] if result.data else row
-    return {"entry": assemble_season_prediction(saved), "config": pl_predictor_config()}
+    return {"entry": assemble_season_prediction(saved), "config": league_predictor_config(clean_challenge)}
 
 
 @app.head("/api/predictors/{challenge_id}/share-card.png")
 @app.get("/api/predictors/{challenge_id}/share-card.png")
-def pl_predictor_share_card(challenge_id: str, participant: str | None = None, entry: str | None = None) -> Response:
+def league_predictor_share_card(challenge_id: str, participant: str | None = None, entry: str | None = None) -> Response:
     clean_challenge = clean_predictor_id(challenge_id)
-    ranking = [club["id"] for club in PL_CLUBS]
+    config = LEAGUE_PREDICTORS[clean_challenge]
+    clubs = config.get("clubs") or []
+    ranking = [club["id"] for club in clubs]
     submitted_at = None
     owner = clean_person(participant, "Your")
     try:
@@ -2823,7 +2808,7 @@ def pl_predictor_share_card(challenge_id: str, participant: str | None = None, e
         if rows:
             entry_row = assemble_season_prediction(rows[0])
             candidate = entry_row.get("ranking") or []
-            if isinstance(candidate, list) and len(candidate) == len(PL_CLUBS):
+            if isinstance(candidate, list) and len(candidate) == len(clubs):
                 ranking = candidate
             owner = entry_row.get("participant") or owner
             submitted_at = entry_row.get("submittedAt")
@@ -2846,13 +2831,14 @@ def pl_predictor_share_card(challenge_id: str, participant: str | None = None, e
 
         draw.rounded_rectangle((52, 52, width - 52, height - 52), radius=40, fill="#101820", outline="#243240", width=3)
         draw.text((92, 88), "probable.", fill="#eef5fb", font=h2_font)
-        draw.text((92, 152), "PREMIER LEAGUE TABLE PREDICTOR", fill="#7f91a4", font=small_font)
-        draw.text((92, 190), f"{owner}'s 2026/27 table", fill="#f4f8fb", font=title_font)
+        league_name = str(config.get("leagueName") or "League")
+        draw.text((92, 152), f"{league_name.upper()} TABLE PREDICTOR", fill="#7f91a4", font=small_font)
+        draw.text((92, 190), f"{owner}'s {config.get('season')} table", fill="#f4f8fb", font=title_font)
         badge = "Submitted" if submitted_at else "Draft preview"
         draw.rounded_rectangle((892, 138, 1086, 188), radius=18, fill="#0f559b")
         draw.text((925, 150), badge, fill="#eef5fb", font=small_font)
 
-        club_by_id = {club["id"]: club for club in PL_CLUBS}
+        club_by_id = {club["id"]: club for club in clubs}
         badge_cache: dict[str, Image.Image | None] = {}
 
         def get_badge(club: dict) -> Image.Image | None:
@@ -2862,9 +2848,12 @@ def pl_predictor_share_card(challenge_id: str, participant: str | None = None, e
             if url in badge_cache:
                 return badge_cache[url]
             try:
-                badge_response = httpx.get(url, timeout=6.0, follow_redirects=True)
-                badge_response.raise_for_status()
-                badge = Image.open(io.BytesIO(badge_response.content)).convert("RGBA")
+                if url.startswith("/"):
+                    badge = Image.open(BASE_DIR / "public" / url.lstrip("/")).convert("RGBA")
+                else:
+                    badge_response = httpx.get(url, timeout=6.0, follow_redirects=True)
+                    badge_response.raise_for_status()
+                    badge = Image.open(io.BytesIO(badge_response.content)).convert("RGBA")
                 badge.thumbnail((42, 42), Image.LANCZOS)
                 badge_cache[url] = badge
                 return badge
@@ -2874,23 +2863,23 @@ def pl_predictor_share_card(challenge_id: str, participant: str | None = None, e
 
         row_h = 55
         top = 286
-        for index, club_id in enumerate(ranking[:20]):
+        zones = config.get("zones") or []
+        for index, club_id in enumerate(ranking[:len(clubs)]):
             club = club_by_id.get(club_id)
             if not club:
                 continue
             y = top + index * row_h
-            zone = ""
-            if index == 0:
-                zone = "CHAMPION"
-                fill = "#123557"
-            elif index <= 3:
-                zone = "UCL"
+            rank = index + 1
+            zone_row = next((zone for zone in zones if int(zone.get("from", 0)) <= rank <= int(zone.get("to", 0))), None)
+            zone = str((zone_row or {}).get("label") or "")
+            zone_class = str((zone_row or {}).get("className") or "")
+            if zone_class in {"champion", "ucl"}:
                 fill = "#0d2439"
-            elif index <= 6:
-                zone = "EUROPE"
+            elif zone_class in {"europa", "conference"}:
                 fill = "#102d2c"
-            elif index >= 17:
-                zone = "RELEGATION"
+            elif zone_class == "playoff":
+                fill = "#302719"
+            elif zone_class == "relegation":
                 fill = "#341a20"
             else:
                 fill = "#0b141b"
@@ -2909,8 +2898,10 @@ def pl_predictor_share_card(challenge_id: str, participant: str | None = None, e
                 draw.text((187, y + 14), initial, fill="#051018" if club["color"] in {"#ffffff", "#ffcd00", "#f6a800"} else "#ffffff", font=small_font)
             draw.text((236, y + 9), club["name"], fill="#eff6fb", font=body_font)
             if zone:
-                draw.text((928, y + 13), zone, fill="#5ab0ff" if zone != "RELEGATION" else "#ff6673", font=small_font)
-        footer = "Champion · Top 4 · Europe · Relegation"
+                zone_color = "#ff6673" if zone_class == "relegation" else "#e0a756" if zone_class == "playoff" else "#5ab0ff"
+                zone_label = zone.upper().replace("CHAMPIONS LEAGUE", "UCL").replace("EUROPA LEAGUE", "EUROPA").replace("CONFERENCE LEAGUE", "UECL")
+                draw.text((880, y + 13), zone_label, fill=zone_color, font=small_font)
+        footer = " · ".join(dict.fromkeys(str(zone.get("label")) for zone in zones))
         draw.text((92, height - 112), footer, fill="#7f91a4", font=small_font)
         buffer = io.BytesIO()
         image.save(buffer, "PNG")

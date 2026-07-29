@@ -13,6 +13,7 @@ import { animate, stagger } from "motion";
 import { supabase } from "./supabase.js";
 import { DEMO_GROUP_ID, buildDemoGroup, simulateDemoApi, resolveDemoMarket } from "./demo.js";
 import { startTutorial, stopTutorial, tutorialOnRender } from "./tutorial.js";
+import { DEFAULT_PREDICTOR_ID, LEAGUE_PREDICTORS, LEAGUE_PREDICTOR_LIST } from "./league-predictors.js";
 
 const probableCursorShadePlugin = {
   id: "probableCursorShade",
@@ -329,7 +330,6 @@ const STORAGE_KEYS = {
   devAuth: "probable_dev_auth",
   bootCache: "probable_boot_cache_v1",
   groupAddons: "probable_group_addons_v1",
-  plPredictorDraft: "probable_pl_2026_27_draft_v1",
 };
 
 const state = {
@@ -381,6 +381,7 @@ const state = {
   bracketRemoteLoaded: false,
   bracketLastPickedId: "",
   bracketSaving: false,
+  activePredictorId: DEFAULT_PREDICTOR_ID,
   plRanking: [],
   plEntryId: "",
   plSubmitted: false,
@@ -482,36 +483,13 @@ const BRACKET_TEAM_CHANCES = {
   "South Africa": 0.5,
 };
 
-const PL_PREDICTOR = {
-  id: "pl-2026-27",
-  title: "Premier League Table Predictor",
-  season: "2026/27",
-  lockAt: "2026-08-15T11:30:00+00:00",
-  sourceUrl: "https://www.premierleague.com/en/clubs",
-};
+function activeLeaguePredictor() {
+  return LEAGUE_PREDICTORS[state.activePredictorId] || LEAGUE_PREDICTORS[DEFAULT_PREDICTOR_ID];
+}
 
-const PL_CLUBS = [
-  { id: "arsenal", name: "Arsenal", shortName: "ARS", color: "#ef0107", teamCode: 3, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t3.png" },
-  { id: "aston-villa", name: "Aston Villa", shortName: "AVL", color: "#95bfe5", teamCode: 7, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t7.png" },
-  { id: "bournemouth", name: "AFC Bournemouth", shortName: "BOU", color: "#da291c", teamCode: 91, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t91.png" },
-  { id: "brentford", name: "Brentford", shortName: "BRE", color: "#e30613", teamCode: 94, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t94.png" },
-  { id: "brighton", name: "Brighton & Hove Albion", shortName: "BHA", color: "#0057b8", teamCode: 36, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t36.png" },
-  { id: "chelsea", name: "Chelsea", shortName: "CHE", color: "#034694", teamCode: 8, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t8.png" },
-  { id: "coventry", name: "Coventry City", shortName: "COV", color: "#77bbff", teamCode: 9, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t9.png" },
-  { id: "crystal-palace", name: "Crystal Palace", shortName: "CRY", color: "#1b458f", teamCode: 31, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t31.png" },
-  { id: "everton", name: "Everton", shortName: "EVE", color: "#003399", teamCode: 11, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t11.png" },
-  { id: "fulham", name: "Fulham", shortName: "FUL", color: "#ffffff", teamCode: 54, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t54.png" },
-  { id: "hull-city", name: "Hull City", shortName: "HUL", color: "#f6a800", teamCode: 88, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t88.png" },
-  { id: "ipswich-town", name: "Ipswich Town", shortName: "IPS", color: "#0057b8", teamCode: 40, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t40.png" },
-  { id: "leeds-united", name: "Leeds United", shortName: "LEE", color: "#ffcd00", teamCode: 2, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t2.png" },
-  { id: "liverpool", name: "Liverpool", shortName: "LIV", color: "#c8102e", teamCode: 14, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t14.png" },
-  { id: "manchester-city", name: "Manchester City", shortName: "MCI", color: "#6cabdd", teamCode: 43, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t43.png" },
-  { id: "manchester-united", name: "Manchester United", shortName: "MUN", color: "#da291c", teamCode: 1, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t1.png" },
-  { id: "newcastle", name: "Newcastle United", shortName: "NEW", color: "#241f20", teamCode: 4, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t4.png" },
-  { id: "nottingham-forest", name: "Nottingham Forest", shortName: "NFO", color: "#dd0000", teamCode: 17, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t17.png" },
-  { id: "tottenham", name: "Tottenham Hotspur", shortName: "TOT", color: "#132257", teamCode: 6, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t6.png" },
-  { id: "sunderland", name: "Sunderland", shortName: "SUN", color: "#eb172b", teamCode: 56, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t56.png" },
-];
+function leaguePredictorDraftKey(predictorId = state.activePredictorId) {
+  return `probable_${predictorId.replace(/[^a-z0-9_-]/gi, "_")}_draft_v1`;
+}
 
 const GENERAL_MARKET_POOL = [
   {
@@ -522,14 +500,17 @@ const GENERAL_MARKET_POOL = [
     eyebrow: "General pool",
     prize: BRACKET_CHALLENGE.prize,
   },
-  {
-    id: "pl-table-predictor",
-    type: "pl-predictor",
-    title: "Premier League Table Predictor",
-    subtitle: "Rank all 20 clubs before kickoff.",
+  ...LEAGUE_PREDICTOR_LIST.map(predictor => ({
+    id: `${predictor.id}-table-predictor`,
+    type: "league-predictor",
+    predictorId: predictor.id,
+    route: predictor.route,
+    leagueMark: predictor.leagueMark,
+    title: predictor.title,
+    subtitle: `Rank all ${predictor.clubs.length} clubs before kickoff.`,
     eyebrow: "General pool",
     prize: "Season contest",
-  },
+  })),
 ];
 
 document.querySelector("#app").innerHTML = `
@@ -1119,8 +1100,10 @@ function routeFromLocation() {
   if (parts[0] === "admin") return { name: "admin" };
   if (parts[0] === "portfolio") return { name: "positions" };
   if (parts[0] === "positions") return { name: "positions", legacyPath: "/portfolio" };
-  if (parts[0] === "premier-league-predictor") return {
+  const leaguePredictor = LEAGUE_PREDICTOR_LIST.find(predictor => predictor.route === path);
+  if (leaguePredictor) return {
     name: "plPredictor",
+    predictorId: leaguePredictor.id,
     entry: url.searchParams.get("entry") || "",
     participant: url.searchParams.get("participant") || "",
   };
@@ -1232,9 +1215,17 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
     state.trade = emptyTrade();
     state.sharedBracketEntryId = route.entry || "";
   } else if (route.name === "plPredictor") {
+    const nextPredictorId = LEAGUE_PREDICTORS[route.predictorId] ? route.predictorId : DEFAULT_PREDICTOR_ID;
+    if (state.activePredictorId !== nextPredictorId) {
+      state.plRanking = [];
+      state.plEntryId = "";
+      state.plSubmitted = false;
+      state.plRemoteLoaded = false;
+    }
     state.shell = "app";
     state.view = "plPredictor";
     state.trade = emptyTrade();
+    state.activePredictorId = nextPredictorId;
     state.plSharedEntryId = route.entry || "";
   } else if (route.name === "app") {
     state.shell = "app";
@@ -1282,7 +1273,7 @@ function routeToBracket({ replace = false } = {}) {
 }
 
 function routeToPremierLeaguePredictor({ replace = false } = {}) {
-  navigateTo("/premier-league-predictor", { replace });
+  navigateTo(activeLeaguePredictor().route, { replace });
 }
 
 function routeToMarket(marketId, { replace = false } = {}) {
@@ -1534,7 +1525,17 @@ async function onGlobalClick(e) {
     return;
   }
 
-  if (e.target.closest("[data-go-pl-predictor]")) {
+  const leaguePredictorButton = e.target.closest("[data-go-league-predictor], [data-go-pl-predictor]");
+  if (leaguePredictorButton) {
+    const predictorId = leaguePredictorButton.dataset.goLeaguePredictor || DEFAULT_PREDICTOR_ID;
+    if (state.activePredictorId !== predictorId) {
+      state.activePredictorId = LEAGUE_PREDICTORS[predictorId] ? predictorId : DEFAULT_PREDICTOR_ID;
+      state.plRanking = [];
+      state.plEntryId = "";
+      state.plSubmitted = false;
+      state.plRemoteLoaded = false;
+      state.plSharedEntryId = "";
+    }
     state.shell = "app";
     state.view = "plPredictor";
     state.trade = emptyTrade();
@@ -2499,6 +2500,11 @@ function runPendingAuthAction() {
     return;
   }
   if (action === "submit-pl-predictor") {
+    const pendingPredictorId = sessionStorage.getItem("probable_pending_predictor_id");
+    if (pendingPredictorId && LEAGUE_PREDICTORS[pendingPredictorId]) {
+      state.activePredictorId = pendingPredictorId;
+    }
+    sessionStorage.removeItem("probable_pending_predictor_id");
     state.shell = "app";
     state.view = "plPredictor";
     routeToPremierLeaguePredictor();
@@ -4542,7 +4548,7 @@ function renderGeneralMarketPoolModal() {
 
 function generalMarketPoolRow(item, group) {
   const added = group?.id ? groupAddonIds(group.id).includes(item.id) : false;
-  const icon = item.type === "pl-predictor" ? "20" : "🏆";
+  const icon = item.type === "league-predictor" ? item.leagueMark : "🏆";
   return `
     <article class="general-market-pool-row">
       <div class="general-market-pool-icon" aria-hidden="true">${esc(icon)}</div>
@@ -4559,11 +4565,11 @@ function generalMarketPoolRow(item, group) {
 }
 
 function premierLeagueClubById(id) {
-  return PL_CLUBS.find(club => club.id === id) || null;
+  return activeLeaguePredictor().clubs.find(club => club.id === id) || null;
 }
 
 function normalizePremierLeagueRanking(ranking) {
-  const valid = new Set(PL_CLUBS.map(club => club.id));
+  const valid = new Set(activeLeaguePredictor().clubs.map(club => club.id));
   const seen = new Set();
   const cleaned = [];
   (Array.isArray(ranking) ? ranking : []).forEach(id => {
@@ -4579,7 +4585,7 @@ function normalizePremierLeagueRanking(ranking) {
 function loadPremierLeagueDraftIntoState() {
   if (state.plRemoteLoaded) return;
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.plPredictorDraft);
+    const raw = localStorage.getItem(leaguePredictorDraftKey());
     const parsed = raw ? JSON.parse(raw) : {};
     const savedRanking = parsed.mode === "sequential" || parsed.submitted
       ? parsed.ranking
@@ -4593,7 +4599,7 @@ function loadPremierLeagueDraftIntoState() {
 }
 
 function savePremierLeagueDraft() {
-  localStorage.setItem(STORAGE_KEYS.plPredictorDraft, JSON.stringify({
+  localStorage.setItem(leaguePredictorDraftKey(), JSON.stringify({
     ranking: normalizePremierLeagueRanking(state.plRanking),
     mode: "sequential",
     submitted: state.plSubmitted,
@@ -4603,15 +4609,12 @@ function savePremierLeagueDraft() {
 }
 
 function premierLeaguePredictorLocked() {
-  return Date.now() >= Date.parse(PL_PREDICTOR.lockAt);
+  return Date.now() >= Date.parse(activeLeaguePredictor().lockAt);
 }
 
 function premierLeagueZone(rank) {
-  if (rank === 1) return { label: "Champion · UCL", className: "champion" };
-  if (rank >= 2 && rank <= 5) return { label: "Champions League", className: "ucl" };
-  if (rank >= 6 && rank <= 7) return { label: "Europa League", className: "europa" };
-  if (rank === 8) return { label: "Conference League", className: "conference" };
-  if (rank >= 18) return { label: "Relegation", className: "relegation" };
+  const zone = activeLeaguePredictor().zones.find(item => rank >= item.from && rank <= item.to);
+  if (zone) return zone;
   return { label: "Mid-table", className: "mid" };
 }
 
@@ -4627,7 +4630,7 @@ function selectPremierLeagueClub(clubId) {
   }
   const ranking = normalizePremierLeagueRanking(state.plRanking);
   const club = premierLeagueClubById(clubId);
-  if (!club || ranking.includes(club.id) || ranking.length >= PL_CLUBS.length) return;
+  if (!club || ranking.includes(club.id) || ranking.length >= activeLeaguePredictor().clubs.length) return;
   ranking.push(club.id);
   state.plRanking = ranking;
   state.plSubmitted = false;
@@ -4670,22 +4673,25 @@ function premierLeagueClubBadge(club, small = false) {
 }
 
 function renderPremierLeaguePredictor() {
+  const predictor = activeLeaguePredictor();
   loadPremierLeagueDraftIntoState();
   state.plRanking = normalizePremierLeagueRanking(state.plRanking);
   const locked = premierLeaguePredictorLocked();
   const status = locked ? "Locked" : state.plSubmitted ? "Submitted" : "Draft";
   const picked = new Set(state.plRanking);
-  const nextRank = Math.min(state.plRanking.length + 1, PL_CLUBS.length);
-  const complete = state.plRanking.length === PL_CLUBS.length;
-  const lockLabel = new Date(PL_PREDICTOR.lockAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const nextRank = Math.min(state.plRanking.length + 1, activeLeaguePredictor().clubs.length);
+  const complete = state.plRanking.length === activeLeaguePredictor().clubs.length;
+  const lockLabel = new Date(activeLeaguePredictor().lockAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   dom.mainContent.innerHTML = `
     <section class="pl-predictor-page">
       <header class="pl-predictor-hero motion-item">
         <div class="pl-predictor-identity">
-          <img class="pl-league-logo" src="/assets/premier-league-logo.svg" alt="Premier League" />
+          ${predictor.logoUrl
+            ? `<img class="pl-league-logo" src="${esc(predictor.logoUrl)}" alt="${esc(predictor.leagueName)}" />`
+            : `<div class="pl-league-wordmark" aria-label="${esc(predictor.leagueName)}">${esc(predictor.leagueMark)}</div>`}
           <span class="pl-identity-divider" aria-hidden="true"></span>
           <div>
-            <p class="eyebrow">Probable challenge · ${esc(PL_PREDICTOR.season)}</p>
+            <p class="eyebrow">Probable challenge · ${esc(activeLeaguePredictor().season)}</p>
             <h1>Predict the table</h1>
             <p class="pl-predictor-subtitle">Pick your champion first, then fill the table one club at a time.</p>
           </div>
@@ -4708,7 +4714,7 @@ function renderPremierLeaguePredictor() {
               <p>Your prediction</p>
               <strong>Final table</strong>
             </div>
-            <span>${state.plRanking.length} of ${PL_CLUBS.length} picked</span>
+            <span>${state.plRanking.length} of ${activeLeaguePredictor().clubs.length} picked</span>
           </div>
           <div class="pl-ranking-head">
             <span>Pos</span>
@@ -4716,18 +4722,14 @@ function renderPremierLeaguePredictor() {
             <span></span>
           </div>
           <div class="pl-ranking-list">
-            ${Array.from({ length: PL_CLUBS.length }, (_, index) => premierLeagueRankingRow(state.plRanking[index] || "", index, { locked, current: index === state.plRanking.length })).join("")}
+            ${Array.from({ length: activeLeaguePredictor().clubs.length }, (_, index) => premierLeagueRankingRow(state.plRanking[index] || "", index, { locked, current: index === state.plRanking.length })).join("")}
           </div>
           <div class="pl-zone-strip">
-            <span class="champion">1 Champion · UCL</span>
-            <span class="ucl">2-5 Champions League</span>
-            <span class="europa">6-7 Europa League</span>
-            <span class="conference">8 Conference League</span>
-            <span class="relegation">18-20 Relegation</span>
+            ${predictor.zones.map(zone => `<span class="${esc(zone.className)}">${zone.from === zone.to ? zone.from : `${zone.from}-${zone.to}`} ${esc(zone.label)}</span>`).join("")}
           </div>
         </div>
 
-        <aside class="pl-club-picker" aria-label="Available Premier League clubs">
+        <aside class="pl-club-picker" aria-label="Available ${esc(predictor.leagueName)} clubs">
           <div class="pl-club-picker-head">
             <div>
               <p class="eyebrow">${complete ? "Table complete" : `Pick ${esc(premierLeagueOrdinal(nextRank))}`}</p>
@@ -4735,11 +4737,11 @@ function renderPremierLeaguePredictor() {
             </div>
             <button type="button" data-pl-undo ${locked || !state.plRanking.length ? "disabled" : ""}>Undo</button>
           </div>
-          <div class="pl-pick-progress" aria-label="${state.plRanking.length} of ${PL_CLUBS.length} clubs picked">
-            <span style="width:${(state.plRanking.length / PL_CLUBS.length) * 100}%"></span>
+          <div class="pl-pick-progress" aria-label="${state.plRanking.length} of ${activeLeaguePredictor().clubs.length} clubs picked">
+            <span style="width:${(state.plRanking.length / activeLeaguePredictor().clubs.length) * 100}%"></span>
           </div>
           <div class="pl-club-picker-grid">
-            ${PL_CLUBS.map(club => {
+            ${activeLeaguePredictor().clubs.map(club => {
               const selected = picked.has(club.id);
               return `
                 <button class="pl-club-choice ${selected ? "selected" : ""}" type="button"
@@ -4755,7 +4757,7 @@ function renderPremierLeaguePredictor() {
           <p class="pl-picker-note">${complete ? "Every club has a position. Check the table before submitting." : "Select clubs in the exact order you think they will finish."}</p>
         </aside>
       </div>
-      <p class="pl-attribution">Premier League club marks are used for identification.</p>
+      <p class="pl-attribution">${esc(predictor.leagueName)} club marks are used for identification. Club list verified against the official league source.</p>
     </section>
   `;
 }
@@ -4790,7 +4792,7 @@ async function loadRemotePremierLeagueEntry({ refresh = false } = {}) {
   const params = new URLSearchParams();
   if (state.plSharedEntryId) params.set("entry", state.plSharedEntryId);
   else params.set("participant", authDisplayName());
-  const data = await api(`/api/predictors/${PL_PREDICTOR.id}/entry?${params.toString()}`);
+  const data = await api(`/api/predictors/${activeLeaguePredictor().id}/entry?${params.toString()}`);
   if (data.entry?.ranking?.length) {
     state.plRanking = normalizePremierLeagueRanking(data.entry.ranking);
     state.plEntryId = data.entry.id || "";
@@ -4810,18 +4812,19 @@ async function submitPremierLeagueEntry() {
   }
   state.plRanking = normalizePremierLeagueRanking(state.plRanking);
   savePremierLeagueDraft();
-  if (state.plRanking.length !== PL_CLUBS.length) {
-    toast(`Pick all ${PL_CLUBS.length} clubs before submitting.`);
+  if (state.plRanking.length !== activeLeaguePredictor().clubs.length) {
+    toast(`Pick all ${activeLeaguePredictor().clubs.length} clubs before submitting.`);
     return;
   }
   if (!isLoggedIn()) {
+    sessionStorage.setItem("probable_pending_predictor_id", activeLeaguePredictor().id);
     requireLogin("submit-pl-predictor");
     return;
   }
   state.plSaving = true;
   renderPremierLeaguePredictor();
   try {
-    const data = await api(`/api/predictors/${PL_PREDICTOR.id}/entry`, {
+    const data = await api(`/api/predictors/${activeLeaguePredictor().id}/entry`, {
       method: "POST",
       body: JSON.stringify({
         participant: authDisplayName(),
@@ -4834,7 +4837,7 @@ async function submitPremierLeagueEntry() {
     state.plSubmitted = Boolean(data.entry?.submittedAt);
     state.plRemoteLoaded = true;
     savePremierLeagueDraft();
-    toast("Premier League table saved.");
+    toast(`${activeLeaguePredictor().leagueName} table saved.`);
   } catch (err) {
     toast(err.message || "Could not save predictor.");
   } finally {
@@ -4844,7 +4847,7 @@ async function submitPremierLeagueEntry() {
 }
 
 function premierLeagueShareUrl() {
-  const base = `${location.origin}/premier-league-predictor`;
+  const base = `${location.origin}${activeLeaguePredictor().route}`;
   return state.plEntryId ? `${base}?entry=${encodeURIComponent(state.plEntryId)}` : base;
 }
 
@@ -4853,17 +4856,17 @@ function premierLeagueShareCardUrl() {
   if (state.plEntryId) params.set("entry", state.plEntryId);
   else if (authDisplayName()) params.set("participant", authDisplayName());
   params.set("t", String(Date.now()));
-  return `${API}/api/predictors/${PL_PREDICTOR.id}/share-card.png?${params.toString()}`;
+  return `${API}/api/predictors/${activeLeaguePredictor().id}/share-card.png?${params.toString()}`;
 }
 
 async function openPremierLeagueShareModal() {
   openModal("embed");
-  dom.embedModalOverlay.querySelector(".modal-title").textContent = "Share Premier League predictor";
+  dom.embedModalOverlay.querySelector(".modal-title").textContent = `Share ${activeLeaguePredictor().leagueName} predictor`;
   const link = premierLeagueShareUrl();
   dom.embedModalBody.innerHTML = `
     <div class="embed-share-layout pl-share-layout">
       <div class="embed-preview-frame share-og-preview-frame pl-share-preview-frame">
-        <img class="share-og-preview-img" src="${esc(premierLeagueShareCardUrl())}" alt="Premier League table share preview" />
+        <img class="share-og-preview-img" src="${esc(premierLeagueShareCardUrl())}" alt="${esc(activeLeaguePredictor().leagueName)} table share preview" />
       </div>
       <div class="embed-share-controls">
         <div class="share-section">
@@ -4896,8 +4899,8 @@ async function sharePremierLeagueLink() {
   }
   try {
     await navigator.share({
-      title: PL_PREDICTOR.title,
-      text: "My Premier League table prediction",
+      title: activeLeaguePredictor().title,
+      text: `My ${activeLeaguePredictor().leagueName} table prediction`,
       url: link,
     });
   } catch (err) {
@@ -5091,12 +5094,12 @@ function generalMarketCard(item) {
       </article>
     `;
   }
-  if (item.type === "pl-predictor") {
+  if (item.type === "league-predictor") {
     return `
-      <article class="event-card general-market-card motion-item" data-go-pl-predictor>
+      <article class="event-card general-market-card motion-item" data-go-league-predictor="${esc(item.predictorId)}">
         <div class="event-card-inner">
           <div class="event-card-head">
-            <div class="event-thumb event-thumb-image" aria-hidden="true">20</div>
+            <div class="event-thumb event-thumb-image general-league-mark" aria-hidden="true">${esc(item.leagueMark)}</div>
             <div class="event-title-wrap">
               <p class="event-title">${esc(item.title)}</p>
             </div>
@@ -8554,9 +8557,7 @@ function renderPositions() {
 function portfolioChallengesHtml() {
   const bracketComplete = bracketCompletion().complete;
   const bracketStatus = state.bracketSubmitted ? "Submitted" : bracketComplete ? "Ready" : "Draft";
-  const plStatus = premierLeaguePredictorLocked() ? "Locked" : state.plSubmitted ? "Submitted" : "Draft";
   const bracketChampion = bracketDisplayWinner("final") || "No champion yet";
-  const plTop = premierLeagueClubById(normalizePremierLeagueRanking(state.plRanking)[0])?.name || "No table yet";
   return `
     <section class="portfolio-challenges motion-item" aria-label="Season challenges">
       <div class="portfolio-challenges-head">
@@ -8575,17 +8576,41 @@ function portfolioChallengesHtml() {
           </span>
           <small>${esc(bracketChampion)}</small>
         </button>
-        <button class="portfolio-challenge-card" type="button" data-go-pl-predictor>
-          <span class="portfolio-challenge-icon">20</span>
-          <span>
-            <strong>${esc(PL_PREDICTOR.title)}</strong>
-            <em>${esc(PL_PREDICTOR.season)} · ${esc(plStatus)}</em>
-          </span>
-          <small>${esc(plTop)} top</small>
-        </button>
+        ${LEAGUE_PREDICTOR_LIST.map(predictor => portfolioLeaguePredictorCard(predictor)).join("")}
       </div>
     </section>
   `;
+}
+
+function portfolioLeaguePredictorCard(predictor) {
+  let ranking = [];
+  let submitted = false;
+  if (predictor.id === state.activePredictorId) {
+    ranking = normalizePremierLeagueRanking(state.plRanking);
+    submitted = state.plSubmitted;
+  } else {
+    try {
+      const saved = JSON.parse(localStorage.getItem(leaguePredictorDraftKey(predictor.id)) || "{}");
+      const validIds = new Set(predictor.clubs.map(club => club.id));
+      ranking = (Array.isArray(saved.ranking) ? saved.ranking : [])
+        .filter((id, index, rows) => validIds.has(id) && rows.indexOf(id) === index);
+      submitted = Boolean(saved.submitted);
+    } catch {
+      ranking = [];
+    }
+  }
+  const locked = Date.now() >= Date.parse(predictor.lockAt);
+  const status = locked ? "Locked" : submitted ? "Submitted" : ranking.length ? "Draft" : "Open";
+  const leader = predictor.clubs.find(club => club.id === ranking[0])?.name || "Start your table";
+  return `
+    <button class="portfolio-challenge-card" type="button" data-go-league-predictor="${esc(predictor.id)}">
+      <span class="portfolio-challenge-icon league-mark">${esc(predictor.leagueMark)}</span>
+      <span>
+        <strong>${esc(predictor.title)}</strong>
+        <em>${esc(predictor.season)} · ${esc(status)}</em>
+      </span>
+      <small>${esc(leader)}</small>
+    </button>`;
 }
 
 function portfolioGroupSwitcherHtml(snapshot = portfolioSnapshot()) {
