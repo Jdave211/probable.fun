@@ -327,6 +327,7 @@ const STORAGE_KEYS = {
   devAuth: "probable_dev_auth",
   bootCache: "probable_boot_cache_v1",
   groupAddons: "probable_group_addons_v1",
+  plPredictorDraft: "probable_pl_2026_27_draft_v1",
 };
 
 const state = {
@@ -378,6 +379,13 @@ const state = {
   bracketRemoteLoaded: false,
   bracketLastPickedId: "",
   bracketSaving: false,
+  plRanking: [],
+  plEntryId: "",
+  plSubmitted: false,
+  plRemoteLoaded: false,
+  plSaving: false,
+  plDraggedIndex: null,
+  plSharedEntryId: "",
   pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, tradeMarketId: null, resolveMarketId: null },
   loaded: false,
 };
@@ -469,6 +477,37 @@ const BRACKET_TEAM_CHANCES = {
   "South Africa": 0.5,
 };
 
+const PL_PREDICTOR = {
+  id: "pl-2026-27",
+  title: "Premier League Table Predictor",
+  season: "2026/27",
+  lockAt: "2026-08-15T11:30:00+00:00",
+  sourceUrl: "https://www.premierleague.com/en/clubs",
+};
+
+const PL_CLUBS = [
+  { id: "arsenal", name: "Arsenal", shortName: "ARS", color: "#ef0107", teamCode: 3, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t3.png" },
+  { id: "aston-villa", name: "Aston Villa", shortName: "AVL", color: "#95bfe5", teamCode: 7, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t7.png" },
+  { id: "bournemouth", name: "AFC Bournemouth", shortName: "BOU", color: "#da291c", teamCode: 91, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t91.png" },
+  { id: "brentford", name: "Brentford", shortName: "BRE", color: "#e30613", teamCode: 94, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t94.png" },
+  { id: "brighton", name: "Brighton & Hove Albion", shortName: "BHA", color: "#0057b8", teamCode: 36, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t36.png" },
+  { id: "chelsea", name: "Chelsea", shortName: "CHE", color: "#034694", teamCode: 8, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t8.png" },
+  { id: "coventry", name: "Coventry City", shortName: "COV", color: "#77bbff", teamCode: 9, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t9.png" },
+  { id: "crystal-palace", name: "Crystal Palace", shortName: "CRY", color: "#1b458f", teamCode: 31, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t31.png" },
+  { id: "everton", name: "Everton", shortName: "EVE", color: "#003399", teamCode: 11, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t11.png" },
+  { id: "fulham", name: "Fulham", shortName: "FUL", color: "#ffffff", teamCode: 54, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t54.png" },
+  { id: "hull-city", name: "Hull City", shortName: "HUL", color: "#f6a800", teamCode: 88, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t88.png" },
+  { id: "ipswich-town", name: "Ipswich Town", shortName: "IPS", color: "#0057b8", teamCode: 40, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t40.png" },
+  { id: "leeds-united", name: "Leeds United", shortName: "LEE", color: "#ffcd00", teamCode: 2, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t2.png" },
+  { id: "liverpool", name: "Liverpool", shortName: "LIV", color: "#c8102e", teamCode: 14, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t14.png" },
+  { id: "manchester-city", name: "Manchester City", shortName: "MCI", color: "#6cabdd", teamCode: 43, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t43.png" },
+  { id: "manchester-united", name: "Manchester United", shortName: "MUN", color: "#da291c", teamCode: 1, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t1.png" },
+  { id: "newcastle", name: "Newcastle United", shortName: "NEW", color: "#241f20", teamCode: 4, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t4.png" },
+  { id: "nottingham-forest", name: "Nottingham Forest", shortName: "NFO", color: "#dd0000", teamCode: 17, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t17.png" },
+  { id: "tottenham", name: "Tottenham Hotspur", shortName: "TOT", color: "#132257", teamCode: 6, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t6.png" },
+  { id: "sunderland", name: "Sunderland", shortName: "SUN", color: "#eb172b", teamCode: 56, logoUrl: "https://resources.premierleague.com/premierleague/badges/100/t56.png" },
+];
+
 const GENERAL_MARKET_POOL = [
   {
     id: "world-cup-bracket",
@@ -477,6 +516,14 @@ const GENERAL_MARKET_POOL = [
     subtitle: "Free-to-enter knockout bracket contest.",
     eyebrow: "General pool",
     prize: BRACKET_CHALLENGE.prize,
+  },
+  {
+    id: "pl-table-predictor",
+    type: "pl-predictor",
+    title: "Premier League Table Predictor",
+    subtitle: "Rank all 20 clubs before kickoff.",
+    eyebrow: "General pool",
+    prize: "Season contest",
   },
 ];
 
@@ -808,6 +855,10 @@ document.addEventListener("click", onTradeAmountChipClick, true);
 document.addEventListener("change", onGlobalChange);
 document.addEventListener("input", onGlobalInput);
 document.addEventListener("submit", onGlobalSubmit);
+document.addEventListener("dragstart", onPremierLeagueDragStart);
+document.addEventListener("dragover", onPremierLeagueDragOver);
+document.addEventListener("drop", onPremierLeagueDrop);
+document.addEventListener("dragend", onPremierLeagueDragEnd);
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
     closeModal("group");
@@ -844,7 +895,7 @@ async function init() {
     const savedWantsWelcome = savedShell === "welcome" && initialRoute.name === "welcome";
     if (state.authUser && savedGroup) state.currentGroupId = savedGroup;
     const isEmbedRoute = initialRoute.name === "embedMarket" || initialRoute.name === "embedEvent";
-    if (state.authUser && !isEmbedRoute && !state.inviteToken && !savedWantsWelcome && (initialRoute.name === "app" || initialRoute.name === "leaderboard" || initialRoute.name === "admin" || savedShell === "app" || savedGroup || state.sharedMarketId)) {
+    if (state.authUser && !isEmbedRoute && !state.inviteToken && !savedWantsWelcome && (initialRoute.name === "app" || initialRoute.name === "leaderboard" || initialRoute.name === "admin" || initialRoute.name === "plPredictor" || savedShell === "app" || savedGroup || state.sharedMarketId)) {
       state.shell = "app";
       state.view = appViewFromRouteOrSaved(initialRoute, savedView);
       if (initialRoute.name === "welcome") {
@@ -900,6 +951,11 @@ async function loadInitialAppData() {
   if (state.view === "bracket" && !state.sharedMarketId && !state.inviteToken) {
     loadBracketEntryIntoState();
     if (isLoggedIn() || state.sharedBracketEntryId) void loadRemoteBracketEntry({ refresh: true });
+    return;
+  }
+  if (state.view === "plPredictor" && !state.sharedMarketId && !state.inviteToken) {
+    loadPremierLeagueDraftIntoState();
+    if (isLoggedIn() || state.plSharedEntryId) void loadRemotePremierLeagueEntry({ refresh: true });
     return;
   }
   if (state.sharedMarketId) {
@@ -1021,6 +1077,11 @@ function routeFromLocation() {
   if (parts[0] === "admin") return { name: "admin" };
   if (parts[0] === "portfolio") return { name: "positions" };
   if (parts[0] === "positions") return { name: "positions", legacyPath: "/portfolio" };
+  if (parts[0] === "premier-league-predictor") return {
+    name: "plPredictor",
+    entry: url.searchParams.get("entry") || "",
+    participant: url.searchParams.get("participant") || "",
+  };
   if (parts[0] === "b" && parts[1]) return {
     name: "bracket",
     entry: parts[1],
@@ -1073,6 +1134,7 @@ function shouldHoldAppShell() {
     route.name === "admin" ||
     route.name === "positions" ||
     route.name === "bracket" ||
+    route.name === "plPredictor" ||
     route.name === "market" ||
     route.name === "embedMarket" ||
     route.name === "embedEvent" ||
@@ -1087,6 +1149,7 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
   state.inviteError = "";
   state.sharedMarketId = null;
   state.sharedBracketEntryId = "";
+  state.plSharedEntryId = "";
   state.joinPreFill = null;
   state.embedRoute = null;
 
@@ -1126,6 +1189,11 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
     state.view = "bracket";
     state.trade = emptyTrade();
     state.sharedBracketEntryId = route.entry || "";
+  } else if (route.name === "plPredictor") {
+    state.shell = "app";
+    state.view = "plPredictor";
+    state.trade = emptyTrade();
+    state.plSharedEntryId = route.entry || "";
   } else if (route.name === "app") {
     state.shell = "app";
     state.view = "dashboard";
@@ -1171,6 +1239,10 @@ function routeToBracket({ replace = false } = {}) {
   navigateTo("/bracket", { replace });
 }
 
+function routeToPremierLeaguePredictor({ replace = false } = {}) {
+  navigateTo("/premier-league-predictor", { replace });
+}
+
 function routeToMarket(marketId, { replace = false } = {}) {
   navigateTo(`/market/${encodeURIComponent(marketId)}`, { replace });
 }
@@ -1180,10 +1252,12 @@ function appViewFromRouteOrSaved(route, savedView = "dashboard") {
   if (route.name === "admin") return "admin";
   if (route.name === "positions") return "positions";
   if (route.name === "bracket") return "bracket";
+  if (route.name === "plPredictor") return "plPredictor";
   if (savedView === "leaderboard") return "leaderboard";
   if (savedView === "admin") return "admin";
   if (savedView === "positions") return "positions";
   if (savedView === "bracket") return "bracket";
+  if (savedView === "plPredictor") return "plPredictor";
   return "dashboard";
 }
 
@@ -1192,6 +1266,7 @@ function routeToCurrentAppView({ replace = false } = {}) {
   if (state.view === "admin") return routeToAdmin({ replace });
   if (state.view === "positions") return routeToPositions({ replace });
   if (state.view === "bracket") return routeToBracket({ replace });
+  if (state.view === "plPredictor") return routeToPremierLeaguePredictor({ replace });
   return routeToApp({ replace });
 }
 
@@ -1392,6 +1467,52 @@ async function onGlobalClick(e) {
     void loadRemoteBracketEntry({ refresh: true });
     routeToBracket();
     render();
+    return;
+  }
+
+  if (e.target.closest("[data-go-pl-predictor]")) {
+    state.shell = "app";
+    state.view = "plPredictor";
+    state.trade = emptyTrade();
+    state.sharedMarketId = null;
+    loadPremierLeagueDraftIntoState();
+    void loadRemotePremierLeagueEntry({ refresh: true });
+    routeToPremierLeaguePredictor();
+    render();
+    return;
+  }
+
+  const plMoveBtn = e.target.closest("[data-pl-move]");
+  if (plMoveBtn) {
+    e.preventDefault();
+    movePremierLeagueClub(Number(plMoveBtn.dataset.plIndex), plMoveBtn.dataset.plMove);
+    renderPremierLeaguePredictor();
+    return;
+  }
+
+  if (e.target.closest("[data-pl-reset]")) {
+    e.preventDefault();
+    if (premierLeaguePredictorLocked()) {
+      toast("Predictor is locked.");
+      return;
+    }
+    state.plRanking = defaultPremierLeagueRanking();
+    state.plSubmitted = false;
+    savePremierLeagueDraft();
+    renderPremierLeaguePredictor();
+    toast("Draft reset.");
+    return;
+  }
+
+  if (e.target.closest("[data-pl-submit]")) {
+    e.preventDefault();
+    await submitPremierLeagueEntry();
+    return;
+  }
+
+  if (e.target.closest("[data-share-pl-predictor]")) {
+    e.preventDefault();
+    await openPremierLeagueShareModal();
     return;
   }
 
@@ -1640,6 +1761,16 @@ async function onGlobalClick(e) {
 
   if (e.target.closest("[data-native-share-bracket]")) {
     await shareBracketLink();
+    return;
+  }
+
+  if (e.target.closest("[data-copy-pl-link]")) {
+    await copyPremierLeagueLink();
+    return;
+  }
+
+  if (e.target.closest("[data-native-share-pl]")) {
+    await sharePremierLeagueLink();
     return;
   }
 
@@ -2176,6 +2307,14 @@ function runPendingAuthAction() {
     routeToBracket();
     render();
     void submitBracketEntry();
+    return;
+  }
+  if (action === "submit-pl-predictor") {
+    state.shell = "app";
+    state.view = "plPredictor";
+    routeToPremierLeaguePredictor();
+    render();
+    void submitPremierLeagueEntry();
     return;
   }
   if (action === "trade-shared-market") {
@@ -3963,7 +4102,7 @@ function render() {
   destroyCharts();
   const waitingForInitialAppData = state.shell === "app" && !state.loaded && (state.currentGroupId || isLoggedIn() || state.sharedMarketId || shouldHoldAppShell());
   const unresolvedMarketLink = Boolean(state.sharedMarketId && !findMarketForRoute(state.sharedMarketId));
-  if (state.shell === "app" && state.view !== "bracket" && !getCurrentGroup() && !waitingForInitialAppData && !unresolvedMarketLink && !state.bootError) {
+  if (state.shell === "app" && state.view !== "bracket" && state.view !== "plPredictor" && !getCurrentGroup() && !waitingForInitialAppData && !unresolvedMarketLink && !state.bootError) {
     enterWelcomeShell();
   }
   renderNav();
@@ -3972,7 +4111,7 @@ function render() {
     renderEmbedRoute();
   } else if (state.shell === "app" && !state.loaded && !getCurrentGroup()) {
     renderMarketLinkLoading();
-  } else if (state.shell === "app" && state.view !== "bracket" && (state.bootError || unresolvedMarketLink)) {
+  } else if (state.shell === "app" && state.view !== "bracket" && state.view !== "plPredictor" && (state.bootError || unresolvedMarketLink)) {
     renderMarketLinkLoading({ error: state.bootError || state.marketLinkError || "That market link could not be found." });
   } else if (state.shell === "invite") {
     renderInvitePreview();
@@ -3986,6 +4125,8 @@ function render() {
     renderPositions();
   } else if (state.view === "bracket") {
     renderBracketChallenge();
+  } else if (state.view === "plPredictor") {
+    renderPremierLeaguePredictor();
   } else {
     renderDashboard();
   }
@@ -4010,16 +4151,13 @@ function renderNav() {
   const displayName = authDisplayName() || state.activeMember || "User";
   const balance = group?.balances?.[state.activeMember] ?? 0;
 
-  const bracketButton = `<button class="btn btn-ghost btn-sm nav-bracket ${state.view === "bracket" ? "active" : ""}" type="button" data-go-bracket>Bracket</button>`;
   dom.navRight.innerHTML = group ? `
-    ${bracketButton}
     <div class="member-pill" title="${esc(displayName)}">
       <span class="member-name">${esc(displayName)}</span>
       <span class="member-balance">${topbarMoney(balance)}</span>
     </div>
     ${accountIndicatorHtml()}
   ` : `
-    ${bracketButton}
     <button class="btn btn-primary btn-sm nav-enter" type="button" data-enter-app>Enter app</button>
     ${accountIndicatorHtml()}
 	  `;
@@ -4172,9 +4310,10 @@ function renderGeneralMarketPoolModal() {
 
 function generalMarketPoolRow(item, group) {
   const added = group?.id ? groupAddonIds(group.id).includes(item.id) : false;
+  const icon = item.type === "pl-predictor" ? "20" : "🏆";
   return `
     <article class="general-market-pool-row">
-      <div class="general-market-pool-icon" aria-hidden="true">🏆</div>
+      <div class="general-market-pool-icon" aria-hidden="true">${esc(icon)}</div>
       <div class="general-market-pool-copy">
         <p>${esc(item.eyebrow)}</p>
         <h3>${esc(item.title)}</h3>
@@ -4185,6 +4324,337 @@ function generalMarketPoolRow(item, group) {
       </button>
     </article>
   `;
+}
+
+function defaultPremierLeagueRanking() {
+  return PL_CLUBS.map(club => club.id);
+}
+
+function premierLeagueClubById(id) {
+  return PL_CLUBS.find(club => club.id === id) || PL_CLUBS[0];
+}
+
+function normalizePremierLeagueRanking(ranking) {
+  const valid = new Set(PL_CLUBS.map(club => club.id));
+  const seen = new Set();
+  const cleaned = [];
+  (Array.isArray(ranking) ? ranking : []).forEach(id => {
+    const value = String(id || "").trim();
+    if (valid.has(value) && !seen.has(value)) {
+      cleaned.push(value);
+      seen.add(value);
+    }
+  });
+  PL_CLUBS.forEach(club => {
+    if (!seen.has(club.id)) cleaned.push(club.id);
+  });
+  return cleaned;
+}
+
+function loadPremierLeagueDraftIntoState() {
+  if (state.plRemoteLoaded && state.plRanking.length === PL_CLUBS.length) return;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.plPredictorDraft);
+    const parsed = raw ? JSON.parse(raw) : {};
+    state.plRanking = normalizePremierLeagueRanking(parsed.ranking || state.plRanking || defaultPremierLeagueRanking());
+    state.plSubmitted = Boolean(parsed.submitted && !state.plRemoteLoaded);
+    state.plEntryId = state.plEntryId || parsed.entryId || "";
+  } catch {
+    state.plRanking = normalizePremierLeagueRanking(state.plRanking);
+  }
+}
+
+function savePremierLeagueDraft() {
+  localStorage.setItem(STORAGE_KEYS.plPredictorDraft, JSON.stringify({
+    ranking: normalizePremierLeagueRanking(state.plRanking),
+    submitted: state.plSubmitted,
+    entryId: state.plEntryId,
+    updatedAt: new Date().toISOString(),
+  }));
+}
+
+function premierLeaguePredictorLocked() {
+  return Date.now() >= Date.parse(PL_PREDICTOR.lockAt);
+}
+
+function premierLeagueZone(rank) {
+  if (rank === 1) return { label: "Champion · UCL", className: "champion" };
+  if (rank >= 2 && rank <= 5) return { label: "Champions League", className: "ucl" };
+  if (rank >= 6 && rank <= 7) return { label: "Europa League", className: "europa" };
+  if (rank === 8) return { label: "Conference League", className: "conference" };
+  if (rank >= 18) return { label: "Relegation", className: "relegation" };
+  return { label: "Mid-table", className: "mid" };
+}
+
+function premierLeagueOrdinal(rank) {
+  const suffix = rank % 10 === 1 && rank % 100 !== 11 ? "st" : rank % 10 === 2 && rank % 100 !== 12 ? "nd" : rank % 10 === 3 && rank % 100 !== 13 ? "rd" : "th";
+  return `${rank}${suffix}`;
+}
+
+function movePremierLeagueClub(index, direction) {
+  if (premierLeaguePredictorLocked()) {
+    toast("Predictor is locked.");
+    return;
+  }
+  const ranking = normalizePremierLeagueRanking(state.plRanking);
+  if (!Number.isInteger(index) || index < 0 || index >= ranking.length) return;
+  let target = index;
+  if (direction === "up") target = index - 1;
+  if (direction === "down") target = index + 1;
+  if (direction === "top") target = 0;
+  if (direction === "bottom") target = ranking.length - 1;
+  target = Math.max(0, Math.min(ranking.length - 1, target));
+  if (target === index) return;
+  const [item] = ranking.splice(index, 1);
+  ranking.splice(target, 0, item);
+  state.plRanking = ranking;
+  state.plSubmitted = false;
+  savePremierLeagueDraft();
+}
+
+function onPremierLeagueDragStart(e) {
+  const row = e.target.closest?.("[data-pl-row]");
+  if (!row || state.view !== "plPredictor" || premierLeaguePredictorLocked()) return;
+  state.plDraggedIndex = Number(row.dataset.plIndex);
+  row.classList.add("dragging");
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", String(state.plDraggedIndex));
+}
+
+function onPremierLeagueDragOver(e) {
+  if (state.plDraggedIndex === null || state.view !== "plPredictor") return;
+  if (e.target.closest?.("[data-pl-row]")) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }
+}
+
+function onPremierLeagueDrop(e) {
+  const row = e.target.closest?.("[data-pl-row]");
+  if (!row || state.plDraggedIndex === null || premierLeaguePredictorLocked()) return;
+  e.preventDefault();
+  const from = Number(state.plDraggedIndex);
+  const to = Number(row.dataset.plIndex);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from === to) return;
+  const ranking = normalizePremierLeagueRanking(state.plRanking);
+  const [item] = ranking.splice(from, 1);
+  ranking.splice(to, 0, item);
+  state.plRanking = ranking;
+  state.plSubmitted = false;
+  state.plDraggedIndex = null;
+  savePremierLeagueDraft();
+  renderPremierLeaguePredictor();
+}
+
+function onPremierLeagueDragEnd() {
+  state.plDraggedIndex = null;
+  document.querySelectorAll(".pl-ranking-row.dragging").forEach(row => row.classList.remove("dragging"));
+}
+
+function premierLeagueClubBadge(club, small = false) {
+  const light = ["#ffffff", "#ffcd00", "#f6a800", "#95bfe5", "#77bbff", "#6cabdd"].includes(String(club.color || "").toLowerCase());
+  return `
+    <span class="pl-club-badge ${small ? "small" : ""}" style="--club-color:${esc(club.color)};--club-fg:${light ? "#061018" : "#fff"}">
+      <img src="${esc(club.logoUrl || "")}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='grid';" />
+      <span>${esc(club.shortName.slice(0, 1))}</span>
+    </span>`;
+}
+
+function renderPremierLeaguePredictor() {
+  loadPremierLeagueDraftIntoState();
+  state.plRanking = normalizePremierLeagueRanking(state.plRanking);
+  const locked = premierLeaguePredictorLocked();
+  const status = locked ? "Locked" : state.plSubmitted ? "Submitted" : "Draft";
+  const lockLabel = new Date(PL_PREDICTOR.lockAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  dom.mainContent.innerHTML = `
+    <section class="pl-predictor-page">
+      <header class="pl-predictor-hero motion-item">
+        <div class="pl-predictor-identity">
+          <img class="pl-league-logo" src="/assets/premier-league-logo.svg" alt="Premier League" />
+          <span class="pl-identity-divider" aria-hidden="true"></span>
+          <div>
+            <p class="eyebrow">Probable challenge · ${esc(PL_PREDICTOR.season)}</p>
+            <h1>Predict the table</h1>
+            <p class="pl-predictor-subtitle">Put all 20 clubs in order before the first whistle.</p>
+          </div>
+        </div>
+        <div class="pl-predictor-actions">
+          <div class="pl-status ${locked ? "locked" : ""}">
+            <span>${esc(status)}</span>
+            <small>Locks ${esc(lockLabel)}</small>
+          </div>
+          <button class="btn btn-ghost btn-sm" type="button" data-share-pl-predictor>Share</button>
+          <button class="btn btn-ghost btn-sm" type="button" data-pl-reset ${locked ? "disabled" : ""}>Reset</button>
+          <button class="btn btn-primary btn-sm" type="button" data-pl-submit ${state.plSaving || locked ? "disabled" : ""}>${state.plSaving ? "Saving..." : state.plSubmitted ? "Save changes" : "Submit"}</button>
+        </div>
+      </header>
+
+      <div class="pl-ranking-shell motion-item">
+        <div class="pl-table-titlebar">
+          <div>
+            <p>Your prediction</p>
+            <strong>Final table</strong>
+          </div>
+          <span>Drag to reorder · ${esc(PL_PREDICTOR.season)}</span>
+        </div>
+        <div class="pl-ranking-head">
+          <span>Pos</span>
+          <span>Club</span>
+          <span>Move</span>
+        </div>
+        <div class="pl-ranking-list">
+          ${state.plRanking.map((clubId, index) => premierLeagueRankingRow(clubId, index, { locked })).join("")}
+        </div>
+        <div class="pl-zone-strip">
+          <span class="champion">1 Champion · UCL</span>
+          <span class="ucl">2-5 Champions League</span>
+          <span class="europa">6-7 Europa League</span>
+          <span class="conference">8 Conference League</span>
+          <span class="relegation">18-20 Relegation</span>
+        </div>
+      </div>
+      <p class="pl-attribution">Premier League club marks are used for identification.</p>
+    </section>
+  `;
+}
+
+function premierLeagueRankingRow(clubId, index, { locked = false } = {}) {
+  const club = premierLeagueClubById(clubId);
+  const rank = index + 1;
+  const zone = premierLeagueZone(rank);
+  return `
+    <article class="pl-ranking-row ${zone.className}" draggable="${!locked}" data-pl-row data-pl-index="${index}">
+      <div class="pl-rank-number">${rank}</div>
+      <div class="pl-club-main">
+        ${premierLeagueClubBadge(club)}
+        <div>
+          <strong>${esc(club.name)}</strong>
+          <small>${esc(club.shortName)}</small>
+        </div>
+      </div>
+      <div class="pl-move-controls">
+        <button type="button" aria-label="Move ${esc(club.name)} up" data-pl-index="${index}" data-pl-move="up" ${locked || index === 0 ? "disabled" : ""}>↑</button>
+        <button type="button" aria-label="Move ${esc(club.name)} down" data-pl-index="${index}" data-pl-move="down" ${locked || index === PL_CLUBS.length - 1 ? "disabled" : ""}>↓</button>
+      </div>
+    </article>
+  `;
+}
+
+async function loadRemotePremierLeagueEntry({ refresh = false } = {}) {
+  if (!isLoggedIn() && !state.plSharedEntryId) return;
+  if (state.plRemoteLoaded && !refresh) return;
+  const params = new URLSearchParams();
+  if (state.plSharedEntryId) params.set("entry", state.plSharedEntryId);
+  else params.set("participant", authDisplayName());
+  const data = await api(`/api/predictors/${PL_PREDICTOR.id}/entry?${params.toString()}`);
+  if (data.entry?.ranking?.length) {
+    state.plRanking = normalizePremierLeagueRanking(data.entry.ranking);
+    state.plEntryId = data.entry.id || "";
+    state.plSubmitted = Boolean(data.entry.submittedAt);
+    state.plRemoteLoaded = true;
+    savePremierLeagueDraft();
+    render();
+  } else {
+    state.plRemoteLoaded = true;
+  }
+}
+
+async function submitPremierLeagueEntry() {
+  if (premierLeaguePredictorLocked()) {
+    toast("Predictor is locked.");
+    return;
+  }
+  state.plRanking = normalizePremierLeagueRanking(state.plRanking);
+  savePremierLeagueDraft();
+  if (!isLoggedIn()) {
+    requireLogin("submit-pl-predictor");
+    return;
+  }
+  state.plSaving = true;
+  renderPremierLeaguePredictor();
+  try {
+    const data = await api(`/api/predictors/${PL_PREDICTOR.id}/entry`, {
+      method: "POST",
+      body: JSON.stringify({
+        participant: authDisplayName(),
+        userEmail: state.authUser?.email || null,
+        ranking: state.plRanking,
+        submitted: true,
+      }),
+    });
+    state.plEntryId = data.entry?.id || state.plEntryId;
+    state.plSubmitted = Boolean(data.entry?.submittedAt);
+    state.plRemoteLoaded = true;
+    savePremierLeagueDraft();
+    toast("Premier League table saved.");
+  } catch (err) {
+    toast(err.message || "Could not save predictor.");
+  } finally {
+    state.plSaving = false;
+    renderPremierLeaguePredictor();
+  }
+}
+
+function premierLeagueShareUrl() {
+  const base = `${location.origin}/premier-league-predictor`;
+  return state.plEntryId ? `${base}?entry=${encodeURIComponent(state.plEntryId)}` : base;
+}
+
+function premierLeagueShareCardUrl() {
+  const params = new URLSearchParams();
+  if (state.plEntryId) params.set("entry", state.plEntryId);
+  else if (authDisplayName()) params.set("participant", authDisplayName());
+  params.set("t", String(Date.now()));
+  return `${API}/api/predictors/${PL_PREDICTOR.id}/share-card.png?${params.toString()}`;
+}
+
+async function openPremierLeagueShareModal() {
+  openModal("embed");
+  dom.embedModalOverlay.querySelector(".modal-title").textContent = "Share Premier League predictor";
+  const link = premierLeagueShareUrl();
+  dom.embedModalBody.innerHTML = `
+    <div class="embed-share-layout pl-share-layout">
+      <div class="embed-preview-frame share-og-preview-frame pl-share-preview-frame">
+        <img class="share-og-preview-img" src="${esc(premierLeagueShareCardUrl())}" alt="Premier League table share preview" />
+      </div>
+      <div class="embed-share-controls">
+        <div class="share-section">
+          <p class="eyebrow">Predictor link</p>
+          <h3>Share your table</h3>
+          <div class="invite-link-box">
+            <span>${esc(link)}</span>
+            <button type="button" data-copy-pl-link>Copy</button>
+          </div>
+          <div class="share-action-grid">
+            <button class="btn btn-primary" type="button" data-copy-pl-link>Copy link</button>
+            <button class="btn btn-ghost" type="button" data-native-share-pl>Share</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function copyPremierLeagueLink() {
+  const link = premierLeagueShareUrl();
+  const copied = await writeClipboardText(link);
+  toast(copied ? "Predictor link copied." : link);
+}
+
+async function sharePremierLeagueLink() {
+  const link = premierLeagueShareUrl();
+  if (!navigator.share) {
+    await copyPremierLeagueLink();
+    return;
+  }
+  try {
+    await navigator.share({
+      title: PL_PREDICTOR.title,
+      text: "My Premier League table prediction",
+      url: link,
+    });
+  } catch (err) {
+    if (err?.name !== "AbortError") toast("Could not open share sheet.");
+  }
 }
 
 function accountIndicatorHtml() {
@@ -4322,6 +4792,29 @@ function generalMarketCard(item) {
           </div>
           <div class="event-card-foot">
             <span>Bracket contest</span>
+            <span class="event-card-creator">from general pool</span>
+          </div>
+        </div>
+      </article>
+    `;
+  }
+  if (item.type === "pl-predictor") {
+    return `
+      <article class="event-card general-market-card motion-item" data-go-pl-predictor>
+        <div class="event-card-inner">
+          <div class="event-card-head">
+            <div class="event-thumb event-thumb-image" aria-hidden="true">20</div>
+            <div class="event-title-wrap">
+              <p class="event-title">${esc(item.title)}</p>
+            </div>
+            <span class="general-market-badge">General</span>
+          </div>
+          <div class="general-market-card-body">
+            <strong>Rank the table</strong>
+            <span>${esc(item.subtitle)}</span>
+          </div>
+          <div class="event-card-foot">
+            <span>Season contest</span>
             <span class="event-card-creator">from general pool</span>
           </div>
         </div>
@@ -7754,12 +8247,51 @@ function renderPositions() {
         ${portfolioHistoryHtml(snapshot.activity)}
       </div>
 
+      ${portfolioChallengesHtml()}
+
       ${visibleGroups.length ? `
         <div class="positions-groups portfolio-groups">
           ${visibleGroups.map(item => positionGroupHtml(item.group, item.rows, status, item)).join("")}
         </div>
       ` : positionsEmptyHtml(status)}
     </section>`;
+}
+
+function portfolioChallengesHtml() {
+  const bracketComplete = bracketCompletion().complete;
+  const bracketStatus = state.bracketSubmitted ? "Submitted" : bracketComplete ? "Ready" : "Draft";
+  const plStatus = premierLeaguePredictorLocked() ? "Locked" : state.plSubmitted ? "Submitted" : "Draft";
+  const bracketChampion = bracketDisplayWinner("final") || "No champion yet";
+  const plTop = premierLeagueClubById(normalizePremierLeagueRanking(state.plRanking)[0])?.name || "No table yet";
+  return `
+    <section class="portfolio-challenges motion-item" aria-label="Season challenges">
+      <div class="portfolio-challenges-head">
+        <div>
+          <p class="eyebrow">Challenges</p>
+          <h2>Season picks</h2>
+        </div>
+        <span>Bracket and table contests live here.</span>
+      </div>
+      <div class="portfolio-challenge-grid">
+        <button class="portfolio-challenge-card" type="button" data-go-bracket>
+          <span class="portfolio-challenge-icon">🏆</span>
+          <span>
+            <strong>${esc(BRACKET_CHALLENGE.title)}</strong>
+            <em>${esc(BRACKET_CHALLENGE.prize)} prize · ${esc(bracketStatus)}</em>
+          </span>
+          <small>${esc(bracketChampion)}</small>
+        </button>
+        <button class="portfolio-challenge-card" type="button" data-go-pl-predictor>
+          <span class="portfolio-challenge-icon">20</span>
+          <span>
+            <strong>${esc(PL_PREDICTOR.title)}</strong>
+            <em>${esc(PL_PREDICTOR.season)} · ${esc(plStatus)}</em>
+          </span>
+          <small>${esc(plTop)} top</small>
+        </button>
+      </div>
+    </section>
+  `;
 }
 
 function portfolioGroupSwitcherHtml(snapshot = portfolioSnapshot()) {
@@ -10011,6 +10543,9 @@ function applyAuthSession(session, { renderNow = true } = {}) {
     render();
     if (state.authUser && state.view === "bracket") {
       void loadRemoteBracketEntry({ refresh: true });
+    }
+    if (state.authUser && state.view === "plPredictor") {
+      void loadRemotePremierLeagueEntry({ refresh: true });
     }
   }
 }
