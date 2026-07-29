@@ -291,6 +291,9 @@ button { color: inherit; }
   font-size: 1.18rem;
   line-height: 1;
 }
+.btn-icon:hover {
+  color: var(--color-text, #fff);
+}
 .google-signin-btn {
   width: 100%;
   min-height: 58px;
@@ -8224,6 +8227,219 @@ html {
   }
 }
 
+.suggest-panel {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-border, rgba(255,255,255,0.08));
+}
+
+.suggest-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.suggest-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.suggest-chip {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--color-border, rgba(255,255,255,0.1));
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--color-text, #fff);
+  cursor: pointer;
+  line-height: 1.4;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.suggest-chip:hover {
+  border-color: var(--color-border-strong, rgba(255,255,255,0.25));
+  background: rgba(255,255,255,0.04);
+}
+
+.suggest-skeleton-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.suggest-skeleton {
+  display: block;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.06);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.suggest-preview-modal {
+  max-width: 480px;
+  width: 90vw;
+}
+
+.suggest-preview-question {
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.4;
+  margin: 1rem 0;
+}
+
+.suggest-preview-rules {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  min-height: 60px;
+  margin-bottom: 1.25rem;
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(255,255,255,0.7);
+}
+
+.suggest-rules-text {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13px;
+  margin: 0;
+}
+
+.suggest-rules-loading {
+  color: rgba(255,255,255,0.4);
+  font-style: italic;
+  margin: 0;
+}
+
+.suggest-preview-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.form-suggest-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.form-suggest-chip {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 99px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.15);
+  color: rgba(255,255,255,0.6);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+
+.form-suggest-chip:hover {
+  border-color: rgba(255,255,255,0.4);
+  color: #fff;
+}
+
+/* ── Tutorial (demo-market onboarding) ─────────────────────────── */
+
+.tutorial-spotlight {
+  position: fixed;
+  z-index: 210;
+  border-radius: 14px;
+  pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(4, 8, 16, 0.72);
+  transition: left 0.3s ease, top 0.3s ease, width 0.3s ease, height 0.3s ease;
+}
+
+.tutorial-bubble {
+  position: fixed;
+  z-index: 211;
+  max-width: 340px;
+  background: #101826;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  padding: 16px 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+.tutorial-bubble.centered {
+  left: 50% !important;
+  top: 50% !important;
+  transform: translate(-50%, -50%);
+}
+
+.tutorial-step-count {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+  margin: 0 0 6px;
+}
+
+.tutorial-bubble h4 {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 6px;
+}
+
+.tutorial-bubble p {
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.75);
+  margin: 0;
+}
+
+.tutorial-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.welcome-demo-link {
+  margin-top: 14px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.welcome-demo-link:hover {
+  color: #fff;
+}
+
+@media (max-width: 480px) {
+  .tutorial-bubble {
+    left: 12px !important;
+    right: 12px;
+    top: auto !important;
+    bottom: 12px;
+    max-width: none;
+    transform: none;
+  }
+  .tutorial-bubble.centered {
+    transform: none;
+  }
+}
 /* Bracket grid final layout overrides. Keep the table picker narrow, but let
    the grid view own a real centered canvas instead of escaping a 760px parent. */
 .bracket-page {
