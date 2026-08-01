@@ -1,0 +1,916 @@
+[
+  {
+    "id": "pl-2026-27",
+    "route": "/premier-league-predictor",
+    "leagueName": "Premier League",
+    "leagueMark": "PL",
+    "logoUrl": "/league-logos/premier-league-dark.png",
+    "title": "Premier League",
+    "season": "2026/27",
+    "lockAt": "2026-08-15T11:30:00+00:00",
+    "sourceUrl": "https://www.premierleague.com/en/clubs",
+    "sourceLabel": "Official Premier League clubs page",
+    "zones": [
+      {
+        "from": 1,
+        "to": 1,
+        "label": "Champion · UCL",
+        "className": "champion"
+      },
+      {
+        "from": 2,
+        "to": 5,
+        "label": "Champions League",
+        "className": "ucl"
+      },
+      {
+        "from": 6,
+        "to": 7,
+        "label": "Europa League",
+        "className": "europa"
+      },
+      {
+        "from": 8,
+        "to": 8,
+        "label": "Conference League",
+        "className": "conference"
+      },
+      {
+        "from": 18,
+        "to": 20,
+        "label": "Relegation",
+        "className": "relegation"
+      }
+    ],
+    "clubs": [
+      {
+        "id": "arsenal",
+        "name": "Arsenal",
+        "shortName": "ARS",
+        "color": "#ef0107",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t3.png"
+      },
+      {
+        "id": "aston-villa",
+        "name": "Aston Villa",
+        "shortName": "AVL",
+        "color": "#95bfe5",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t7.png"
+      },
+      {
+        "id": "bournemouth",
+        "name": "AFC Bournemouth",
+        "shortName": "BOU",
+        "color": "#da291c",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t91.png"
+      },
+      {
+        "id": "brentford",
+        "name": "Brentford",
+        "shortName": "BRE",
+        "color": "#e30613",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t94.png"
+      },
+      {
+        "id": "brighton",
+        "name": "Brighton & Hove Albion",
+        "shortName": "BHA",
+        "color": "#0057b8",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t36.png"
+      },
+      {
+        "id": "chelsea",
+        "name": "Chelsea",
+        "shortName": "CHE",
+        "color": "#034694",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t8.png"
+      },
+      {
+        "id": "coventry",
+        "name": "Coventry City",
+        "shortName": "COV",
+        "color": "#77bbff",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t9.png"
+      },
+      {
+        "id": "crystal-palace",
+        "name": "Crystal Palace",
+        "shortName": "CRY",
+        "color": "#1b458f",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t31.png"
+      },
+      {
+        "id": "everton",
+        "name": "Everton",
+        "shortName": "EVE",
+        "color": "#003399",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t11.png"
+      },
+      {
+        "id": "fulham",
+        "name": "Fulham",
+        "shortName": "FUL",
+        "color": "#ffffff",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t54.png"
+      },
+      {
+        "id": "hull-city",
+        "name": "Hull City",
+        "shortName": "HUL",
+        "color": "#f6a800",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t88.png"
+      },
+      {
+        "id": "ipswich-town",
+        "name": "Ipswich Town",
+        "shortName": "IPS",
+        "color": "#0057b8",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t40.png"
+      },
+      {
+        "id": "leeds-united",
+        "name": "Leeds United",
+        "shortName": "LEE",
+        "color": "#ffcd00",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t2.png"
+      },
+      {
+        "id": "liverpool",
+        "name": "Liverpool",
+        "shortName": "LIV",
+        "color": "#c8102e",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t14.png"
+      },
+      {
+        "id": "manchester-city",
+        "name": "Manchester City",
+        "shortName": "MCI",
+        "color": "#6cabdd",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t43.png"
+      },
+      {
+        "id": "manchester-united",
+        "name": "Manchester United",
+        "shortName": "MUN",
+        "color": "#da291c",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t1.png"
+      },
+      {
+        "id": "newcastle",
+        "name": "Newcastle United",
+        "shortName": "NEW",
+        "color": "#241f20",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t4.png"
+      },
+      {
+        "id": "nottingham-forest",
+        "name": "Nottingham Forest",
+        "shortName": "NFO",
+        "color": "#dd0000",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t17.png"
+      },
+      {
+        "id": "tottenham",
+        "name": "Tottenham Hotspur",
+        "shortName": "TOT",
+        "color": "#132257",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t6.png"
+      },
+      {
+        "id": "sunderland",
+        "name": "Sunderland",
+        "shortName": "SUN",
+        "color": "#eb172b",
+        "logoUrl": "https://resources.premierleague.com/premierleague/badges/100/t56.png"
+      }
+    ]
+  },
+  {
+    "id": "laliga-2026-27",
+    "route": "/la-liga-predictor",
+    "leagueName": "La Liga",
+    "leagueMark": "LALIGA",
+    "logoUrl": "/league-logos/la-liga.png",
+    "title": "La Liga",
+    "season": "2026/27",
+    "lockAt": "2026-08-15T19:00:00+02:00",
+    "sourceUrl": "https://www.laliga.com/en-US/laliga-easports/clubs",
+    "sourceLabel": "Official LaLiga clubs page",
+    "zones": [
+      {
+        "from": 1,
+        "to": 1,
+        "label": "Champion · UCL",
+        "className": "champion"
+      },
+      {
+        "from": 2,
+        "to": 4,
+        "label": "Champions League",
+        "className": "ucl"
+      },
+      {
+        "from": 5,
+        "to": 5,
+        "label": "Europa League",
+        "className": "europa"
+      },
+      {
+        "from": 6,
+        "to": 6,
+        "label": "Conference League",
+        "className": "conference"
+      },
+      {
+        "from": 18,
+        "to": 20,
+        "label": "Relegation",
+        "className": "relegation"
+      }
+    ],
+    "clubs": [
+      {
+        "id": "athletic-club",
+        "name": "Athletic Club",
+        "shortName": "ATH",
+        "color": "#ee2523",
+        "logoUrl": "/league-badges/la-liga/athletic-club.png"
+      },
+      {
+        "id": "atletico-madrid",
+        "name": "Atlético de Madrid",
+        "shortName": "ATM",
+        "color": "#cb3524",
+        "logoUrl": "/league-badges/la-liga/atletico-madrid.png"
+      },
+      {
+        "id": "osasuna",
+        "name": "CA Osasuna",
+        "shortName": "OSA",
+        "color": "#d91a2a",
+        "logoUrl": "/league-badges/la-liga/osasuna.png"
+      },
+      {
+        "id": "celta",
+        "name": "Celta",
+        "shortName": "CEL",
+        "color": "#8ac3ee",
+        "logoUrl": "/league-badges/la-liga/celta.png"
+      },
+      {
+        "id": "alaves",
+        "name": "Deportivo Alavés",
+        "shortName": "ALA",
+        "color": "#005bab",
+        "logoUrl": "/league-badges/la-liga/alaves.png"
+      },
+      {
+        "id": "elche",
+        "name": "Elche CF",
+        "shortName": "ELC",
+        "color": "#1a9b55",
+        "logoUrl": "/league-badges/la-liga/elche.png"
+      },
+      {
+        "id": "barcelona",
+        "name": "FC Barcelona",
+        "shortName": "BAR",
+        "color": "#004d98",
+        "logoUrl": "/league-badges/la-liga/barcelona.png"
+      },
+      {
+        "id": "getafe",
+        "name": "Getafe CF",
+        "shortName": "GET",
+        "color": "#005999",
+        "logoUrl": "/league-badges/la-liga/getafe.png"
+      },
+      {
+        "id": "levante",
+        "name": "Levante UD",
+        "shortName": "LEV",
+        "color": "#b71930",
+        "logoUrl": "/league-badges/la-liga/levante.png"
+      },
+      {
+        "id": "malaga",
+        "name": "Málaga CF",
+        "shortName": "MGA",
+        "color": "#63b5e5",
+        "logoUrl": "/league-badges/la-liga/malaga.png"
+      },
+      {
+        "id": "racing-santander",
+        "name": "Racing Santander",
+        "shortName": "RAC",
+        "color": "#008c5a",
+        "logoUrl": "/league-badges/la-liga/racing-santander.png"
+      },
+      {
+        "id": "rayo-vallecano",
+        "name": "Rayo Vallecano",
+        "shortName": "RAY",
+        "color": "#e52629",
+        "logoUrl": "/league-badges/la-liga/rayo-vallecano.png"
+      },
+      {
+        "id": "deportivo-la-coruna",
+        "name": "RC Deportivo",
+        "shortName": "DEP",
+        "color": "#176fc1",
+        "logoUrl": "/league-badges/la-liga/deportivo-la-coruna.png"
+      },
+      {
+        "id": "espanyol",
+        "name": "RCD Espanyol",
+        "shortName": "ESP",
+        "color": "#1374bb",
+        "logoUrl": "/league-badges/la-liga/espanyol.png"
+      },
+      {
+        "id": "real-betis",
+        "name": "Real Betis",
+        "shortName": "BET",
+        "color": "#149447",
+        "logoUrl": "/league-badges/la-liga/real-betis.png"
+      },
+      {
+        "id": "real-madrid",
+        "name": "Real Madrid",
+        "shortName": "RMA",
+        "color": "#f2f2f2",
+        "logoUrl": "/league-badges/la-liga/real-madrid.png"
+      },
+      {
+        "id": "real-sociedad",
+        "name": "Real Sociedad",
+        "shortName": "RSO",
+        "color": "#1673ba",
+        "logoUrl": "/league-badges/la-liga/real-sociedad.png"
+      },
+      {
+        "id": "sevilla",
+        "name": "Sevilla FC",
+        "shortName": "SEV",
+        "color": "#d71920",
+        "logoUrl": "/league-badges/la-liga/sevilla.png"
+      },
+      {
+        "id": "valencia",
+        "name": "Valencia CF",
+        "shortName": "VAL",
+        "color": "#f5a000",
+        "logoUrl": "/league-badges/la-liga/valencia.png"
+      },
+      {
+        "id": "villarreal",
+        "name": "Villarreal CF",
+        "shortName": "VIL",
+        "color": "#ffe667",
+        "logoUrl": "/league-badges/la-liga/villarreal.png"
+      }
+    ]
+  },
+  {
+    "id": "serie-a-2026-27",
+    "route": "/serie-a-predictor",
+    "leagueName": "Serie A",
+    "leagueMark": "SERIE A",
+    "logoUrl": "/league-logos/serie-a-dark.png",
+    "title": "Serie A",
+    "season": "2026/27",
+    "lockAt": "2026-08-22T18:30:00+02:00",
+    "sourceUrl": "https://www.legaseriea.it/team",
+    "sourceLabel": "Official Serie A clubs page",
+    "zones": [
+      {
+        "from": 1,
+        "to": 1,
+        "label": "Champion · UCL",
+        "className": "champion"
+      },
+      {
+        "from": 2,
+        "to": 4,
+        "label": "Champions League",
+        "className": "ucl"
+      },
+      {
+        "from": 5,
+        "to": 5,
+        "label": "Europa League",
+        "className": "europa"
+      },
+      {
+        "from": 6,
+        "to": 6,
+        "label": "Conference League",
+        "className": "conference"
+      },
+      {
+        "from": 18,
+        "to": 20,
+        "label": "Relegation",
+        "className": "relegation"
+      }
+    ],
+    "clubs": [
+      {
+        "id": "atalanta",
+        "name": "Atalanta",
+        "shortName": "ATA",
+        "color": "#1e71b8",
+        "logoUrl": "/league-badges/serie-a/atalanta.png"
+      },
+      {
+        "id": "bologna",
+        "name": "Bologna",
+        "shortName": "BOL",
+        "color": "#1a2f54",
+        "logoUrl": "/league-badges/serie-a/bologna.png"
+      },
+      {
+        "id": "cagliari",
+        "name": "Cagliari",
+        "shortName": "CAG",
+        "color": "#ce2032",
+        "logoUrl": "/league-badges/serie-a/cagliari.png"
+      },
+      {
+        "id": "como",
+        "name": "Como",
+        "shortName": "COM",
+        "color": "#1c6ca8",
+        "logoUrl": "/league-badges/serie-a/como.png"
+      },
+      {
+        "id": "fiorentina",
+        "name": "Fiorentina",
+        "shortName": "FIO",
+        "color": "#5b2c83",
+        "logoUrl": "/league-badges/serie-a/fiorentina.png"
+      },
+      {
+        "id": "frosinone",
+        "name": "Frosinone",
+        "shortName": "FRO",
+        "color": "#f7d117",
+        "logoUrl": "/league-badges/serie-a/frosinone.png"
+      },
+      {
+        "id": "genoa",
+        "name": "Genoa",
+        "shortName": "GEN",
+        "color": "#c8102e",
+        "logoUrl": "/league-badges/serie-a/genoa.png"
+      },
+      {
+        "id": "inter",
+        "name": "Inter",
+        "shortName": "INT",
+        "color": "#0068a8",
+        "logoUrl": "/league-badges/serie-a/inter.png"
+      },
+      {
+        "id": "juventus",
+        "name": "Juventus",
+        "shortName": "JUV",
+        "color": "#ffffff",
+        "logoUrl": "/league-badges/serie-a/juventus.png"
+      },
+      {
+        "id": "lazio",
+        "name": "Lazio",
+        "shortName": "LAZ",
+        "color": "#87d8f7",
+        "logoUrl": "/league-badges/serie-a/lazio.png"
+      },
+      {
+        "id": "lecce",
+        "name": "Lecce",
+        "shortName": "LEC",
+        "color": "#e8c515",
+        "logoUrl": "/league-badges/serie-a/lecce.png"
+      },
+      {
+        "id": "milan",
+        "name": "AC Milan",
+        "shortName": "MIL",
+        "color": "#fb090b",
+        "logoUrl": "/league-badges/serie-a/milan.png"
+      },
+      {
+        "id": "monza",
+        "name": "Monza",
+        "shortName": "MON",
+        "color": "#e20a17",
+        "logoUrl": "/league-badges/serie-a/monza.png"
+      },
+      {
+        "id": "napoli",
+        "name": "Napoli",
+        "shortName": "NAP",
+        "color": "#12a0d7",
+        "logoUrl": "/league-badges/serie-a/napoli.png"
+      },
+      {
+        "id": "parma",
+        "name": "Parma",
+        "shortName": "PAR",
+        "color": "#f4d312",
+        "logoUrl": "/league-badges/serie-a/parma.png"
+      },
+      {
+        "id": "roma",
+        "name": "Roma",
+        "shortName": "ROM",
+        "color": "#8e1f2f",
+        "logoUrl": "/league-badges/serie-a/roma.png"
+      },
+      {
+        "id": "sassuolo",
+        "name": "Sassuolo",
+        "shortName": "SAS",
+        "color": "#00a752",
+        "logoUrl": "/league-badges/serie-a/sassuolo.png"
+      },
+      {
+        "id": "torino",
+        "name": "Torino",
+        "shortName": "TOR",
+        "color": "#8a1538",
+        "logoUrl": "/league-badges/serie-a/torino.png"
+      },
+      {
+        "id": "udinese",
+        "name": "Udinese",
+        "shortName": "UDI",
+        "color": "#ffffff",
+        "logoUrl": "/league-badges/serie-a/udinese.png"
+      },
+      {
+        "id": "venezia",
+        "name": "Venezia",
+        "shortName": "VEN",
+        "color": "#f58220",
+        "logoUrl": "/league-badges/serie-a/venezia.png"
+      }
+    ]
+  },
+  {
+    "id": "bundesliga-2026-27",
+    "route": "/bundesliga-predictor",
+    "leagueName": "Bundesliga",
+    "leagueMark": "BUNDESLIGA",
+    "logoUrl": "/league-logos/bundesliga-dark.png",
+    "title": "Bundesliga",
+    "season": "2026/27",
+    "lockAt": "2026-08-28T20:30:00+02:00",
+    "sourceUrl": "https://www.bundesliga.com/en/bundesliga/clubs",
+    "sourceLabel": "Official Bundesliga clubs page",
+    "zones": [
+      {
+        "from": 1,
+        "to": 1,
+        "label": "Champion · UCL",
+        "className": "champion"
+      },
+      {
+        "from": 2,
+        "to": 4,
+        "label": "Champions League",
+        "className": "ucl"
+      },
+      {
+        "from": 5,
+        "to": 5,
+        "label": "Europa League",
+        "className": "europa"
+      },
+      {
+        "from": 6,
+        "to": 6,
+        "label": "Conference League",
+        "className": "conference"
+      },
+      {
+        "from": 16,
+        "to": 16,
+        "label": "Relegation playoff",
+        "className": "playoff"
+      },
+      {
+        "from": 17,
+        "to": 18,
+        "label": "Relegation",
+        "className": "relegation"
+      }
+    ],
+    "clubs": [
+      {
+        "id": "bayern-munich",
+        "name": "Bayern Munich",
+        "shortName": "FCB",
+        "color": "#dc052d",
+        "logoUrl": "/league-badges/bundesliga/bayern-munich.png"
+      },
+      {
+        "id": "borussia-dortmund",
+        "name": "Borussia Dortmund",
+        "shortName": "BVB",
+        "color": "#fde100",
+        "logoUrl": "/league-badges/bundesliga/borussia-dortmund.png"
+      },
+      {
+        "id": "rb-leipzig",
+        "name": "RB Leipzig",
+        "shortName": "RBL",
+        "color": "#dd0741",
+        "logoUrl": "/league-badges/bundesliga/rb-leipzig.png"
+      },
+      {
+        "id": "stuttgart",
+        "name": "VfB Stuttgart",
+        "shortName": "VFB",
+        "color": "#e32219",
+        "logoUrl": "/league-badges/bundesliga/stuttgart.png"
+      },
+      {
+        "id": "hoffenheim",
+        "name": "TSG Hoffenheim",
+        "shortName": "TSG",
+        "color": "#1961b5",
+        "logoUrl": "/league-badges/bundesliga/hoffenheim.png"
+      },
+      {
+        "id": "bayer-leverkusen",
+        "name": "Bayer Leverkusen",
+        "shortName": "B04",
+        "color": "#e32221",
+        "logoUrl": "/league-badges/bundesliga/bayer-leverkusen.png"
+      },
+      {
+        "id": "freiburg",
+        "name": "SC Freiburg",
+        "shortName": "SCF",
+        "color": "#e40521",
+        "logoUrl": "/league-badges/bundesliga/freiburg.png"
+      },
+      {
+        "id": "eintracht-frankfurt",
+        "name": "Eintracht Frankfurt",
+        "shortName": "SGE",
+        "color": "#e1000f",
+        "logoUrl": "/league-badges/bundesliga/eintracht-frankfurt.png"
+      },
+      {
+        "id": "augsburg",
+        "name": "FC Augsburg",
+        "shortName": "FCA",
+        "color": "#ba3733",
+        "logoUrl": "/league-badges/bundesliga/augsburg.png"
+      },
+      {
+        "id": "mainz",
+        "name": "Mainz 05",
+        "shortName": "M05",
+        "color": "#c31430",
+        "logoUrl": "/league-badges/bundesliga/mainz.png"
+      },
+      {
+        "id": "union-berlin",
+        "name": "Union Berlin",
+        "shortName": "FCU",
+        "color": "#e30613",
+        "logoUrl": "/league-badges/bundesliga/union-berlin.png"
+      },
+      {
+        "id": "borussia-monchengladbach",
+        "name": "Borussia Mönchengladbach",
+        "shortName": "BMG",
+        "color": "#ffffff",
+        "logoUrl": "/league-badges/bundesliga/borussia-monchengladbach.png"
+      },
+      {
+        "id": "hamburg",
+        "name": "Hamburger SV",
+        "shortName": "HSV",
+        "color": "#0069b4",
+        "logoUrl": "/league-badges/bundesliga/hamburg.png"
+      },
+      {
+        "id": "cologne",
+        "name": "1. FC Köln",
+        "shortName": "KOE",
+        "color": "#ed1c24",
+        "logoUrl": "/league-badges/bundesliga/cologne.png"
+      },
+      {
+        "id": "werder-bremen",
+        "name": "Werder Bremen",
+        "shortName": "SVW",
+        "color": "#1d9053",
+        "logoUrl": "/league-badges/bundesliga/werder-bremen.png"
+      },
+      {
+        "id": "schalke",
+        "name": "Schalke 04",
+        "shortName": "S04",
+        "color": "#004d9d",
+        "logoUrl": "/league-badges/bundesliga/schalke.png"
+      },
+      {
+        "id": "elversberg",
+        "name": "SV Elversberg",
+        "shortName": "SVE",
+        "color": "#ffffff",
+        "logoUrl": "/league-badges/bundesliga/elversberg.png"
+      },
+      {
+        "id": "paderborn",
+        "name": "SC Paderborn",
+        "shortName": "SCP",
+        "color": "#0054a6",
+        "logoUrl": "/league-badges/bundesliga/paderborn.png"
+      }
+    ]
+  },
+  {
+    "id": "ligue-1-2026-27",
+    "route": "/ligue-1-predictor",
+    "leagueName": "Ligue 1",
+    "leagueMark": "LIGUE 1",
+    "logoUrl": "/league-logos/ligue-1.png",
+    "title": "Ligue 1",
+    "season": "2026/27",
+    "lockAt": "2026-08-21T20:45:00+02:00",
+    "sourceUrl": "https://ligue1.com/en/articles/l1_article_5292-the-2026-27-ligue-1-mc-donald-s-calendar-is-released",
+    "sourceLabel": "Official Ligue 1 2026/27 calendar",
+    "zones": [
+      {
+        "from": 1,
+        "to": 1,
+        "label": "Champion · UCL",
+        "className": "champion"
+      },
+      {
+        "from": 2,
+        "to": 4,
+        "label": "Champions League",
+        "className": "ucl"
+      },
+      {
+        "from": 5,
+        "to": 5,
+        "label": "Europa League",
+        "className": "europa"
+      },
+      {
+        "from": 6,
+        "to": 6,
+        "label": "Conference League",
+        "className": "conference"
+      },
+      {
+        "from": 16,
+        "to": 16,
+        "label": "Relegation playoff",
+        "className": "playoff"
+      },
+      {
+        "from": 17,
+        "to": 18,
+        "label": "Relegation",
+        "className": "relegation"
+      }
+    ],
+    "clubs": [
+      {
+        "id": "angers",
+        "name": "Angers SCO",
+        "shortName": "SCO",
+        "color": "#ffffff",
+        "logoUrl": "/league-badges/ligue-1/angers.png"
+      },
+      {
+        "id": "auxerre",
+        "name": "AJ Auxerre",
+        "shortName": "AJA",
+        "color": "#1c5ba8",
+        "logoUrl": "/league-badges/ligue-1/auxerre.png"
+      },
+      {
+        "id": "brest",
+        "name": "Stade Brestois 29",
+        "shortName": "SB29",
+        "color": "#d71920",
+        "logoUrl": "/league-badges/ligue-1/brest.png"
+      },
+      {
+        "id": "le-havre",
+        "name": "Le Havre AC",
+        "shortName": "HAC",
+        "color": "#69b7e5",
+        "logoUrl": "/league-badges/ligue-1/le-havre.png"
+      },
+      {
+        "id": "lens",
+        "name": "RC Lens",
+        "shortName": "RCL",
+        "color": "#e8c21c",
+        "logoUrl": "/league-badges/ligue-1/lens.png"
+      },
+      {
+        "id": "lille",
+        "name": "LOSC Lille",
+        "shortName": "LOSC",
+        "color": "#d71920",
+        "logoUrl": "/league-badges/ligue-1/lille.png"
+      },
+      {
+        "id": "lorient",
+        "name": "FC Lorient",
+        "shortName": "FCL",
+        "color": "#f58220",
+        "logoUrl": "/league-badges/ligue-1/lorient.png"
+      },
+      {
+        "id": "lyon",
+        "name": "Olympique Lyonnais",
+        "shortName": "OL",
+        "color": "#1f5aa6",
+        "logoUrl": "/league-badges/ligue-1/lyon.png"
+      },
+      {
+        "id": "le-mans",
+        "name": "Le Mans FC",
+        "shortName": "LMFC",
+        "color": "#f3d319",
+        "logoUrl": "/league-badges/ligue-1/le-mans.png"
+      },
+      {
+        "id": "marseille",
+        "name": "Olympique de Marseille",
+        "shortName": "OM",
+        "color": "#2faee4",
+        "logoUrl": "/league-badges/ligue-1/marseille.png"
+      },
+      {
+        "id": "monaco",
+        "name": "AS Monaco",
+        "shortName": "ASM",
+        "color": "#e32027",
+        "logoUrl": "/league-badges/ligue-1/monaco.png"
+      },
+      {
+        "id": "nice",
+        "name": "OGC Nice",
+        "shortName": "OGCN",
+        "color": "#d71920",
+        "logoUrl": "/league-badges/ligue-1/nice.png"
+      },
+      {
+        "id": "psg",
+        "name": "Paris Saint-Germain",
+        "shortName": "PSG",
+        "color": "#004170",
+        "logoUrl": "/league-badges/ligue-1/psg.png"
+      },
+      {
+        "id": "rennes",
+        "name": "Stade Rennais",
+        "shortName": "SRFC",
+        "color": "#d71920",
+        "logoUrl": "/league-badges/ligue-1/rennes.png"
+      },
+      {
+        "id": "strasbourg",
+        "name": "RC Strasbourg",
+        "shortName": "RCSA",
+        "color": "#1594d2",
+        "logoUrl": "/league-badges/ligue-1/strasbourg.png"
+      },
+      {
+        "id": "toulouse",
+        "name": "Toulouse FC",
+        "shortName": "TFC",
+        "color": "#5c2d91",
+        "logoUrl": "/league-badges/ligue-1/toulouse.png"
+      },
+      {
+        "id": "troyes",
+        "name": "ESTAC Troyes",
+        "shortName": "ESTAC",
+        "color": "#1976bb",
+        "logoUrl": "/league-badges/ligue-1/troyes.png"
+      },
+      {
+        "id": "paris-fc",
+        "name": "Paris FC",
+        "shortName": "PFC",
+        "color": "#143a65",
+        "logoUrl": "/league-badges/ligue-1/paris-fc.png"
+      }
+    ]
+  }
+]

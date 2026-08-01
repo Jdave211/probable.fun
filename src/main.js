@@ -392,14 +392,20 @@ const state = {
   activePredictorId: DEFAULT_PREDICTOR_ID,
   plRanking: [],
   plEntryId: "",
+  plShareCode: "",
   plSubmitted: false,
   plRemoteLoaded: false,
   plSaving: false,
   plSharedEntryId: "",
+  plSharedEntry: null,
+  plSharedEntryLoading: false,
+  plSharedEntryError: "",
   plGroupEntries: [],
   plGroupEntriesKey: "",
   plGroupEntriesLoading: false,
   plGroupEntriesError: "",
+  plEntryBoardScope: "group",
+  plEntryBoardGroupId: "",
   pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, suggestions: false, suggestionPreview: null, tradeMarketId: null, resolveMarketId: null },
   demoMode: false,
   demoPrevGroupId: null,
@@ -993,6 +999,9 @@ async function loadInitialAppData() {
           return loadLeaguePredictorGroupEntries({ refresh: true });
         })
         .catch(err => console.warn("Predictor group context deferred", err));
+    } else {
+      state.plEntryBoardScope = "global";
+      void loadLeaguePredictorGroupEntries({ refresh: true });
     }
     return;
   }
@@ -1225,6 +1234,9 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
   state.sharedMarketId = null;
   state.sharedBracketEntryId = "";
   state.plSharedEntryId = "";
+  state.plSharedEntry = null;
+  state.plSharedEntryLoading = false;
+  state.plSharedEntryError = "";
   state.joinPreFill = null;
   state.embedRoute = null;
 
@@ -1273,8 +1285,12 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
     if (state.activePredictorId !== nextPredictorId) {
       state.plRanking = [];
       state.plEntryId = "";
+      state.plShareCode = "";
       state.plSubmitted = false;
       state.plRemoteLoaded = false;
+      state.plEntryBoardScope = "group";
+      state.plEntryBoardGroupId = "";
+      resetLeaguePredictorGroupEntries();
     }
     state.shell = "app";
     state.view = "plPredictor";
@@ -1334,8 +1350,11 @@ function routeToBracket({ replace = false } = {}) {
   navigateTo("/bracket", { replace });
 }
 
-function routeToPremierLeaguePredictor({ replace = false } = {}) {
-  navigateTo(activeLeaguePredictor().route, { replace });
+function routeToPremierLeaguePredictor({ replace = false, entry = "" } = {}) {
+  const params = new URLSearchParams();
+  if (entry) params.set("entry", entry);
+  const query = params.toString();
+  navigateTo(`${activeLeaguePredictor().route}${query ? `?${query}` : ""}`, { replace });
 }
 
 function routeToMarket(marketId, { replace = false } = {}) {
@@ -1611,11 +1630,18 @@ async function onGlobalClick(e) {
       state.activePredictorId = LEAGUE_PREDICTORS[predictorId] ? predictorId : DEFAULT_PREDICTOR_ID;
       state.plRanking = [];
       state.plEntryId = "";
+      state.plShareCode = "";
       state.plSubmitted = false;
       state.plRemoteLoaded = false;
       state.plSharedEntryId = "";
+      state.plEntryBoardScope = "group";
+      state.plEntryBoardGroupId = "";
       resetLeaguePredictorGroupEntries();
     }
+    state.plSharedEntryId = "";
+    state.plSharedEntry = null;
+    state.plSharedEntryLoading = false;
+    state.plSharedEntryError = "";
     state.shell = "app";
     state.view = "plPredictor";
     state.trade = emptyTrade();
@@ -1628,11 +1654,44 @@ async function onGlobalClick(e) {
     return;
   }
 
+  const plEntryScope = e.target.closest("[data-pl-entry-scope]");
+  if (plEntryScope) {
+    e.preventDefault();
+    const nextScope = plEntryScope.dataset.plEntryScope === "global" ? "global" : "group";
+    if (state.plEntryBoardScope !== nextScope) {
+      state.plEntryBoardScope = nextScope;
+      resetLeaguePredictorGroupEntries();
+      renderPremierLeaguePredictor();
+      void loadLeaguePredictorGroupEntries({ refresh: true });
+    }
+    return;
+  }
+
+  const plSharedEntryButton = e.target.closest("[data-view-pl-entry]");
+  if (plSharedEntryButton) {
+    e.preventDefault();
+    await openSharedLeaguePrediction(plSharedEntryButton.dataset.viewPlEntry);
+    return;
+  }
+
+  if (e.target.closest("[data-pl-make-own]")) {
+    e.preventDefault();
+    openOwnLeaguePrediction();
+    return;
+  }
+
+  if (e.target.closest("[data-pl-view-entries]")) {
+    e.preventDefault();
+    document.querySelector(".pl-group-board")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+
   const plClubPick = e.target.closest("[data-pl-club-pick]");
   if (plClubPick) {
     e.preventDefault();
     selectPremierLeagueClub(plClubPick.dataset.plClubPick);
     renderPremierLeaguePredictor();
+    revealPremierLeagueMobileCurrentRow();
     return;
   }
 
@@ -1641,6 +1700,7 @@ async function onGlobalClick(e) {
     e.preventDefault();
     clearPremierLeaguePosition(Number(plClearPick.dataset.plClearPosition));
     renderPremierLeaguePredictor();
+    revealPremierLeagueMobileCurrentRow();
     return;
   }
 
@@ -1648,6 +1708,7 @@ async function onGlobalClick(e) {
     e.preventDefault();
     undoPremierLeaguePick();
     renderPremierLeaguePredictor();
+    revealPremierLeagueMobileCurrentRow();
     return;
   }
 
@@ -2484,6 +2545,17 @@ function handleTradeAmountFill(fillAmountBtn) {
 }
 
 function onGlobalChange(e) {
+  const plEntryGroupSelect = e.target.closest("[data-pl-entry-group]");
+  if (plEntryGroupSelect) {
+    const groupId = plEntryGroupSelect.value;
+    if (!leaguePredictorEntryGroups().some(group => group.id === groupId)) return;
+    state.plEntryBoardGroupId = groupId;
+    state.plEntryBoardScope = "group";
+    resetLeaguePredictorGroupEntries();
+    renderPremierLeaguePredictor();
+    void loadLeaguePredictorGroupEntries({ refresh: true });
+    return;
+  }
   const catalogGroupSelect = e.target.closest("[data-catalog-group]");
   if (catalogGroupSelect?.matches("select")) {
     const card = catalogGroupSelect.closest("[data-catalog-card]");
@@ -4709,6 +4781,10 @@ async function addGeneralMarketToGroup(groupId, addonId) {
   ids.add(addonId);
   addons[groupId] = [...ids];
   writeGroupAddons(addons);
+  const marketIds = Array.isArray(data.challenge?.marketIds) ? data.challenge.marketIds : [];
+  for (const catalogId of marketIds) {
+    await addCatalogMarketToGroup(groupId, catalogId);
+  }
   persistBootCache();
   return data.challenge;
 }
@@ -4868,6 +4944,7 @@ function loadPremierLeagueDraftIntoState() {
     state.plRanking = normalizePremierLeagueRanking(savedRanking || []);
     state.plSubmitted = Boolean(parsed.submitted && !state.plRemoteLoaded);
     state.plEntryId = state.plEntryId || parsed.entryId || "";
+    state.plShareCode = state.plShareCode || parsed.shareCode || "";
   } catch {
     state.plRanking = normalizePremierLeagueRanking(state.plRanking);
   }
@@ -4879,6 +4956,7 @@ function savePremierLeagueDraft() {
     mode: "sequential",
     submitted: state.plSubmitted,
     entryId: state.plEntryId,
+    shareCode: state.plShareCode,
     updatedAt: new Date().toISOString(),
   }));
 }
@@ -4968,21 +5046,47 @@ function resetLeaguePredictorGroupEntries() {
   state.plGroupEntriesError = "";
 }
 
+function leaguePredictorEntryGroups() {
+  return challengeAttachedGroups(leaguePredictorAddonId());
+}
+
+function leaguePredictorEntryGroup() {
+  const groups = leaguePredictorEntryGroups();
+  if (!groups.length) return null;
+  const selected = groups.find(group => group.id === state.plEntryBoardGroupId);
+  if (selected) return selected;
+  const sportyBoys = groups.find(group => String(group.name || "").trim().toLowerCase() === "sporty boys");
+  const current = groups.find(group => group.id === state.currentGroupId);
+  const group = sportyBoys || current || groups[0];
+  state.plEntryBoardGroupId = group?.id || "";
+  return group || null;
+}
+
 async function loadLeaguePredictorGroupEntries({ refresh = false, renderNow = true } = {}) {
-  const group = getCurrentGroup();
+  const group = leaguePredictorEntryGroup();
   const challengeId = leaguePredictorAddonId();
-  if (!group || !groupAddonIds(group).includes(challengeId)) {
+  // Signed-in predictor routes load memberships in parallel. Do not fall back to
+  // Everyone during that short window or it overrides the Sporty Boys default.
+  if (isLoggedIn() && state.plEntryBoardScope === "group" && !state.groups.length) return;
+  const scope = state.plEntryBoardScope === "global" || !group ? "global" : "group";
+  if (state.plEntryBoardScope !== scope) state.plEntryBoardScope = scope;
+  if (scope === "group" && (!group || !groupAddonIds(group).includes(challengeId))) {
     resetLeaguePredictorGroupEntries();
     return;
   }
-  const key = `${group.id}:${challengeId}`;
+  const key = scope === "global"
+    ? `global:${activeLeaguePredictor().id}`
+    : `group:${group.id}:${challengeId}`;
   if (!refresh && state.plGroupEntriesKey === key) return;
   state.plGroupEntriesLoading = true;
   state.plGroupEntriesError = "";
   state.plGroupEntriesKey = key;
   if (renderNow && state.view === "plPredictor") renderPremierLeaguePredictor();
   try {
-    const data = await api(`/api/groups/${encodeURIComponent(group.id)}/challenges/${encodeURIComponent(challengeId)}/leaderboard`);
+    const endpoint = scope === "global"
+      ? `/api/predictors/${encodeURIComponent(activeLeaguePredictor().id)}/entries`
+      : `/api/groups/${encodeURIComponent(group.id)}/challenges/${encodeURIComponent(challengeId)}/leaderboard`;
+    const data = await api(endpoint);
     if (state.plGroupEntriesKey !== key) return;
     state.plGroupEntries = Array.isArray(data.rows) ? data.rows : [];
   } catch (err) {
@@ -4996,40 +5100,63 @@ async function loadLeaguePredictorGroupEntries({ refresh = false, renderNow = tr
 }
 
 function leaguePredictorGroupPanelHtml() {
-  const group = getCurrentGroup();
-  if (!group || !groupAddonIds(group).includes(leaguePredictorAddonId())) return "";
+  const groups = leaguePredictorEntryGroups();
+  const group = leaguePredictorEntryGroup();
+  const scope = state.plEntryBoardScope === "global" || !group ? "global" : "group";
   const rows = state.plGroupEntries || [];
   const submitted = rows.filter(row => row.submitted).length;
+  const scopeName = scope === "global" ? "Everyone" : group?.name || "Group";
+  const scopeEmoji = scope === "group" ? group?.emoji || "" : "";
   return `
-    <section class="pl-group-board" aria-label="${esc(group.name)} challenge entries">
+    <section class="pl-group-board" aria-label="${esc(scopeName)} challenge entries">
       <div class="pl-group-board-head">
         <div>
-          <p class="eyebrow">${esc(`${group.emoji || ""} ${group.name}`.trim())}</p>
+          <p class="eyebrow">${esc(`${scopeEmoji} ${scopeName}`.trim())}</p>
           <h2>Entry board</h2>
         </div>
-        <span>${submitted}/${rows.length || (group.members || []).length} submitted</span>
+        <span>${scope === "global" ? `${submitted} submitted` : `${submitted}/${rows.length || (group?.members || []).length} submitted`}</span>
+      </div>
+      <div class="pl-entry-board-controls" aria-label="Entry board scope">
+        ${group ? `<button type="button" class="${scope === "group" ? "active" : ""}" data-pl-entry-scope="group">${esc(group.name)}</button>` : ""}
+        <button type="button" class="${scope === "global" ? "active" : ""}" data-pl-entry-scope="global">Everyone</button>
+        ${scope === "group" && groups.length > 1 ? `
+          <label>
+            <span>Group</span>
+            <select data-pl-entry-group>
+              ${groups.map(item => `<option value="${esc(item.id)}" ${item.id === group?.id ? "selected" : ""}>${esc(`${item.emoji || ""} ${item.name}`.trim())}</option>`).join("")}
+            </select>
+          </label>` : ""}
       </div>
       ${state.plGroupEntriesLoading ? `<p class="pl-group-board-state">Loading group entries...</p>` : ""}
       ${state.plGroupEntriesError ? `<p class="pl-group-board-state error">${esc(state.plGroupEntriesError)}</p>` : ""}
       ${!state.plGroupEntriesLoading && !state.plGroupEntriesError ? `
         <div class="pl-group-entry-list">
-          ${rows.length ? rows.map((row, index) => `
-            <article class="pl-group-entry-row ${row.submitted ? "submitted" : ""}">
+          ${rows.length ? rows.map((row, index) => {
+            const canView = Boolean(row.submitted && row.entryId);
+            const viewing = canView && row.entryId === state.plSharedEntryId;
+            return `
+            <button class="pl-group-entry-row ${row.submitted ? "submitted" : ""} ${viewing ? "is-viewing" : ""}" type="button"
+              ${canView ? `data-view-pl-entry="${esc(row.entryId)}" aria-label="View ${esc(row.participant)}'s prediction"` : "disabled"}>
               <span class="pl-group-entry-rank">${index + 1}</span>
               <span class="pl-group-entry-avatar">${esc(personInitials(row.participant || "?"))}</span>
               <span class="pl-group-entry-person">
                 <strong>${esc(row.participant)}</strong>
                 <small>${row.submitted ? `${esc(row.champion || "Table submitted")} to win` : row.picked ? `${row.picked} clubs picked` : "Not entered"}</small>
               </span>
-              <span class="pl-group-entry-status">${row.submitted ? "In" : "Open"}</span>
-            </article>`).join("") : `<p class="pl-group-board-state">No group members yet.</p>`}
+              <span class="pl-group-entry-status">${viewing ? "Viewing" : row.submitted ? "View" : "Open"}</span>
+            </button>`;
+          }).join("") : `<p class="pl-group-board-state">${scope === "global" ? "No submitted entries yet." : "No group members yet."}</p>`}
         </div>
-        <p class="pl-group-board-note">Scores unlock when the season starts. Challenge results stay separate from market PnL.</p>
+        <p class="pl-group-board-note">Open any submitted entry to compare the complete predicted table.</p>
       ` : ""}
     </section>`;
 }
 
 function renderPremierLeaguePredictor() {
+  if (state.plSharedEntryId) {
+    renderSharedLeaguePrediction();
+    return;
+  }
   const predictor = activeLeaguePredictor();
   loadPremierLeagueDraftIntoState();
   state.plRanking = normalizePremierLeagueRanking(state.plRanking);
@@ -5097,6 +5224,7 @@ function renderPremierLeaguePredictor() {
           <div class="pl-pick-progress" aria-label="${state.plRanking.length} of ${activeLeaguePredictor().clubs.length} clubs picked">
             <span style="width:${(state.plRanking.length / activeLeaguePredictor().clubs.length) * 100}%"></span>
           </div>
+          ${premierLeagueMobileTableHtml({ locked })}
           <div class="pl-club-picker-grid">
             ${activeLeaguePredictor().clubs.map(club => {
               const selected = picked.has(club.id);
@@ -5120,7 +5248,55 @@ function renderPremierLeaguePredictor() {
   `;
 }
 
-function premierLeagueRankingRow(clubId, index, { locked = false, current = false } = {}) {
+function premierLeagueMobileTableHtml({ locked = false } = {}) {
+  const ranking = normalizePremierLeagueRanking(state.plRanking);
+  const total = activeLeaguePredictor().clubs.length;
+  const complete = ranking.length === total;
+  const rows = ranking.map((clubId, index) => {
+    const club = premierLeagueClubById(clubId);
+    if (!club) return "";
+    const rank = index + 1;
+    const zone = premierLeagueZone(rank);
+    return `
+      <div class="pl-mobile-table-row ${esc(zone.className)}">
+        <strong>${rank}</strong>
+        ${premierLeagueClubBadge(club, "small")}
+        <span>${esc(club.name)}</span>
+        <button type="button" aria-label="Remove ${esc(club.name)}" data-pl-clear-position="${index}" ${locked ? "disabled" : ""}>×</button>
+      </div>`;
+  }).join("");
+  const nextRank = ranking.length + 1;
+  return `
+    <section class="pl-mobile-live-table" aria-label="Your live predicted table">
+      <header>
+        <div>
+          <span>Your table</span>
+          <strong>${ranking.length}/${total}</strong>
+        </div>
+        <small>${complete ? "Ready to review" : `${premierLeagueOrdinal(nextRank)} place next`}</small>
+      </header>
+      <div class="pl-mobile-table-rows">
+        ${rows}
+        ${complete ? "" : `
+          <div class="pl-mobile-table-row current ${esc(premierLeagueZone(nextRank).className)}">
+            <strong>${nextRank}</strong>
+            <span class="pl-mobile-empty-mark" aria-hidden="true">+</span>
+            <span>Choose a club below</span>
+            <i></i>
+          </div>`}
+      </div>
+    </section>`;
+}
+
+function revealPremierLeagueMobileCurrentRow() {
+  if (!window.matchMedia("(max-width: 760px)").matches) return;
+  requestAnimationFrame(() => {
+    const list = document.querySelector(".pl-mobile-table-rows");
+    if (list) list.scrollTop = list.scrollHeight;
+  });
+}
+
+function premierLeagueRankingRow(clubId, index, { locked = false, current = false, readOnly = false } = {}) {
   const club = clubId ? premierLeagueClubById(clubId) : null;
   const rank = index + 1;
   const zone = premierLeagueZone(rank);
@@ -5135,7 +5311,7 @@ function premierLeagueRankingRow(clubId, index, { locked = false, current = fals
             <small>${esc(club.shortName)}</small>
           </div>
         </div>
-        <button class="pl-clear-pick" type="button" aria-label="Remove ${esc(club.name)}" data-pl-clear-position="${index}" ${locked ? "disabled" : ""}>×</button>
+        ${readOnly ? `<span class="pl-predicted-position">${rank}</span>` : `<button class="pl-clear-pick" type="button" aria-label="Remove ${esc(club.name)}" data-pl-clear-position="${index}" ${locked ? "disabled" : ""}>×</button>`}
       ` : `
         <div class="pl-empty-club">${current ? `Choose the ${esc(premierLeagueOrdinal(rank))} place club` : "—"}</div>
         <span></span>
@@ -5144,16 +5320,106 @@ function premierLeagueRankingRow(clubId, index, { locked = false, current = fals
   `;
 }
 
+function renderSharedLeaguePrediction() {
+  const predictor = activeLeaguePredictor();
+  const entry = state.plSharedEntry;
+  const owner = entry?.participant || "Submitted prediction";
+  const ownLabel = isLoggedIn() ? "Open your prediction" : "Make your own";
+  if (state.plSharedEntryLoading || (!entry && !state.plSharedEntryError)) {
+    dom.mainContent.innerHTML = `<section class="pl-predictor-page pl-shared-predictor"><div class="pl-shared-state"><p class="eyebrow">Shared prediction</p><h1>Loading table...</h1></div></section>`;
+    return;
+  }
+  if (!entry || state.plSharedEntryError) {
+    dom.mainContent.innerHTML = `<section class="pl-predictor-page pl-shared-predictor"><div class="pl-shared-state"><p class="eyebrow">Shared prediction</p><h1>Prediction unavailable</h1><p>${esc(state.plSharedEntryError || "This prediction could not be found.")}</p><button class="btn btn-primary" type="button" data-pl-make-own>${esc(ownLabel)}</button></div></section>`;
+    return;
+  }
+  const ranking = normalizePremierLeagueRanking(entry.ranking || []);
+  const submittedAt = entry.submittedAt
+    ? new Date(entry.submittedAt).toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })
+    : "Submitted";
+  const champion = ranking[0] ? premierLeagueClubById(ranking[0]) : null;
+  const relegated = ranking.slice(-3).map(premierLeagueClubById).filter(Boolean);
+  dom.mainContent.innerHTML = `
+    <section class="pl-predictor-page pl-shared-predictor">
+      <header class="pl-predictor-hero pl-shared-hero motion-item">
+        <div class="pl-predictor-identity">
+          ${predictor.logoUrl ? `<img class="pl-league-logo" src="${esc(predictor.logoUrl)}" alt="${esc(predictor.leagueName)}" />` : `<div class="pl-league-wordmark">${esc(predictor.leagueMark)}</div>`}
+          <span class="pl-identity-divider" aria-hidden="true"></span>
+          <div>
+            <p class="eyebrow">${esc(predictor.season)} · shared prediction</p>
+            <h1>${esc(owner)}'s table</h1>
+            <p class="pl-predictor-subtitle">A submitted ${esc(predictor.leagueName)} prediction. Compare it with other entries or build your own.</p>
+          </div>
+        </div>
+        <div class="pl-predictor-actions">
+          <button class="btn btn-ghost btn-sm" type="button" data-pl-view-entries>View entries</button>
+          <button class="btn btn-primary btn-sm" type="button" data-pl-make-own>${esc(ownLabel)}</button>
+        </div>
+      </header>
+      <div class="pl-shared-layout motion-item">
+        <div class="pl-ranking-shell pl-shared-ranking">
+          <div class="pl-table-titlebar">
+            <div><p>${esc(owner)}'s prediction</p><strong>Final table</strong></div>
+            <span>${esc(submittedAt)}</span>
+          </div>
+          <div class="pl-ranking-head"><span>Pos</span><span>Club</span><span></span></div>
+          <div class="pl-ranking-list">
+            ${Array.from({ length: predictor.clubs.length }, (_, index) => premierLeagueRankingRow(ranking[index] || "", index, { locked: true, readOnly: true })).join("")}
+          </div>
+          <div class="pl-zone-strip">${predictor.zones.map(zone => `<span class="${esc(zone.className)}">${zone.from === zone.to ? zone.from : `${zone.from}-${zone.to}`} ${esc(zone.label)}</span>`).join("")}</div>
+        </div>
+        <aside class="pl-shared-summary">
+          <p class="eyebrow">The call</p>
+          <div class="pl-shared-champion">${champion ? premierLeagueClubBadge(champion) : ""}<div><span>Champion</span><strong>${esc(champion?.name || "Not picked")}</strong></div></div>
+          <div class="pl-shared-relegation"><span>Relegated</span><p>${relegated.map(club => esc(club.name)).join(" · ") || "Not picked"}</p></div>
+          <button class="btn btn-primary" type="button" data-pl-make-own>${esc(ownLabel)}</button>
+        </aside>
+      </div>
+      ${leaguePredictorGroupPanelHtml()}
+    </section>`;
+}
+
 async function loadRemotePremierLeagueEntry({ refresh = false } = {}) {
-  if (!isLoggedIn() && !state.plSharedEntryId) return;
+  if (state.plSharedEntryId) {
+    if (state.plSharedEntryLoading && !refresh) return;
+    if (state.plSharedEntry?.id === state.plSharedEntryId && !refresh) return;
+    const requestedEntryId = state.plSharedEntryId;
+    state.plSharedEntryLoading = true;
+    state.plSharedEntryError = "";
+    state.plSharedEntry = null;
+    if (state.view === "plPredictor") renderPremierLeaguePredictor();
+    try {
+      const data = await api(`/api/predictors/${activeLeaguePredictor().id}/entry?entry=${encodeURIComponent(requestedEntryId)}`);
+      if (state.plSharedEntryId !== requestedEntryId) return;
+      if (!data.entry?.submittedAt || !data.entry?.ranking?.length) {
+        throw new Error("That submitted prediction is not available.");
+      }
+      state.plSharedEntry = {
+        ...data.entry,
+        ranking: normalizePremierLeagueRanking(data.entry.ranking),
+      };
+    } catch (err) {
+      if (state.plSharedEntryId === requestedEntryId) {
+        state.plSharedEntryError = err.message || "Could not load that prediction.";
+      }
+    } finally {
+      if (state.plSharedEntryId === requestedEntryId) {
+        state.plSharedEntryLoading = false;
+        if (state.view === "plPredictor") renderPremierLeaguePredictor();
+        void loadLeaguePredictorGroupEntries({ refresh: true });
+      }
+    }
+    return;
+  }
+  if (!isLoggedIn()) return;
   if (state.plRemoteLoaded && !refresh) return;
   const params = new URLSearchParams();
-  if (state.plSharedEntryId) params.set("entry", state.plSharedEntryId);
-  else params.set("participant", authDisplayName());
+  params.set("participant", authDisplayName());
   const data = await api(`/api/predictors/${activeLeaguePredictor().id}/entry?${params.toString()}`);
   if (data.entry?.ranking?.length) {
     state.plRanking = normalizePremierLeagueRanking(data.entry.ranking);
     state.plEntryId = data.entry.id || "";
+    state.plShareCode = data.entry.shareCode || "";
     state.plSubmitted = Boolean(data.entry.submittedAt);
     state.plRemoteLoaded = true;
     savePremierLeagueDraft();
@@ -5162,6 +5428,31 @@ async function loadRemotePremierLeagueEntry({ refresh = false } = {}) {
   } else {
     state.plRemoteLoaded = true;
   }
+}
+
+async function openSharedLeaguePrediction(entryId) {
+  const cleanEntryId = String(entryId || "").trim();
+  if (!cleanEntryId) return;
+  state.plSharedEntryId = cleanEntryId;
+  state.plSharedEntry = null;
+  state.plSharedEntryError = "";
+  state.plSharedEntryLoading = false;
+  routeToPremierLeaguePredictor({ entry: cleanEntryId });
+  renderPremierLeaguePredictor();
+  await loadRemotePremierLeagueEntry({ refresh: true });
+}
+
+function openOwnLeaguePrediction() {
+  state.plSharedEntryId = "";
+  state.plSharedEntry = null;
+  state.plSharedEntryError = "";
+  state.plSharedEntryLoading = false;
+  routeToPremierLeaguePredictor();
+  if (!state.plRemoteLoaded) {
+    loadPremierLeagueDraftIntoState();
+    if (isLoggedIn()) void loadRemotePremierLeagueEntry({ refresh: true });
+  }
+  renderPremierLeaguePredictor();
 }
 
 async function submitPremierLeagueEntry() {
@@ -5193,6 +5484,7 @@ async function submitPremierLeagueEntry() {
       }),
     });
     state.plEntryId = data.entry?.id || state.plEntryId;
+    state.plShareCode = data.entry?.shareCode || state.plShareCode;
     state.plSubmitted = Boolean(data.entry?.submittedAt);
     state.plRemoteLoaded = true;
     savePremierLeagueDraft();
@@ -5207,8 +5499,30 @@ async function submitPremierLeagueEntry() {
 }
 
 function premierLeagueShareUrl() {
-  const base = `${sharePageBaseUrl()}/predictor/${encodeURIComponent(activeLeaguePredictor().id)}`;
-  return state.plEntryId ? `${base}?entry=${encodeURIComponent(state.plEntryId)}` : base;
+  const codes = {
+    "pl-2026-27": "pl",
+    "laliga-2026-27": "laliga",
+    "serie-a-2026-27": "seriea",
+    "bundesliga-2026-27": "bundesliga",
+    "ligue-1-2026-27": "ligue1",
+  };
+  const predictorId = activeLeaguePredictor().id;
+  const code = codes[predictorId] || predictorId;
+  const base = `${sharePageBaseUrl()}/p/${encodeURIComponent(code)}`;
+  if (!state.plEntryId) return base;
+  const shortCode = String(state.plShareCode || state.plEntryId || "").replaceAll("-", "").slice(0, 10).toLowerCase();
+  if (/^[a-f0-9]{10}$/.test(shortCode)) return `${sharePageBaseUrl()}/p/${shortCode}`;
+  const compactEntry = uuidToShareToken(state.plEntryId);
+  return compactEntry ? `${base}/${compactEntry}` : `${base}?entry=${encodeURIComponent(state.plEntryId)}`;
+}
+
+function uuidToShareToken(value) {
+  const hex = String(value || "").replaceAll("-", "");
+  if (!/^[a-f0-9]{32}$/i.test(hex)) return "";
+  const bytes = new Uint8Array(hex.match(/.{2}/g).map(pair => Number.parseInt(pair, 16)));
+  let binary = "";
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
 function premierLeagueShareCardUrl() {
@@ -5220,7 +5534,7 @@ function premierLeagueShareCardUrl() {
 }
 
 async function openPremierLeagueShareModal() {
-  if (!state.plEntryId) {
+  if (!state.plEntryId || !state.plSubmitted) {
     toast("Submit your table before sharing it.");
     return;
   }
@@ -5498,7 +5812,8 @@ function catalogConsensusChart(item) {
 }
 
 function catalogMarketImage(item, className = "catalog-market-logo") {
-  return `<span class="${className}">${item.imageUrl ? `<img src="${esc(item.imageUrl)}" alt="" loading="lazy" />` : "PB"}</span>`;
+  const imageKind = isLeagueMarkImage(item.imageUrl) ? "is-logo" : "is-photo";
+  return `<span class="${className} ${imageKind}">${item.imageUrl ? `<img src="${esc(item.imageUrl)}" alt="" loading="lazy" />` : "PB"}</span>`;
 }
 
 function catalogOutcomeControls(item, outcome, compact = false) {
@@ -5684,9 +5999,7 @@ function renderDashboard() {
 
   const activeStatus = state.marketStatus === "closed" ? "closed" : "open";
   const allEvents = marketEvents(markets);
-  const groupGeneralMarkets = generalMarketsForGroup(group);
-  const generalCards = activeStatus === "open" ? groupGeneralMarkets : [];
-  const open = allEvents.filter(event => eventStatus(event) === "open").length + groupGeneralMarkets.length;
+  const open = allEvents.filter(event => eventStatus(event) === "open").length;
   const closed = allEvents.filter(event => eventStatus(event) !== "open").length;
   const visibleMarkets = dashboardVisibleMarkets(markets);
   const events = sortedMarketEvents(visibleMarkets);
@@ -5740,7 +6053,7 @@ function renderDashboard() {
             </div>
             ${marketSortControl()}
           </div>
-          ${(visibleMarkets.length || generalCards.length) ? `<div class="market-grid" data-market-grid>${generalCards.map(generalMarketCard).join("")}${events.map(event => eventCard(event)).join("")}</div>` : emptyMarketsHtml(activeStatus)}
+          ${visibleMarkets.length ? `<div class="market-grid" data-market-grid>${events.map(event => eventCard(event)).join("")}</div>` : emptyMarketsHtml(activeStatus)}
         </section>
 
         <aside class="side-panel motion-item">
@@ -5750,58 +6063,6 @@ function renderDashboard() {
       </div>
     </section>
   `;
-}
-
-function generalMarketCard(item) {
-  if (item.type === "bracket") {
-    return `
-      <article class="event-card general-market-card motion-item" data-go-bracket>
-        <div class="event-card-inner">
-          <div class="event-card-head">
-            <div class="event-thumb event-thumb-image" aria-hidden="true">🏆</div>
-            <div class="event-title-wrap">
-              <p class="event-title">${esc(item.title)}</p>
-            </div>
-            <span class="general-market-badge">General</span>
-          </div>
-          <div class="general-market-card-body">
-            <strong>${esc(item.prize)} prize</strong>
-            <span>${esc(item.subtitle)}</span>
-          </div>
-          <div class="event-card-foot">
-            <span>Bracket contest</span>
-            <span class="event-card-creator">from general pool</span>
-          </div>
-        </div>
-      </article>
-    `;
-  }
-  if (item.type === "league-predictor") {
-    return `
-      <article class="event-card general-market-card motion-item" data-go-league-predictor="${esc(item.predictorId)}">
-        <div class="event-card-inner">
-          <div class="event-card-head">
-            <div class="event-thumb event-thumb-image general-league-mark" aria-hidden="true">
-              ${item.logoUrl ? `<img src="${esc(item.logoUrl)}" alt="" loading="lazy" />` : esc(item.leagueMark)}
-            </div>
-            <div class="event-title-wrap">
-              <p class="event-title">${esc(item.title)}</p>
-            </div>
-            <span class="general-market-badge">General</span>
-          </div>
-          <div class="general-market-card-body">
-            <strong>Rank the table</strong>
-            <span>${esc(item.subtitle)}</span>
-          </div>
-          <div class="event-card-foot">
-            <span>Season contest</span>
-            <span class="event-card-creator">from general pool</span>
-          </div>
-        </div>
-      </article>
-    `;
-  }
-  return "";
 }
 
 function renderFocusedTradeView(group, market, event) {
@@ -6539,7 +6800,12 @@ function eventThumb(title, imageUrl = "") {
   return `<img src="/ball.png" alt="" />`;
 }
 
+function isLeagueMarkImage(imageUrl = "") {
+  return String(imageUrl || "").includes("/league-logos/");
+}
+
 function eventThumbClass(title, imageUrl = "") {
+  if (isLeagueMarkImage(imageUrl)) return "event-thumb-logo";
   if (imageUrl) return "event-thumb-photo";
   if (marketImageForTitle(title)) return "event-thumb-photo";
   const lower = title.toLowerCase();

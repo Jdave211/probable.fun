@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS bracket_entries (
 -- signed-in submissions persist here and lock once the season starts.
 CREATE TABLE IF NOT EXISTS season_predictions (
   id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  share_code   text        UNIQUE DEFAULT left(replace(gen_random_uuid()::text, '-', ''), 10),
   challenge_id text       NOT NULL,
   participant  text       NOT NULL,
   user_email   text,
@@ -170,6 +171,27 @@ CREATE TABLE IF NOT EXISTS season_predictions (
   created_at   timestamptz NOT NULL DEFAULT now(),
   updated_at   timestamptz NOT NULL DEFAULT now(),
   UNIQUE (challenge_id, participant)
+);
+
+ALTER TABLE season_predictions ADD COLUMN IF NOT EXISTS share_code text;
+UPDATE season_predictions
+SET share_code = left(replace(id::text, '-', ''), 10)
+WHERE share_code IS NULL;
+ALTER TABLE season_predictions
+  ALTER COLUMN share_code SET DEFAULT left(replace(gen_random_uuid()::text, '-', ''), 10);
+CREATE UNIQUE INDEX IF NOT EXISTS season_predictions_share_code_idx
+  ON season_predictions (share_code)
+  WHERE share_code IS NOT NULL;
+
+-- Reusable global challenges attached to individual friend groups. Entries stay
+-- global per user; this table controls discovery and group-specific standings.
+CREATE TABLE IF NOT EXISTS group_challenges (
+  id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  group_id     text        NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  challenge_id text        NOT NULL,
+  added_by     text,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (group_id, challenge_id)
 );
 
 -- Market settlement approvals. Founder + creator must agree before payout when
@@ -206,6 +228,7 @@ CREATE INDEX IF NOT EXISTS idx_event_positions_event_participant ON event_positi
 CREATE INDEX IF NOT EXISTS idx_event_trades_event ON event_trades(event_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bracket_entries_challenge ON bracket_entries(challenge_id, submitted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_season_predictions_challenge ON season_predictions(challenge_id, submitted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_group_challenges_group ON group_challenges(group_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_market_resolution_approvals_event ON market_resolution_approvals(event_id, created_at);
 ALTER TABLE market_events ADD COLUMN IF NOT EXISTS image_url text;
 ALTER TABLE market_events ADD COLUMN IF NOT EXISTS created_by text;
@@ -235,6 +258,7 @@ ALTER TABLE event_positions DISABLE ROW LEVEL SECURITY;
 ALTER TABLE event_trades DISABLE ROW LEVEL SECURITY;
 ALTER TABLE bracket_entries DISABLE ROW LEVEL SECURITY;
 ALTER TABLE season_predictions DISABLE ROW LEVEL SECURITY;
+ALTER TABLE group_challenges DISABLE ROW LEVEL SECURITY;
 ALTER TABLE market_resolution_approvals DISABLE ROW LEVEL SECURITY;
 
 -- Grant full access to the anon/publishable key role
@@ -249,6 +273,7 @@ GRANT ALL ON event_positions TO anon;
 GRANT ALL ON event_trades TO anon;
 GRANT ALL ON bracket_entries TO anon;
 GRANT ALL ON season_predictions TO anon;
+GRANT ALL ON group_challenges TO anon;
 GRANT ALL ON market_resolution_approvals TO anon;
 
 CREATE OR REPLACE FUNCTION probable_reprice_event(p_event_id text)
@@ -594,3 +619,31 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION resolve_event_market(text, text, text, text, jsonb) TO anon;
+
+CREATE TABLE IF NOT EXISTS market_catalog (
+  id text PRIMARY KEY,
+  slug text UNIQUE NOT NULL,
+  title text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  category text NOT NULL DEFAULT 'General',
+  image_url text,
+  outcomes jsonb NOT NULL DEFAULT '["Yes", "No"]'::jsonb,
+  initial_probabilities jsonb,
+  closes_at timestamptz NOT NULL,
+  resolution_source text,
+  edge_cases text,
+  oracle_type text NOT NULL DEFAULT 'manual',
+  initial_liquidity numeric NOT NULL DEFAULT 20000,
+  status text NOT NULL DEFAULT 'open',
+  featured boolean NOT NULL DEFAULT false,
+  created_by text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE market_events ADD COLUMN IF NOT EXISTS catalog_market_id text;
+CREATE INDEX IF NOT EXISTS market_catalog_status_category_idx ON market_catalog (status, category, featured DESC);
+CREATE INDEX IF NOT EXISTS market_events_catalog_market_id_idx ON market_events (catalog_market_id) WHERE catalog_market_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS market_events_group_catalog_unique_idx ON market_events (group_id, catalog_market_id) WHERE catalog_market_id IS NOT NULL;
+ALTER TABLE market_catalog DISABLE ROW LEVEL SECURITY;
+GRANT ALL ON TABLE market_catalog TO anon;

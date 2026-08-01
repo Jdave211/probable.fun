@@ -1,0 +1,17 @@
+{
+  "notes": "Purpose-specific market card crops. Wikimedia files retain their original licenses; Premier League club marks are used only to identify the clubs in their respective markets.",
+  "images": [
+    {"src":"/catalog-images/pl-winner.jpg","source":"https://commons.wikimedia.org/wiki/File:2010_FIFA_World_Cup_Spain_with_cup.JPG","license":"CC BY-SA 3.0","artist":"Christophe Badoux"},
+    {"src":"/catalog-images/pl-golden-boot.jpg","source":"https://commons.wikimedia.org/wiki/File:Mario_Kempes_1978_Argentina_-_Holanda.jpg","license":"Public domain","artist":"Unknown"},
+    {"src":"/catalog-images/pl-most-assists.jpg","source":"https://commons.wikimedia.org/wiki/File:Alg%C3%A9rie_-_Arm%C3%A9nie_-_20140531_-_Yacine_Brahimi_(Alg)_face_%C3%A0_Taron_Voskanyan_(Arm).jpg","license":"CC BY-SA 4.0","artist":"Clement Bucco-Lechat"},
+    {"src":"/catalog-images/pl-golden-glove.jpg","source":"https://commons.wikimedia.org/wiki/File:Nederland_tegen_Schotland_0-0._Keeper_Clark_stopt_schot_van_Van_der_Kuylen,_Bestanddeelnr_921-4038.jpg","license":"CC0","artist":"Ron Kroon / Anefo"},
+    {"src":"/catalog-images/pl-promoted-clubs.jpg","source":"https://commons.wikimedia.org/wiki/File:20180602_FIFA_Friendly_Match_Austria_vs._Germany_Team_Germany_850_0740.jpg","license":"CC BY-SA 4.0","artist":"Granada"},
+    {"src":"/catalog-images/pl-promoted-survival.jpg","source":"https://commons.wikimedia.org/wiki/File:Football_in_Bloomington,_Indiana,_1995.jpg","license":"CC BY-SA 3.0","artist":"Rick Dikeman"},
+    {"src":"/catalog-images/pl-champion-points.jpg","source":"https://commons.wikimedia.org/wiki/File:FIFA_World_Cup_Trophy_at_National_Football_Museum,_Manchester_02.jpg","license":"CC BY-SA 4.0","artist":"Ank Kumar"},
+    {"src":"/catalog-images/arsenal-top-five.png","source":"https://resources.premierleague.com/premierleague/badges/100/t3.png","license":"Club badge","artist":"Arsenal FC"},
+    {"src":"/catalog-images/manchester-united-top-five.png","source":"https://resources.premierleague.com/premierleague/badges/100/t1.png","license":"Club badge","artist":"Manchester United FC"},
+    {"src":"/catalog-images/chelsea-vs-spurs.png","source":"https://resources.premierleague.com/premierleague/badges/100/t8.png, https://resources.premierleague.com/premierleague/badges/100/t6.png","license":"Club badges","artist":"Chelsea FC and Tottenham Hotspur FC"},
+    {"src":"/catalog-images/pl-first-manager.jpg","source":"https://commons.wikimedia.org/wiki/File:Se%C3%B1al_de_Cambio_de_Jugador_cropped.JPG","license":"CC BY 3.0","artist":"Sahaquiel9102 / Yellowcard"},
+    {"src":"/catalog-images/pl-highest-scoring.jpg","source":"https://commons.wikimedia.org/wiki/File:Football_in_Bloomington,_Indiana,_1995.jpg","license":"CC BY-SA 3.0","artist":"Rick Dikeman"}
+  ]
+}
