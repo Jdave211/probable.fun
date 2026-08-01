@@ -136,6 +136,15 @@ class SeasonPredictionSave(BaseModel):
     submitted: bool = False
 
 
+class GroupChallengeAdd(BaseModel):
+    challengeId: str = Field(min_length=1, max_length=100)
+    addedBy: str | None = Field(default=None, max_length=80)
+
+
+class CatalogMarketAdd(BaseModel):
+    addedBy: str | None = Field(default=None, max_length=80)
+
+
 class OracleVote(BaseModel):
     participant: str = Field(min_length=1, max_length=40)
     outcome: str = Field(min_length=1, max_length=80)
@@ -1039,6 +1048,7 @@ def assemble_event_markets(event: dict) -> list[dict]:
             "description": event.get("description") or "",
             "imageUrl": event.get("image_url"),
             "creator": event.get("created_by"),
+            "catalogMarketId": event.get("catalog_market_id"),
             "status": status,
             "mode": event["mode"],
             "oracleType": event["oracle_type"],
@@ -1136,6 +1146,7 @@ def assemble_market(m: dict) -> dict:
 
 def assemble_group(g: dict) -> dict:
     members_raw = sorted(g.pop("group_members", []), key=lambda x: x.get("joined_at") or "")
+    challenges_raw = sorted(g.pop("group_challenges", []), key=lambda x: x.get("created_at") or "")
     events_raw = sorted(g.pop("market_events", []), key=lambda x: x.get("created_at") or "", reverse=True)
     markets_raw = sorted(g.pop("markets", []), key=lambda x: x.get("created_at") or "", reverse=True)
     migrated_legacy_ids = {
@@ -1162,6 +1173,16 @@ def assemble_group(g: dict) -> dict:
         "members":   [m["name"] for m in members_raw],
         "balances":  {m["name"]: m["balance"] for m in members_raw},
         "markets":   [*event_markets, *legacy_markets],
+        "challenges": [
+            {
+                "id": row.get("challenge_id"),
+                "attachmentId": row.get("id"),
+                "addedBy": row.get("added_by"),
+                "addedAt": row.get("created_at"),
+            }
+            for row in challenges_raw
+            if row.get("challenge_id")
+        ],
     }
 
 
@@ -1212,7 +1233,22 @@ def load_all_groups(*, compact: bool = True, group_id: str | None = None, limit:
     if compact and limit:
         query = query.limit(max(1, min(int(limit), 50)))
     result = query.order("created_at", desc=True).execute()
-    groups = [assemble_group(deepcopy(g)) for g in result.data]
+    raw_groups = [deepcopy(g) for g in result.data]
+    group_ids = [str(group.get("id")) for group in raw_groups if group.get("id")]
+    challenge_rows: list[dict] = []
+    if group_ids:
+        try:
+            challenge_rows = db.table("group_challenges").select("*").in_("group_id", group_ids).execute().data or []
+        except Exception:
+            # Keep the existing app usable while a deployment is rolling out the
+            # additive group_challenges migration.
+            challenge_rows = []
+    by_group: dict[str, list[dict]] = {}
+    for row in challenge_rows:
+        by_group.setdefault(str(row.get("group_id")), []).append(row)
+    for group in raw_groups:
+        group["group_challenges"] = by_group.get(str(group.get("id")), [])
+    groups = [assemble_group(group) for group in raw_groups]
     return strip_data_url_images(groups) if compact else groups
 
 
@@ -2644,6 +2680,477 @@ LEAGUE_PREDICTORS = {
 }
 
 
+def default_market_catalog() -> list[dict]:
+    """Curated global definitions. Group imports get independent LMSR state."""
+    premier_league_club_priors = {
+        "Arsenal": 0.14,
+        "Aston Villa": 0.05,
+        "AFC Bournemouth": 0.03,
+        "Brentford": 0.03,
+        "Brighton & Hove Albion": 0.035,
+        "Chelsea": 0.10,
+        "Coventry City": 0.005,
+        "Crystal Palace": 0.035,
+        "Everton": 0.025,
+        "Fulham": 0.02,
+        "Hull City": 0.005,
+        "Ipswich Town": 0.005,
+        "Leeds United": 0.015,
+        "Liverpool": 0.13,
+        "Manchester City": 0.16,
+        "Manchester United": 0.075,
+        "Newcastle United": 0.065,
+        "Nottingham Forest": 0.04,
+        "Tottenham Hotspur": 0.055,
+        "Sunderland": 0.01,
+    }
+    rows: list[dict] = []
+    for predictor in LEAGUE_PREDICTORS.values():
+        league_name = str(predictor.get("leagueName") or "League")
+        season = str(predictor.get("season") or "2026/27")
+        closes_at = "2027-05-30T14:00:00+00:00" if predictor.get("id") == "pl-2026-27" else "2027-06-01T00:00:00+00:00"
+        outcomes = [str(club.get("name") or "").strip() for club in predictor.get("clubs") or []]
+        outcomes = [item for item in outcomes if item]
+        rows.append({
+            "id": f"{predictor['id']}-winner",
+            "slug": f"{predictor['id']}-winner",
+            "title": f"Who will win the {season} {league_name}?",
+            "description": f"This market resolves to the club officially crowned {league_name} champion for the {season} season.",
+            "category": league_name,
+            "imageUrl": predictor.get("logoUrl"),
+            "outcomes": outcomes,
+            "initialProbabilities": premier_league_club_priors if predictor.get("id") == "pl-2026-27" else None,
+            "closesAt": closes_at,
+            "resolutionSource": str(predictor.get("sourceUrl") or "Official league standings"),
+            "edgeCases": "If the competition is abandoned, settlement waits for the league's official ruling.",
+            "oracleType": "manual",
+            "initialLiquidity": 120000.0 if len(outcomes) > 10 else 50000.0,
+            "featured": predictor.get("id") == "pl-2026-27",
+        })
+    premier_league = LEAGUE_PREDICTORS.get("pl-2026-27") or {}
+    premier_league_clubs = [
+        str(club.get("name") or "").strip()
+        for club in premier_league.get("clubs") or []
+        if str(club.get("name") or "").strip()
+    ]
+    premier_league_logo = str(premier_league.get("logoUrl") or "/league-logos/premier-league-dark.png")
+    season_close = "2027-05-30T14:00:00+00:00"
+    promoted_clubs = ["Coventry City", "Ipswich Town", "Hull City"]
+
+    rows.extend([
+        {
+            "id": "pl-2026-27-golden-boot",
+            "slug": "premier-league-golden-boot-2026-27",
+            "title": "Who will win the 2026/27 Premier League Golden Boot?",
+            "category": "Premier League",
+            "imageUrl": premier_league_logo,
+            "description": "Resolves to the player officially awarded the 2026/27 Premier League Golden Boot.",
+            "outcomes": [
+                "Erling Haaland", "Igor Thiago", "Antoine Semenyo", "Hugo Ekitike",
+                "Mohamed Salah", "Joao Pedro", "Viktor Gyokeres", "Alexander Isak",
+                "Bryan Mbeumo", "Ollie Watkins", "Bukayo Saka", "Any other player", "Shared award",
+            ],
+            "initialProbabilities": {
+                "Erling Haaland": 0.22, "Igor Thiago": 0.10, "Antoine Semenyo": 0.08,
+                "Hugo Ekitike": 0.08, "Mohamed Salah": 0.08, "Joao Pedro": 0.07,
+                "Viktor Gyokeres": 0.07, "Alexander Isak": 0.06, "Bryan Mbeumo": 0.05,
+                "Ollie Watkins": 0.05, "Bukayo Saka": 0.04, "Any other player": 0.08,
+                "Shared award": 0.02,
+            },
+            "closesAt": season_close,
+            "resolutionSource": "Official Premier League Golden Boot announcement and final player statistics",
+            "edgeCases": "Any unlisted sole winner resolves to Any other player. If the award is shared by multiple players, Shared award wins.",
+            "oracleType": "manual",
+            "initialLiquidity": 90000.0,
+            "featured": True,
+        },
+        {
+            "id": "pl-2026-27-most-assists",
+            "slug": "premier-league-most-assists-2026-27",
+            "title": "Who will record the most Premier League assists in 2026/27?",
+            "category": "Premier League",
+            "imageUrl": premier_league_logo,
+            "description": "Resolves to the player officially credited with the most assists in the 2026/27 Premier League season.",
+            "outcomes": [
+                "Bruno Fernandes", "Mohamed Salah", "Bukayo Saka", "Cole Palmer",
+                "Phil Foden", "Declan Rice", "Morgan Gibbs-White", "Florian Wirtz",
+                "Antoine Semenyo", "Eberechi Eze", "Any other player", "Shared lead",
+            ],
+            "initialProbabilities": {
+                "Bruno Fernandes": 0.16, "Mohamed Salah": 0.10, "Bukayo Saka": 0.10,
+                "Cole Palmer": 0.10, "Phil Foden": 0.08, "Declan Rice": 0.07,
+                "Morgan Gibbs-White": 0.06, "Florian Wirtz": 0.08,
+                "Antoine Semenyo": 0.05, "Eberechi Eze": 0.05,
+                "Any other player": 0.12, "Shared lead": 0.03,
+            },
+            "closesAt": season_close,
+            "resolutionSource": "Official Premier League Playmaker Award announcement and final player statistics",
+            "edgeCases": "Any unlisted sole leader resolves to Any other player. If multiple players share the official lead, Shared lead wins.",
+            "oracleType": "manual",
+            "initialLiquidity": 90000.0,
+            "featured": True,
+        },
+        {
+            "id": "pl-2026-27-golden-glove",
+            "slug": "premier-league-golden-glove-2026-27",
+            "title": "Who will win the 2026/27 Premier League Golden Glove?",
+            "description": "Resolves to the goalkeeper officially awarded the 2026/27 Premier League Golden Glove.",
+            "category": "Premier League",
+            "imageUrl": premier_league_logo,
+            "outcomes": [
+                "David Raya", "Gianluigi Donnarumma", "Alisson Becker", "Robert Sanchez",
+                "Nick Pope", "Emiliano Martinez", "Jordan Pickford", "Dean Henderson",
+                "Bart Verbruggen", "Guglielmo Vicario", "Any other goalkeeper", "Shared award",
+            ],
+            "initialProbabilities": {
+                "David Raya": 0.16, "Gianluigi Donnarumma": 0.15, "Alisson Becker": 0.12,
+                "Robert Sanchez": 0.09, "Nick Pope": 0.08, "Emiliano Martinez": 0.07,
+                "Jordan Pickford": 0.06, "Dean Henderson": 0.07, "Bart Verbruggen": 0.05,
+                "Guglielmo Vicario": 0.05, "Any other goalkeeper": 0.08,
+                "Shared award": 0.02,
+            },
+            "closesAt": season_close,
+            "resolutionSource": "Official Premier League Golden Glove announcement and final goalkeeper statistics",
+            "edgeCases": "Any unlisted sole winner resolves to Any other goalkeeper. If the award is shared, Shared award wins.",
+            "oracleType": "manual",
+            "initialLiquidity": 85000.0,
+            "featured": False,
+        },
+        {
+            "id": "pl-2026-27-highest-promoted-club",
+            "slug": "highest-promoted-premier-league-club-2026-27",
+            "title": "Which promoted club will finish highest in the Premier League?",
+            "description": "Resolves to the highest-placed promoted club in the final 2026/27 Premier League table.",
+            "category": "Premier League",
+            "imageUrl": premier_league_logo,
+            "outcomes": promoted_clubs,
+            "initialProbabilities": {"Coventry City": 0.34, "Ipswich Town": 0.38, "Hull City": 0.28},
+            "closesAt": season_close,
+            "resolutionSource": "Official final Premier League table",
+            "edgeCases": "The official final table and its tie-break rules determine the highest-placed club. Points deductions count.",
+            "oracleType": "manual",
+            "initialLiquidity": 50000.0,
+            "featured": False,
+        },
+        {
+            "id": "pl-2026-27-any-promoted-survives",
+            "slug": "any-promoted-club-survives-2026-27",
+            "title": "Will any promoted club survive the 2026/27 Premier League season?",
+            "description": "Resolves Yes if Coventry City, Ipswich Town, or Hull City finish 17th or higher in the final table.",
+            "category": "Premier League",
+            "imageUrl": premier_league_logo,
+            "outcomes": ["Yes", "No"],
+            "closesAt": season_close,
+            "resolutionSource": "Official final Premier League table",
+            "edgeCases": "Points deductions count. Yes wins if at least one promoted club is outside the relegation places in the official final table.",
+            "oracleType": "manual",
+            "initialLiquidity": 35000.0,
+            "featured": False,
+        },
+        {
+            "id": "pl-2026-27-champion-over-89-5",
+            "slug": "premier-league-champion-over-89-5-points-2026-27",
+            "title": "Will the Premier League champion finish with over 89.5 points?",
+            "description": "Resolves Over 89.5 if the 2026/27 champion records at least 90 points; otherwise Under 89.5.",
+            "category": "Premier League",
+            "imageUrl": premier_league_logo,
+            "outcomes": ["Over 89.5", "Under 89.5"],
+            "closesAt": season_close,
+            "resolutionSource": "Official final Premier League table",
+            "edgeCases": "Use the champion's points after every official deduction or adjustment reflected in the final table.",
+            "oracleType": "manual",
+            "initialLiquidity": 35000.0,
+            "featured": False,
+        },
+        {
+            "id": "pl-2026-27-arsenal-top-five",
+            "slug": "arsenal-top-five-2026-27",
+            "title": "Will Arsenal finish in the Premier League top five?",
+            "description": "Resolves Yes if Arsenal finish fifth or higher in the final 2026/27 Premier League table.",
+            "category": "Premier League",
+            "imageUrl": premier_league_logo,
+            "outcomes": ["Yes", "No"],
+            "closesAt": season_close,
+            "resolutionSource": "Official final Premier League table",
+            "edgeCases": "Points deductions count if reflected in the official final table.",
+            "oracleType": "manual",
+            "initialLiquidity": 35000.0,
+            "featured": False,
+        },
+        {
+            "id": "pl-2026-27-man-utd-top-five",
+            "slug": "manchester-united-top-five-2026-27",
+            "title": "Will Manchester United finish in the Premier League top five?",
+            "description": "Resolves Yes if Manchester United finish fifth or higher in the final 2026/27 Premier League table.",
+            "category": "Premier League",
+            "imageUrl": premier_league_logo,
+            "outcomes": ["Yes", "No"],
+            "closesAt": season_close,
+            "resolutionSource": "Official final Premier League table",
+            "edgeCases": "Points deductions count if reflected in the official final table.",
+            "oracleType": "manual",
+            "initialLiquidity": 35000.0,
+            "featured": False,
+        },
+        {
+            "id": "pl-2026-27-chelsea-vs-spurs",
+            "slug": "chelsea-vs-tottenham-higher-finish-2026-27",
+            "title": "Who will finish higher: Chelsea or Tottenham Hotspur?",
+            "description": "Resolves to the club placed higher in the final 2026/27 Premier League table.",
+            "category": "Premier League",
+            "imageUrl": premier_league_logo,
+            "outcomes": ["Chelsea", "Tottenham Hotspur"],
+            "closesAt": season_close,
+            "resolutionSource": "Official final Premier League table",
+            "edgeCases": "Official league tie-break rules determine which club finishes higher. Points deductions count.",
+            "oracleType": "manual",
+            "initialLiquidity": 40000.0,
+            "featured": False,
+        },
+        {
+            "id": "pl-2026-27-first-manager-to-leave",
+            "slug": "first-premier-league-manager-to-leave-2026-27",
+            "title": "Who will be the first Premier League manager to leave?",
+            "description": "Resolves to the first permanent Premier League manager to stop holding their role during the 2026/27 season.",
+            "category": "Premier League",
+            "imageUrl": premier_league_logo,
+            "outcomes": [
+                "Mikel Arteta — Arsenal", "Unai Emery — Aston Villa", "Marco Rose — AFC Bournemouth",
+                "Keith Andrews — Brentford", "Fabian Hurzeler — Brighton", "Xabi Alonso — Chelsea",
+                "Frank Lampard — Coventry City", "Pierre Sage — Crystal Palace", "David Moyes — Everton",
+                "Alvaro Arbeloa — Fulham", "Sergej Jakirovic — Hull City", "Gary O'Neil — Ipswich Town",
+                "Daniel Farke — Leeds United", "Andoni Iraola — Liverpool", "Enzo Maresca — Manchester City",
+                "Michael Carrick — Manchester United", "Eddie Howe — Newcastle United",
+                "Oliver Glasner — Nottingham Forest", "Regis Le Bris — Sunderland",
+                "Roberto De Zerbi — Tottenham Hotspur", "No manager leaves", "Joint / indistinguishable timing",
+            ],
+            "closesAt": "2026-08-21T18:45:00+00:00",
+            "resolutionSource": "Official club announcement, supported by the Premier League manager directory",
+            "edgeCases": "Dismissal, resignation, or mutual consent counts when officially announced. Temporary absence does not. If two departures are announced at the same recorded time, Joint / indistinguishable timing wins. No manager leaves wins only if every listed manager remains through the final matchday.",
+            "oracleType": "manual",
+            "initialLiquidity": 120000.0,
+            "featured": True,
+        },
+        {
+            "id": "pl-2026-27-highest-scoring-club",
+            "slug": "highest-scoring-premier-league-club-2026-27",
+            "title": "Which club will score the most Premier League goals in 2026/27?",
+            "description": "Resolves to the club with the most goals scored in the final 2026/27 Premier League table.",
+            "category": "Premier League",
+            "imageUrl": premier_league_logo,
+            "outcomes": [*premier_league_clubs, "Tie"],
+            "initialProbabilities": {**premier_league_club_priors, "Tie": 0.02},
+            "closesAt": season_close,
+            "resolutionSource": "Official final Premier League table",
+            "edgeCases": "If two or more clubs finish level for most goals scored, Tie wins. Points deductions do not alter goals scored.",
+            "oracleType": "manual",
+            "initialLiquidity": 120000.0,
+            "featured": False,
+        },
+    ])
+    return rows
+
+
+def market_catalog() -> list[dict]:
+    defaults = {row["id"]: row for row in default_market_catalog()}
+    try:
+        custom_rows = get_db().table("market_catalog").select("*").eq("status", "open").execute().data or []
+    except Exception:
+        custom_rows = []
+    for row in custom_rows:
+        market_id = str(row.get("id") or "").strip()
+        if not market_id:
+            continue
+        defaults[market_id] = {
+            "id": market_id,
+            "slug": row.get("slug") or market_id,
+            "title": row.get("title") or "Market",
+            "description": row.get("description") or "",
+            "category": row.get("category") or "General",
+            "imageUrl": row.get("image_url"),
+            "outcomes": row.get("outcomes") or ["Yes", "No"],
+            "initialProbabilities": row.get("initial_probabilities"),
+            "closesAt": row.get("closes_at"),
+            "resolutionSource": row.get("resolution_source") or "",
+            "edgeCases": row.get("edge_cases") or "",
+            "oracleType": row.get("oracle_type") or "manual",
+            "initialLiquidity": float(row.get("initial_liquidity") or 20000),
+            "featured": bool(row.get("featured")),
+        }
+    return list(defaults.values())
+
+WORLD_CUP_BRACKET_CHALLENGE_ID = "world-cup-bracket"
+
+
+def predictor_challenge_id(predictor_id: str) -> str:
+    return f"{predictor_id}-table-predictor"
+
+
+def challenge_predictor_id(challenge_id: str) -> str | None:
+    suffix = "-table-predictor"
+    if not challenge_id.endswith(suffix):
+        return None
+    candidate = challenge_id[:-len(suffix)]
+    return candidate if candidate in LEAGUE_PREDICTORS else None
+
+
+def clean_group_challenge_id(challenge_id: str) -> str:
+    clean = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id or "")[:100]
+    valid = {WORLD_CUP_BRACKET_CHALLENGE_ID}
+    valid.update(predictor_challenge_id(item) for item in LEAGUE_PREDICTORS)
+    if clean not in valid:
+        raise HTTPException(404, "Challenge not found")
+    return clean
+
+
+def challenge_catalog() -> list[dict]:
+    rows = [{
+        "id": WORLD_CUP_BRACKET_CHALLENGE_ID,
+        "type": "bracket",
+        "title": "World Cup Bracket Challenge",
+        "subtitle": "Free-to-enter knockout bracket contest.",
+        "route": "/bracket",
+        "prize": "up to $500",
+    }]
+    for predictor in LEAGUE_PREDICTORS.values():
+        rows.append({
+            "id": predictor_challenge_id(str(predictor["id"])),
+            "predictorId": predictor["id"],
+            "type": "league-predictor",
+            "title": predictor.get("title"),
+            "subtitle": f"Rank all {len(predictor.get('clubs') or [])} clubs before kickoff.",
+            "route": predictor.get("route"),
+            "leagueName": predictor.get("leagueName"),
+            "season": predictor.get("season"),
+            "logoUrl": predictor.get("logoUrl"),
+            "locked": predictor_locked(predictor),
+        })
+    return rows
+
+
+def assemble_group_challenge(row: dict) -> dict:
+    challenge_id = str(row.get("challenge_id") or "")
+    catalog_item = next((item for item in challenge_catalog() if item["id"] == challenge_id), None)
+    return {
+        **(catalog_item or {"id": challenge_id}),
+        "attachmentId": row.get("id"),
+        "groupId": row.get("group_id"),
+        "addedBy": row.get("added_by"),
+        "addedAt": row.get("created_at"),
+    }
+
+
+@app.get("/api/challenges")
+def get_challenge_catalog() -> dict:
+    return {"challenges": challenge_catalog()}
+
+
+@app.get("/api/groups/{group_id}/challenges")
+def get_group_challenges(group_id: str) -> dict:
+    db = get_db()
+    group_rows = db.table("groups").select("id,name,emoji").eq("id", group_id).limit(1).execute().data or []
+    if not group_rows:
+        raise HTTPException(404, "Group not found")
+    rows = (
+        db.table("group_challenges")
+        .select("*")
+        .eq("group_id", group_id)
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+    return {
+        "group": group_rows[0],
+        "challenges": [assemble_group_challenge(row) for row in rows],
+    }
+
+
+@app.post("/api/groups/{group_id}/challenges", status_code=201)
+def add_group_challenge(group_id: str, payload: GroupChallengeAdd) -> dict:
+    challenge_id = clean_group_challenge_id(payload.challengeId)
+    db = get_db()
+    if not (db.table("groups").select("id").eq("id", group_id).limit(1).execute().data or []):
+        raise HTTPException(404, "Group not found")
+    row = {
+        "group_id": group_id,
+        "challenge_id": challenge_id,
+        "added_by": clean_person(payload.addedBy, "") or None,
+    }
+    result = db.table("group_challenges").upsert(row, on_conflict="group_id,challenge_id").execute()
+    saved = result.data[0] if result.data else row
+    return {"challenge": assemble_group_challenge(saved)}
+
+
+@app.delete("/api/groups/{group_id}/challenges/{challenge_id}")
+def remove_group_challenge(group_id: str, challenge_id: str) -> dict:
+    clean_challenge = clean_group_challenge_id(challenge_id)
+    db = get_db()
+    db.table("group_challenges").delete().eq("group_id", group_id).eq("challenge_id", clean_challenge).execute()
+    return {"removed": True, "challengeId": clean_challenge}
+
+
+@app.get("/api/groups/{group_id}/challenges/{challenge_id}/leaderboard")
+def get_group_challenge_leaderboard(group_id: str, challenge_id: str) -> dict:
+    clean_challenge = clean_group_challenge_id(challenge_id)
+    predictor_id = challenge_predictor_id(clean_challenge)
+    if not predictor_id:
+        raise HTTPException(400, "This challenge does not have a table-predictor entry board")
+    db = get_db()
+    member_rows = (
+        db.table("group_members")
+        .select("name,joined_at")
+        .eq("group_id", group_id)
+        .order("joined_at")
+        .execute()
+        .data
+        or []
+    )
+    if not member_rows:
+        raise HTTPException(404, "Group not found")
+    members = [clean_person(row.get("name")) for row in member_rows if clean_person(row.get("name"))]
+    member_lookup = {member.casefold(): member for member in members}
+    entries = (
+        db.table("season_predictions")
+        .select("*")
+        .eq("challenge_id", predictor_id)
+        .execute()
+        .data
+        or []
+    )
+    entries_by_member = {
+        str(row.get("participant") or "").casefold(): row
+        for row in entries
+        if str(row.get("participant") or "").casefold() in member_lookup
+    }
+    clubs = {str(club.get("id")): club for club in LEAGUE_PREDICTORS[predictor_id].get("clubs") or []}
+    rows = []
+    for member in members:
+        entry = entries_by_member.get(member.casefold())
+        assembled = assemble_season_prediction(entry)
+        ranking = assembled.get("ranking") if assembled else []
+        champion = clubs.get(str(ranking[0])) if ranking else None
+        rows.append({
+            "participant": member,
+            "entryId": assembled.get("id") if assembled else None,
+            "picked": len(ranking or []),
+            "submitted": bool(assembled and assembled.get("submittedAt")),
+            "submittedAt": assembled.get("submittedAt") if assembled else None,
+            "champion": champion.get("name") if champion else None,
+            "championLogoUrl": champion.get("logoUrl") if champion else None,
+            "score": None,
+        })
+    rows.sort(key=lambda row: (not row["submitted"], -(row["picked"] or 0), row["participant"].casefold()))
+    return {
+        "groupId": group_id,
+        "challengeId": clean_challenge,
+        "predictorId": predictor_id,
+        "memberCount": len(rows),
+        "submittedCount": sum(1 for row in rows if row["submitted"]),
+        "rows": rows,
+    }
+
+
 def clean_predictor_id(challenge_id: str) -> str:
     clean = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id or "")[:80]
     if clean not in LEAGUE_PREDICTORS:
@@ -2732,6 +3239,93 @@ def league_predictor_config(challenge_id: str, request: Request | None = None) -
     }
 
 
+def season_prediction_share_entry(
+    challenge_id: str,
+    *,
+    participant: str | None = None,
+    entry: str | None = None,
+) -> dict | None:
+    if not entry and not participant:
+        return None
+    try:
+        query = get_db().table("season_predictions").select("*").eq("challenge_id", challenge_id)
+        if entry:
+            rows = query.eq("id", entry).limit(1).execute().data or []
+        else:
+            clean_participant = clean_person(participant)
+            rows = query.eq("participant", clean_participant).limit(1).execute().data or [] if clean_participant else []
+        return assemble_season_prediction(rows[0]) if rows else None
+    except Exception:
+        return None
+
+
+def league_predictor_share_payload(
+    challenge_id: str,
+    request: Request | None = None,
+    *,
+    participant: str | None = None,
+    entry: str | None = None,
+) -> dict:
+    clean_challenge = clean_predictor_id(challenge_id)
+    config = LEAGUE_PREDICTORS[clean_challenge]
+    clubs = config.get("clubs") or []
+    club_by_id = {str(club.get("id")): club for club in clubs}
+    entry_record = season_prediction_share_entry(
+        clean_challenge,
+        participant=participant,
+        entry=entry,
+    )
+    ranking = (entry_record or {}).get("ranking") or []
+    valid_ranking = [club_id for club_id in ranking if club_id in club_by_id]
+    owner = clean_person((entry_record or {}).get("participant") or participant, "")
+    league_name = str(config.get("leagueName") or "League")
+    season = str(config.get("season") or "2026/27")
+
+    if owner and len(valid_ranking) == len(clubs):
+        title = f"{owner}'s {league_name} prediction"
+        top_three = [club_by_id[club_id].get("name") for club_id in valid_ranking[:3]]
+        description = " · ".join(
+            f"{index + 1}. {name}" for index, name in enumerate(top_three) if name
+        )
+        description = f"{description}. Build your {season} table on Probable."
+    else:
+        title = f"Predict the {season} {league_name} table"
+        description = f"Rank all {len(clubs)} clubs from champion to relegation on Probable."
+
+    app_params = []
+    share_params = []
+    image_params = []
+    if entry_record and entry_record.get("id"):
+        entry_id = str(entry_record["id"])
+        app_params.append(f"entry={quote_plus(entry_id)}")
+        share_params.append(f"entry={quote_plus(entry_id)}")
+        image_params.append(f"entry={quote_plus(entry_id)}")
+    elif owner:
+        app_params.append(f"participant={quote_plus(owner)}")
+        share_params.append(f"participant={quote_plus(owner)}")
+        image_params.append(f"participant={quote_plus(owner)}")
+
+    app_url = f"{frontend_base_url(request)}{config.get('route')}"
+    canonical_url = f"{frontend_base_url(request)}/predictor/{clean_challenge}"
+    image_url = f"{share_base_url(request)}/api/predictors/{clean_challenge}/share-card.png"
+    if app_params:
+        app_url = f"{app_url}?{'&'.join(app_params)}"
+    if share_params:
+        canonical_url = f"{canonical_url}?{'&'.join(share_params)}"
+    if image_params:
+        image_url = f"{image_url}?{'&'.join(image_params)}"
+    return {
+        "title": title,
+        "description": description,
+        "url": canonical_url,
+        "appUrl": app_url,
+        "imageUrl": image_url,
+        "entry": entry_record,
+        "ranking": valid_ranking,
+        "config": config,
+    }
+
+
 @app.get("/api/predictors/{challenge_id}/config")
 def get_league_predictor_config(challenge_id: str, request: Request) -> dict:
     return league_predictor_config(challenge_id, request)
@@ -2796,59 +3390,56 @@ def league_predictor_share_card(challenge_id: str, participant: str | None = Non
     clubs = config.get("clubs") or []
     ranking = [club["id"] for club in clubs]
     submitted_at = None
-    owner = clean_person(participant, "Your")
-    try:
-        db = get_db()
-        query = db.table("season_predictions").select("*").eq("challenge_id", clean_challenge)
-        rows = []
-        if entry:
-            rows = query.eq("id", entry).limit(1).execute().data or []
-        elif participant:
-            rows = query.eq("participant", clean_person(participant)).limit(1).execute().data or []
-        if rows:
-            entry_row = assemble_season_prediction(rows[0])
-            candidate = entry_row.get("ranking") or []
-            if isinstance(candidate, list) and len(candidate) == len(clubs):
-                ranking = candidate
-            owner = entry_row.get("participant") or owner
-            submitted_at = entry_row.get("submittedAt")
-    except Exception:
-        pass
+    owner = clean_person(participant, "")
+    entry_row = season_prediction_share_entry(clean_challenge, participant=participant, entry=entry)
+    if entry_row:
+        candidate = entry_row.get("ranking") or []
+        if isinstance(candidate, list) and len(candidate) == len(clubs):
+            ranking = candidate
+        owner = entry_row.get("participant") or owner
+        submitted_at = entry_row.get("submittedAt")
 
     try:
         from PIL import Image, ImageDraw, ImageFont
 
-        width, height = 1200, 1500
-        image = Image.new("RGB", (width, height), "#071018")
+        width, height = 1200, 630
+        image = Image.new("RGB", (width, height), "#0b1116")
         draw = ImageDraw.Draw(image)
-        try:
-            title_font = ImageFont.truetype("Arial Bold.ttf", 56)
-            h2_font = ImageFont.truetype("Arial Bold.ttf", 34)
-            body_font = ImageFont.truetype("Arial.ttf", 28)
-            small_font = ImageFont.truetype("Arial.ttf", 22)
-        except Exception:
-            title_font = h2_font = body_font = small_font = ImageFont.load_default()
+        def font(size: int, bold: bool = False):
+            paths = (
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
+            )
+            for path in paths:
+                try:
+                    return ImageFont.truetype(path, size)
+                except Exception:
+                    continue
+            return ImageFont.load_default()
 
-        draw.rounded_rectangle((52, 52, width - 52, height - 52), radius=40, fill="#101820", outline="#243240", width=3)
-        draw.text((92, 88), "probable.", fill="#eef5fb", font=h2_font)
+        draw.rounded_rectangle((26, 26, width - 26, height - 26), radius=28, fill="#101820", outline="#27343d", width=2)
+        draw.text((58, 48), "probable.", fill="#eef5fb", font=font(25, True))
         league_name = str(config.get("leagueName") or "League")
         league_logo_url = str(config.get("logoUrl") or "")
         league_logo = None
         if league_logo_url.startswith("/"):
             try:
                 league_logo = Image.open(BASE_DIR / "public" / league_logo_url.lstrip("/")).convert("RGBA")
-                league_logo.thumbnail((230, 52), Image.LANCZOS)
+                league_logo.thumbnail((180, 42), Image.LANCZOS)
             except Exception:
                 league_logo = None
         if league_logo:
-            image.paste(league_logo, (92, 140 + (52 - league_logo.height) // 2), league_logo)
+            image.paste(league_logo, (58, 91 + (42 - league_logo.height) // 2), league_logo)
         else:
-            draw.text((92, 152), league_name.upper(), fill="#eef5fb", font=small_font)
-        draw.text((340, 154), "TABLE PREDICTOR", fill="#7f91a4", font=small_font)
-        draw.text((92, 190), f"{owner}'s {config.get('season')} table", fill="#f4f8fb", font=title_font)
-        badge = "Submitted" if submitted_at else "Draft preview"
-        draw.rounded_rectangle((892, 138, 1086, 188), radius=18, fill="#0f559b")
-        draw.text((925, 150), badge, fill="#eef5fb", font=small_font)
+            draw.text((58, 98), league_name.upper(), fill="#eef5fb", font=font(18, True))
+        heading = f"{owner}'s {config.get('season')} prediction" if owner else f"Predict the {config.get('season')} table"
+        draw.text((270, 91), heading, fill="#f4f8fb", font=font(31, True))
+        draw.text((272, 130), league_name, fill="#8798a8", font=font(18))
+        badge = "SUBMITTED" if submitted_at else "MAKE YOUR PICKS"
+        badge_w = int(draw.textlength(badge, font=font(14, True))) + 30
+        draw.rounded_rectangle((width - 58 - badge_w, 54, width - 58, 88), radius=12, fill="#145ca8")
+        draw.text((width - 43 - badge_w, 63), badge, fill="#ffffff", font=font(14, True))
+        draw.line((58, 164, width - 58, 164), fill="#2a3741", width=1)
 
         club_by_id = {club["id"]: club for club in clubs}
         badge_cache: dict[str, Image.Image | None] = {}
@@ -2866,60 +3457,89 @@ def league_predictor_share_card(challenge_id: str, participant: str | None = Non
                     badge_response = httpx.get(url, timeout=6.0, follow_redirects=True)
                     badge_response.raise_for_status()
                     badge = Image.open(io.BytesIO(badge_response.content)).convert("RGBA")
-                badge.thumbnail((42, 42), Image.LANCZOS)
+                badge.thumbnail((25, 25), Image.LANCZOS)
                 badge_cache[url] = badge
                 return badge
             except Exception:
                 badge_cache[url] = None
                 return None
 
-        row_h = 55
-        top = 286
+        row_h = 39
+        top = 186
         zones = config.get("zones") or []
         for index, club_id in enumerate(ranking[:len(clubs)]):
             club = club_by_id.get(club_id)
             if not club:
                 continue
-            y = top + index * row_h
+            column = 0 if index < 10 else 1
+            column_index = index if index < 10 else index - 10
+            x = 58 if column == 0 else 615
+            right = 585 if column == 0 else 1142
+            y = top + column_index * row_h
             rank = index + 1
             zone_row = next((zone for zone in zones if int(zone.get("from", 0)) <= rank <= int(zone.get("to", 0))), None)
             zone = str((zone_row or {}).get("label") or "")
             zone_class = str((zone_row or {}).get("className") or "")
-            if zone_class in {"champion", "ucl"}:
-                fill = "#0d2439"
-            elif zone_class in {"europa", "conference"}:
-                fill = "#102d2c"
-            elif zone_class == "playoff":
-                fill = "#302719"
-            elif zone_class == "relegation":
-                fill = "#341a20"
-            else:
-                fill = "#0b141b"
-            draw.rounded_rectangle((92, y, width - 92, y + row_h - 8), radius=16, fill=fill, outline="#22303b", width=1)
-            draw.text((118, y + 10), f"{index + 1:>2}", fill="#7f91a4", font=body_font)
-            badge_box = (172, y + 7, 218, y + 45)
-            draw.rounded_rectangle(badge_box, radius=10, fill="#f7fafc", outline="#ffffff33", width=1)
+            zone_color = "#ff5b65" if zone_class == "relegation" else "#e2a84b" if zone_class == "playoff" else "#2d9cff" if zone_class else "#283641"
+            draw.rounded_rectangle((x, y, right, y + row_h - 5), radius=9, fill="#0c151c", outline="#25323c", width=1)
+            draw.rounded_rectangle((x, y, x + 5, y + row_h - 5), radius=2, fill=zone_color)
+            draw.text((x + 18, y + 7), f"{rank:>2}", fill="#7f91a4", font=font(16, True))
             badge = get_badge(club)
             if badge:
-                bx = 172 + (46 - badge.width) // 2
-                by = y + 7 + (38 - badge.height) // 2
+                bx = x + 56 + (28 - badge.width) // 2
+                by = y + 4 + (28 - badge.height) // 2
                 image.paste(badge, (bx, by), badge)
             else:
-                initial = club["shortName"][:1]
-                draw.rounded_rectangle((174, y + 10, 214, y + 42), radius=9, fill=club["color"], outline="#ffffff33", width=1)
-                draw.text((187, y + 14), initial, fill="#051018" if club["color"] in {"#ffffff", "#ffcd00", "#f6a800"} else "#ffffff", font=small_font)
-            draw.text((236, y + 9), club["name"], fill="#eff6fb", font=body_font)
-            if zone:
-                zone_color = "#ff6673" if zone_class == "relegation" else "#e0a756" if zone_class == "playoff" else "#5ab0ff"
-                zone_label = zone.upper().replace("CHAMPIONS LEAGUE", "UCL").replace("EUROPA LEAGUE", "EUROPA").replace("CONFERENCE LEAGUE", "UECL")
-                draw.text((880, y + 13), zone_label, fill=zone_color, font=small_font)
-        footer = " · ".join(dict.fromkeys(str(zone.get("label")) for zone in zones))
-        draw.text((92, height - 112), footer, fill="#7f91a4", font=small_font)
+                draw.ellipse((x + 59, y + 7, x + 79, y + 27), fill=str(club.get("color") or "#145ca8"))
+            club_name = str(club.get("name") or "Club")
+            max_name_width = right - (x + 96) - 18
+            while draw.textlength(club_name, font=font(16, True)) > max_name_width and len(club_name) > 8:
+                club_name = club_name[:-2].rstrip() + "…"
+            draw.text((x + 96, y + 7), club_name, fill="#eaf1f6", font=font(16, True))
+        draw.text((58, 596), "Build your table on probable.live", fill="#8fa0ad", font=font(16))
+        draw.text((1012, 596), "1 → 20", fill="#2d9cff", font=font(16, True))
         buffer = io.BytesIO()
         image.save(buffer, "PNG")
-        return Response(buffer.getvalue(), media_type="image/png", headers={"Cache-Control": "no-store"})
+        return Response(buffer.getvalue(), media_type="image/png", headers={"Cache-Control": "public, max-age=300"})
     except Exception as exc:
         raise HTTPException(500, f"Could not render predictor share card: {exc}") from exc
+
+
+@app.head("/predictor/{challenge_id}", response_class=HTMLResponse)
+@app.get("/predictor/{challenge_id}", response_class=HTMLResponse)
+def league_predictor_open_graph_page(
+    challenge_id: str,
+    request: Request,
+    participant: str | None = None,
+    entry: str | None = None,
+):
+    share = league_predictor_share_payload(
+        challenge_id,
+        request,
+        participant=participant,
+        entry=entry,
+    )
+    if request.method == "GET" and not is_crawler_request(request):
+        return RedirectResponse(share["appUrl"], status_code=307)
+    league_name = str(share["config"].get("leagueName") or "League")
+    return f"""<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>{esc_html(share['title'])} · Probable</title>
+<meta name="description" content="{esc_html(share['description'])}"/>
+<link rel="canonical" href="{esc_html(share['url'])}"/>
+<meta property="og:type" content="website"/><meta property="og:site_name" content="Probable"/>
+<meta property="og:title" content="{esc_html(share['title'])}"/>
+<meta property="og:description" content="{esc_html(share['description'])}"/>
+<meta property="og:image" content="{esc_html(share['imageUrl'])}"/>
+<meta property="og:image:secure_url" content="{esc_html(share['imageUrl'])}"/>
+<meta property="og:image:type" content="image/png"/>
+<meta property="og:image:width" content="1200"/><meta property="og:image:height" content="630"/>
+<meta property="og:image:alt" content="{esc_html(league_name)} table prediction"/>
+<meta property="og:url" content="{esc_html(share['url'])}"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="{esc_html(share['title'])}"/>
+<meta name="twitter:description" content="{esc_html(share['description'])}"/>
+<meta name="twitter:image" content="{esc_html(share['imageUrl'])}"/>
+<style>body{{margin:0;background:#0d1216;color:#f4f7fa;font-family:Arial,sans-serif;display:grid;place-items:center;min-height:100vh}}a{{background:#145ca8;color:white;text-decoration:none;padding:14px 18px;border-radius:10px;font-weight:800}}main{{width:min(920px,calc(100% - 32px));padding:28px;text-align:center}}img{{width:100%;border-radius:18px;border:1px solid #2b3944}}p{{color:#91a0ad}}</style></head><body><main><img src="{esc_html(share['imageUrl'])}" alt="{esc_html(league_name)} table prediction"/><h1>{esc_html(share['title'])}</h1><p>{esc_html(share['description'])}</p><a href="{esc_html(share['appUrl'])}">Open prediction</a></main></body></html>"""
 
 
 @app.get("/api/brackets/{challenge_id}/entry")
@@ -4015,6 +4635,117 @@ def create_market(group_id: str, payload: MarketCreate) -> dict:
     db.rpc("probable_reprice_event", {"p_event_id": event_id}).execute()
 
     return groups_response(marketId=outcome_rows[0]["id"], eventId=event_id, marketIds=[row["id"] for row in outcome_rows])
+
+
+@app.get("/api/market-catalog")
+def get_market_catalog() -> dict:
+    db = get_db()
+    catalog = market_catalog()
+    catalog_ids = [item["id"] for item in catalog]
+    event_rows: list[dict] = []
+    if catalog_ids:
+        try:
+            event_rows = (
+                db.table("market_events")
+                .select("id,group_id,catalog_market_id,total_volume,market_outcomes(id,title,price)")
+                .in_("catalog_market_id", catalog_ids)
+                .execute().data or []
+            )
+        except Exception:
+            # Keep catalog adoption useful while the additive catalog migration is
+            # rolling out. Exact-title matching is safe because catalog imports use
+            # the canonical title and the create route already deduplicates by it.
+            try:
+                catalog_id_by_title = {str(item["title"]): item["id"] for item in catalog}
+                legacy_rows = (
+                    db.table("market_events")
+                    .select("id,group_id,title,total_volume,market_outcomes(id,title,price)")
+                    .in_("title", list(catalog_id_by_title))
+                    .execute().data or []
+                )
+                event_rows = [
+                    {**row, "catalog_market_id": catalog_id_by_title.get(str(row.get("title") or ""))}
+                    for row in legacy_rows
+                    if catalog_id_by_title.get(str(row.get("title") or ""))
+                ]
+            except Exception:
+                event_rows = []
+
+    by_catalog: dict[str, list[dict]] = {}
+    for event in event_rows:
+        by_catalog.setdefault(str(event.get("catalog_market_id")), []).append(event)
+
+    result: list[dict] = []
+    for item in catalog:
+        instances = by_catalog.get(item["id"], [])
+        aggregate: dict[str, dict[str, float]] = {}
+        for event in instances:
+            weight = max(1.0, float(event.get("total_volume") or 0))
+            for outcome in event.get("market_outcomes") or []:
+                title = str(outcome.get("title") or "")
+                bucket = aggregate.setdefault(title, {"weighted": 0.0, "weight": 0.0})
+                bucket["weighted"] += float(outcome.get("price") or 0) * weight
+                bucket["weight"] += weight
+        consensus = [
+            {"title": title, "probability": round(values["weighted"] / values["weight"], 6)}
+            for title, values in aggregate.items()
+            if values["weight"] > 0
+        ]
+        consensus.sort(key=lambda row: row["probability"], reverse=True)
+        result.append({
+            **item,
+            "consensus": consensus,
+            "groupCount": len({str(event.get("group_id")) for event in instances}),
+            "volume": round(sum(float(event.get("total_volume") or 0) for event in instances), 2),
+        })
+    result.sort(key=lambda row: (not row.get("featured"), row.get("category") or "", row.get("title") or ""))
+    return {"markets": result}
+
+
+@app.post("/api/groups/{group_id}/market-catalog/{catalog_id}", status_code=201)
+def add_catalog_market_to_group(group_id: str, catalog_id: str, payload: CatalogMarketAdd) -> dict:
+    require_group(group_id)
+    item = next((row for row in market_catalog() if row["id"] == catalog_id), None)
+    if not item:
+        raise HTTPException(404, "Global market not found")
+    db = get_db()
+    try:
+        existing = (
+            db.table("market_events")
+            .select("id")
+            .eq("group_id", group_id)
+            .eq("catalog_market_id", catalog_id)
+            .limit(1)
+            .execute().data or []
+        )
+    except Exception:
+        existing = db.table("market_events").select("id").eq("group_id", group_id).eq("title", item["title"]).limit(1).execute().data or []
+    if existing:
+        return groups_response(groupId=group_id, eventId=existing[0]["id"], alreadyAdded=True)
+
+    result = create_market(group_id, MarketCreate(
+        question=item["title"],
+        description=item.get("description") or "",
+        resolutionSource=item.get("resolutionSource") or None,
+        edgeCases=item.get("edgeCases") or None,
+        category=item.get("category") or "General",
+        closesAt=item["closesAt"],
+        outcomes=item.get("outcomes") or ["Yes", "No"],
+        initialProbabilities=item.get("initialProbabilities"),
+        initialLiquidity=float(item.get("initialLiquidity") or 20000),
+        oracleType=item.get("oracleType") or "manual",
+        imageUrl=item.get("imageUrl"),
+        createdBy=payload.addedBy,
+        slug=item.get("slug"),
+    ))
+    event_id = result.get("eventId")
+    if event_id:
+        try:
+            db.table("market_events").update({"catalog_market_id": catalog_id}).eq("id", event_id).execute()
+        except Exception:
+            # The market is still usable while the additive migration rolls out.
+            pass
+    return groups_response(groupId=group_id, eventId=event_id, catalogMarketId=catalog_id)
 
 
 @app.get("/api/markets/{market_id}/share")

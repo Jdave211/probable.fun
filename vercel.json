@@ -5,6 +5,10 @@
       "destination": "https://probable-fun.onrender.com/market/:path*"
     },
     {
+      "source": "/predictor/:path*",
+      "destination": "https://probable-fun.onrender.com/predictor/:path*"
+    },
+    {
       "source": "/api/:path*",
       "destination": "https://probable-fun.onrender.com/api/:path*"
     },

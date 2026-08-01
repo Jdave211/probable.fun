@@ -372,6 +372,14 @@ const state = {
   marketImageName: "",
   marketOddsSeed: null,
   marketImages: [],
+  globalMarkets: [],
+  globalMarketsLoaded: false,
+  globalMarketsLoading: false,
+  globalMarketsError: "",
+  globalMarketCategory: "All",
+  catalogPreviewId: null,
+  catalogPreviewOutcome: "",
+  catalogPreviewSide: "yes",
   bracketPicks: {},
   bracketSubmitted: false,
   bracketRoundIndex: 0,
@@ -388,6 +396,10 @@ const state = {
   plRemoteLoaded: false,
   plSaving: false,
   plSharedEntryId: "",
+  plGroupEntries: [],
+  plGroupEntriesKey: "",
+  plGroupEntriesLoading: false,
+  plGroupEntriesError: "",
   pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, suggestions: false, suggestionPreview: null, tradeMarketId: null, resolveMarketId: null },
   demoMode: false,
   demoPrevGroupId: null,
@@ -492,14 +504,6 @@ function leaguePredictorDraftKey(predictorId = state.activePredictorId) {
 }
 
 const GENERAL_MARKET_POOL = [
-  {
-    id: "world-cup-bracket",
-    type: "bracket",
-    title: BRACKET_CHALLENGE.title,
-    subtitle: "Free-to-enter knockout bracket contest.",
-    eyebrow: "General pool",
-    prize: BRACKET_CHALLENGE.prize,
-  },
   ...LEAGUE_PREDICTOR_LIST.map(predictor => ({
     id: `${predictor.id}-table-predictor`,
     type: "league-predictor",
@@ -972,6 +976,7 @@ init();
 async function loadInitialAppData() {
   state.bootError = "";
   state.marketLinkError = "";
+  if (state.view === "markets") void loadGlobalMarkets().catch(() => {});
   if (state.view === "bracket" && !state.sharedMarketId && !state.inviteToken) {
     loadBracketEntryIntoState();
     if (isLoggedIn() || state.sharedBracketEntryId) void loadRemoteBracketEntry({ refresh: true });
@@ -980,6 +985,15 @@ async function loadInitialAppData() {
   if (state.view === "plPredictor" && !state.sharedMarketId && !state.inviteToken) {
     loadPremierLeagueDraftIntoState();
     if (isLoggedIn() || state.plSharedEntryId) void loadRemotePremierLeagueEntry({ refresh: true });
+    if (isLoggedIn()) {
+      void loadGroupsForBoot()
+        .then(data => {
+          if (Array.isArray(data.groups)) setGroups(data.groups);
+          normalizeSelection();
+          return loadLeaguePredictorGroupEntries({ refresh: true });
+        })
+        .catch(err => console.warn("Predictor group context deferred", err));
+    }
     return;
   }
   if (state.sharedMarketId) {
@@ -1018,6 +1032,37 @@ async function loadInitialAppData() {
   if (state.authUser && !state.inviteToken && !state.sharedMarketId && (state.currentGroupId || state.groups.length)) {
     state.shell = "app";
   }
+}
+
+async function loadGlobalMarkets({ refresh = false } = {}) {
+  if (state.globalMarketsLoading || (state.globalMarketsLoaded && !refresh)) return state.globalMarkets;
+  state.globalMarketsLoading = true;
+  state.globalMarketsError = "";
+  if (state.view === "markets") render();
+  try {
+    const data = await api("/api/market-catalog", { timeoutMs: BOOT_API_TIMEOUT_MS });
+    state.globalMarkets = Array.isArray(data.markets) ? data.markets : [];
+    state.globalMarketsLoaded = true;
+    return state.globalMarkets;
+  } catch (err) {
+    state.globalMarketsError = err.message || "Could not load global markets.";
+    throw err;
+  } finally {
+    state.globalMarketsLoading = false;
+    if (state.view === "markets") render();
+  }
+}
+
+async function addCatalogMarketToGroup(groupId, catalogId) {
+  const data = await api(`/api/groups/${encodeURIComponent(groupId)}/market-catalog/${encodeURIComponent(catalogId)}`, {
+    method: "POST",
+    body: JSON.stringify({ addedBy: authDisplayName() || state.activeMember || null }),
+  });
+  if (Array.isArray(data.groups)) setGroups(data.groups);
+  state.currentGroupId = groupId;
+  await loadGlobalMarkets({ refresh: true }).catch(() => {});
+  normalizeSelection();
+  return data;
 }
 
 async function loadGroupsForBoot() {
@@ -1101,6 +1146,8 @@ function routeFromLocation() {
   if (parts[0] === "admin") return { name: "admin" };
   if (parts[0] === "portfolio") return { name: "positions" };
   if (parts[0] === "positions") return { name: "positions", legacyPath: "/portfolio" };
+  if (parts[0] === "challenges") return { name: "challenges" };
+  if (parts[0] === "markets") return { name: "challenges", legacyPath: "/challenges" };
   const leaguePredictor = LEAGUE_PREDICTOR_LIST.find(predictor => predictor.route === path);
   if (leaguePredictor) return {
     name: "plPredictor",
@@ -1159,6 +1206,8 @@ function shouldHoldAppShell() {
     route.name === "leaderboard" ||
     route.name === "admin" ||
     route.name === "positions" ||
+    route.name === "markets" ||
+    route.name === "challenges" ||
     route.name === "bracket" ||
     route.name === "plPredictor" ||
     route.name === "market" ||
@@ -1209,6 +1258,10 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
   } else if (route.name === "positions") {
     state.shell = "app";
     state.view = "positions";
+    state.trade = emptyTrade();
+  } else if (route.name === "challenges") {
+    state.shell = "app";
+    state.view = "challenges";
     state.trade = emptyTrade();
   } else if (route.name === "bracket") {
     state.shell = "app";
@@ -1269,6 +1322,14 @@ function routeToPositions({ replace = false } = {}) {
   navigateTo("/portfolio", { replace });
 }
 
+function routeToChallenges({ replace = false } = {}) {
+  navigateTo("/challenges", { replace });
+}
+
+function routeToMarkets({ replace = false } = {}) {
+  routeToChallenges({ replace });
+}
+
 function routeToBracket({ replace = false } = {}) {
   navigateTo("/bracket", { replace });
 }
@@ -1292,11 +1353,14 @@ function appViewFromRouteOrSaved(route, savedView = "dashboard") {
   if (route.name === "leaderboard") return "leaderboard";
   if (route.name === "admin") return "admin";
   if (route.name === "positions") return "positions";
+  if (route.name === "challenges") return "challenges";
   if (route.name === "bracket") return "bracket";
   if (route.name === "plPredictor") return "plPredictor";
   if (savedView === "leaderboard") return "leaderboard";
   if (savedView === "admin") return "admin";
   if (savedView === "positions") return "positions";
+  if (savedView === "markets") return "challenges";
+  if (savedView === "challenges") return "challenges";
   if (savedView === "bracket") return "bracket";
   if (savedView === "plPredictor") return "plPredictor";
   return "dashboard";
@@ -1306,6 +1370,8 @@ function routeToCurrentAppView({ replace = false } = {}) {
   if (state.view === "leaderboard") return routeToLeaderboard({ replace });
   if (state.view === "admin") return routeToAdmin({ replace });
   if (state.view === "positions") return routeToPositions({ replace });
+  if (state.view === "markets") return routeToChallenges({ replace });
+  if (state.view === "challenges") return routeToChallenges({ replace });
   if (state.view === "bracket") return routeToBracket({ replace });
   if (state.view === "plPredictor") return routeToPremierLeaguePredictor({ replace });
   return routeToApp({ replace });
@@ -1513,6 +1579,18 @@ async function onGlobalClick(e) {
     return;
   }
 
+  if (e.target.closest("[data-go-challenges]")) {
+    state.shell = "app";
+    state.view = "challenges";
+    state.trade = emptyTrade();
+    state.sharedMarketId = null;
+    state.bootError = "";
+    state.marketLinkError = "";
+    routeToChallenges();
+    render();
+    return;
+  }
+
   if (e.target.closest("[data-go-bracket]")) {
     state.shell = "app";
     state.view = "bracket";
@@ -1536,6 +1614,7 @@ async function onGlobalClick(e) {
       state.plSubmitted = false;
       state.plRemoteLoaded = false;
       state.plSharedEntryId = "";
+      resetLeaguePredictorGroupEntries();
     }
     state.shell = "app";
     state.view = "plPredictor";
@@ -1543,6 +1622,7 @@ async function onGlobalClick(e) {
     state.sharedMarketId = null;
     loadPremierLeagueDraftIntoState();
     void loadRemotePremierLeagueEntry({ refresh: true });
+    void loadLeaguePredictorGroupEntries({ refresh: true });
     routeToPremierLeaguePredictor();
     render();
     return;
@@ -1674,12 +1754,12 @@ async function onGlobalClick(e) {
         await ensureMarketGroup();
       }
       state.shell = "app";
-      state.view = "dashboard";
+      state.view = "markets";
       state.welcomeMode = "actions";
       state.trade = emptyTrade();
       state.bootError = "";
       state.marketLinkError = "";
-      routeToApp();
+      routeToMarkets();
       normalizeSelection();
       render();
     } catch (err) {
@@ -1723,6 +1803,85 @@ async function onGlobalClick(e) {
     return;
   }
 
+  if (e.target.closest("[data-go-markets]")) {
+    state.shell = "app";
+    state.view = "markets";
+    state.trade = emptyTrade();
+    routeToMarkets();
+    void loadGlobalMarkets().catch(() => {});
+    render();
+    return;
+  }
+
+  const catalogCategoryBtn = e.target.closest("[data-market-category]");
+  if (catalogCategoryBtn) {
+    state.globalMarketCategory = catalogCategoryBtn.dataset.marketCategory || "All";
+    render();
+    return;
+  }
+
+  const closeCatalogPreview = e.target.closest("[data-close-catalog-preview]");
+  if (closeCatalogPreview && (closeCatalogPreview.tagName === "BUTTON" || e.target === closeCatalogPreview)) {
+    state.catalogPreviewId = null;
+    state.catalogPreviewOutcome = "";
+    render();
+    return;
+  }
+
+  const openCatalogBtn = e.target.closest("[data-open-catalog-market]");
+  if (openCatalogBtn) {
+    const catalogId = openCatalogBtn.dataset.openCatalogMarket;
+    const outcome = openCatalogBtn.dataset.catalogOutcome || "";
+    const side = openCatalogBtn.dataset.catalogSide === "no" ? "no" : "yes";
+    openCatalogMarket(catalogId, outcome, side);
+    return;
+  }
+
+  const addCatalogBtn = e.target.closest("[data-add-catalog-market]");
+  if (addCatalogBtn) {
+    const catalogId = addCatalogBtn.dataset.addCatalogMarket;
+    const groupId = addCatalogBtn.dataset.catalogGroupId
+      || addCatalogBtn.closest("[data-catalog-card]")?.querySelector("[data-catalog-group]")?.value
+      || state.currentGroupId
+      || selectableNavGroups()[0]?.id;
+    const item = state.globalMarkets.find(market => market.id === catalogId);
+    if (!groupId) {
+      toast("Create or join a group first.");
+      return;
+    }
+    addCatalogBtn.disabled = true;
+    addCatalogBtn.textContent = "Adding...";
+    try {
+      const result = await addCatalogMarketToGroup(groupId, catalogId);
+      const targetGroup = state.groups.find(group => group.id === groupId);
+      toast(`${item?.title || "Market"} added to ${targetGroup?.name || "group"}.`);
+      if (addCatalogBtn.dataset.openAfterAdd === "true") {
+        const targetMarket = catalogImportedMarket(targetGroup, item, state.catalogPreviewOutcome)
+          || findMarketForRoute(result?.eventId, targetGroup);
+        if (targetMarket) {
+          state.catalogPreviewId = null;
+          state.currentGroupId = groupId;
+          state.shell = "app";
+          state.view = "dashboard";
+          state.trade = { marketId: targetMarket.id, side: state.catalogPreviewSide || "yes", mode: "buy" };
+          state.sharedMarketId = null;
+          localStorage.setItem(STORAGE_KEYS.groupId, groupId);
+          routeToMarket(targetMarket.id);
+          render();
+          requestAnimationFrame(() => window.scrollTo(0, 0));
+          return;
+        }
+      }
+      if (state.view === "markets") render();
+      else renderGeneralMarketPoolModal();
+    } catch (err) {
+      addCatalogBtn.disabled = false;
+      addCatalogBtn.textContent = "+ Add to group";
+      toast(err.message || "Could not add market.");
+    }
+    return;
+  }
+
   if (e.target.closest("[data-try-demo]")) {
     enterDemo();
     return;
@@ -1743,7 +1902,7 @@ async function onGlobalClick(e) {
 
   if (e.target.closest("[data-show-general-market-pool]")) {
     if (!requireLogin("general-pool")) return;
-    renderGeneralMarketPoolModal();
+    openGeneralMarketPoolModal();
     return;
   }
 
@@ -1761,10 +1920,39 @@ async function onGlobalClick(e) {
     }
     const item = GENERAL_MARKET_POOL.find(candidate => candidate.id === addGeneralMarketBtn.dataset.addGeneralMarket);
     if (!item) return;
-    addGeneralMarketToGroup(group.id, item.id);
-    renderGeneralMarketPoolModal();
-    render();
-    toast(`${item.title} added to ${group.name}.`);
+    addGeneralMarketBtn.disabled = true;
+    addGeneralMarketBtn.textContent = "Adding...";
+    try {
+      await addGeneralMarketToGroup(group.id, item.id);
+      renderGeneralMarketPoolModal();
+      render();
+      toast(`${item.title} added to ${group.name}.`);
+    } catch (err) {
+      addGeneralMarketBtn.disabled = false;
+      addGeneralMarketBtn.textContent = "Add";
+      toast(err.message || "Could not add challenge.");
+    }
+    return;
+  }
+
+  const removeGeneralMarketBtn = e.target.closest("[data-remove-general-market]");
+  if (removeGeneralMarketBtn) {
+    const group = getCurrentGroup();
+    if (!group) return;
+    const item = GENERAL_MARKET_POOL.find(candidate => candidate.id === removeGeneralMarketBtn.dataset.removeGeneralMarket);
+    if (!item) return;
+    removeGeneralMarketBtn.disabled = true;
+    removeGeneralMarketBtn.textContent = "Removing...";
+    try {
+      await removeGeneralMarketFromGroup(group.id, item.id);
+      renderGeneralMarketPoolModal();
+      render();
+      toast(`${item.title} removed from ${group.name}.`);
+    } catch (err) {
+      removeGeneralMarketBtn.disabled = false;
+      removeGeneralMarketBtn.textContent = "Remove";
+      toast(err.message || "Could not remove challenge.");
+    }
     return;
   }
 
@@ -2226,6 +2414,13 @@ function resetGroupEmoji(form = dom.groupForm) {
 }
 
 function onGlobalInput(e) {
+  if (e.target.matches("[data-market-search]")) {
+    const query = e.target.value.trim().toLowerCase();
+    document.querySelectorAll("[data-market-search-item]").forEach(item => {
+      item.hidden = Boolean(query && !String(item.dataset.marketSearchItem || "").includes(query));
+    });
+    return;
+  }
   if (e.target.classList.contains("trade-input")) {
     clearTradeInputRawAmount(e.target);
     const market = findMarket(e.target.closest("[data-market-id]")?.dataset.marketId);
@@ -2289,6 +2484,21 @@ function handleTradeAmountFill(fillAmountBtn) {
 }
 
 function onGlobalChange(e) {
+  const catalogGroupSelect = e.target.closest("[data-catalog-group]");
+  if (catalogGroupSelect?.matches("select")) {
+    const card = catalogGroupSelect.closest("[data-catalog-card]");
+    const button = card?.querySelector("[data-add-catalog-market]");
+    const item = state.globalMarkets.find(market => market.id === button?.dataset.addCatalogMarket);
+    const group = state.groups.find(candidate => candidate.id === catalogGroupSelect.value);
+    const imported = catalogMarketImported(group, item);
+    if (button) {
+      button.disabled = imported;
+      button.classList.toggle("btn-primary", !imported);
+      button.classList.toggle("btn-ghost", imported);
+      button.textContent = imported ? "Added" : "Add to group";
+    }
+    return;
+  }
   if (e.target.matches("[data-market-odds-toggle]")) {
     e.target.dataset.userSet = "true";
     updateMarketOddsPanel();
@@ -4340,16 +4550,16 @@ function render() {
   updateSuggestPreviewModal();
   const waitingForInitialAppData = state.shell === "app" && !state.loaded && (state.currentGroupId || isLoggedIn() || state.sharedMarketId || shouldHoldAppShell());
   const unresolvedMarketLink = Boolean(state.sharedMarketId && !findMarketForRoute(state.sharedMarketId));
-  if (state.shell === "app" && state.view !== "bracket" && state.view !== "plPredictor" && !getCurrentGroup() && !waitingForInitialAppData && !unresolvedMarketLink && !state.bootError) {
+  if (state.shell === "app" && state.view !== "markets" && state.view !== "challenges" && state.view !== "bracket" && state.view !== "plPredictor" && !getCurrentGroup() && !waitingForInitialAppData && !unresolvedMarketLink && !state.bootError) {
     enterWelcomeShell();
   }
   renderNav();
   persistNavigationState();
   if (state.shell === "embed") {
     renderEmbedRoute();
-  } else if (state.shell === "app" && !state.loaded && !getCurrentGroup()) {
+  } else if (state.shell === "app" && state.view !== "markets" && state.view !== "challenges" && state.view !== "bracket" && state.view !== "plPredictor" && !state.loaded && !getCurrentGroup()) {
     renderMarketLinkLoading();
-  } else if (state.shell === "app" && state.view !== "bracket" && state.view !== "plPredictor" && (state.bootError || unresolvedMarketLink)) {
+  } else if (state.shell === "app" && state.view !== "markets" && state.view !== "challenges" && state.view !== "bracket" && state.view !== "plPredictor" && (state.bootError || unresolvedMarketLink)) {
     renderMarketLinkLoading({ error: state.bootError || state.marketLinkError || "That market link could not be found." });
   } else if (state.shell === "invite") {
     renderInvitePreview();
@@ -4361,6 +4571,8 @@ function render() {
     renderAdminVerification();
   } else if (state.view === "positions") {
     renderPositions();
+  } else if (state.view === "challenges") {
+    renderChallengesHub();
   } else if (state.view === "bracket") {
     renderBracketChallenge();
   } else if (state.view === "plPredictor") {
@@ -4380,10 +4592,11 @@ function renderNav() {
   document.querySelector("#topnav").style.display = state.shell === "embed" ? "none" : "";
   const navGroups = visibleNavGroups();
   const inApp = state.shell === "app";
-  const hasGroups = inApp && isLoggedIn() && navGroups.length > 0;
-  dom.navSep.style.display = hasGroups ? "" : "none";
-  dom.groupTabs.innerHTML = hasGroups
-    ? `<button class="group-add-btn" type="button" data-group-id="__new" aria-label="Add from general pool">+</button>` + navGroups.map(g => `<button class="group-tab ${g.id === getCurrentGroup()?.id && state.view === "dashboard" ? "active" : ""}" type="button" data-group-id="${g.id}">${esc(g.emoji)} ${esc(g.name)}</button>`).join("")
+  const showAppNavigation = inApp && isLoggedIn();
+  const hasGroups = showAppNavigation && navGroups.length > 0;
+  dom.navSep.style.display = showAppNavigation ? "" : "none";
+  dom.groupTabs.innerHTML = showAppNavigation
+    ? `<button class="group-tab challenge-nav-tab ${state.view === "challenges" ? "active" : ""}" type="button" data-go-challenges>Challenges</button>${hasGroups ? `<button class="group-add-btn" type="button" data-group-id="__new" aria-label="Add group or challenge">+</button>${navGroups.map(g => `<button class="group-tab ${g.id === getCurrentGroup()?.id && state.view === "dashboard" ? "active" : ""}" type="button" data-group-id="${g.id}">${esc(g.emoji)} ${esc(g.name)}</button>`).join("")}` : ""}`
     : "";
 
   const group = inApp && isLoggedIn() ? getCurrentGroup() : null;
@@ -4467,26 +4680,67 @@ function writeGroupAddons(addons) {
   }
 }
 
-function groupAddonIds(groupId) {
+function groupAddonIds(groupOrId) {
+  const group = typeof groupOrId === "object"
+    ? groupOrId
+    : state.groups.find(item => item.id === groupOrId);
+  const groupId = group?.id || groupOrId;
   const raw = readGroupAddons()[groupId] || [];
-  return Array.isArray(raw) ? raw.filter(Boolean) : [];
+  const localIds = Array.isArray(raw) ? raw.filter(Boolean) : [];
+  const remoteIds = Array.isArray(group?.challenges)
+    ? group.challenges.map(item => item?.id || item?.challengeId).filter(Boolean)
+    : [];
+  return [...new Set([...remoteIds, ...localIds])];
 }
 
-function addGeneralMarketToGroup(groupId, addonId) {
+async function addGeneralMarketToGroup(groupId, addonId) {
+  const data = await api(`/api/groups/${encodeURIComponent(groupId)}/challenges`, {
+    method: "POST",
+    body: JSON.stringify({ challengeId: addonId, addedBy: authDisplayName() || null }),
+  });
+  const group = state.groups.find(item => item.id === groupId);
+  if (group && data.challenge) {
+    const existing = Array.isArray(group.challenges) ? group.challenges : [];
+    group.challenges = [...existing.filter(item => (item.id || item.challengeId) !== addonId), data.challenge];
+  }
+  // Keep the old cache as an offline hint; Supabase is the source of truth.
   const addons = readGroupAddons();
   const ids = new Set(Array.isArray(addons[groupId]) ? addons[groupId] : []);
   ids.add(addonId);
   addons[groupId] = [...ids];
   writeGroupAddons(addons);
+  persistBootCache();
+  return data.challenge;
+}
+
+async function removeGeneralMarketFromGroup(groupId, addonId) {
+  await api(`/api/groups/${encodeURIComponent(groupId)}/challenges/${encodeURIComponent(addonId)}`, {
+    method: "DELETE",
+  });
+  const group = state.groups.find(item => item.id === groupId);
+  if (group && Array.isArray(group.challenges)) {
+    group.challenges = group.challenges.filter(item => (item.id || item.challengeId) !== addonId);
+  }
+  const addons = readGroupAddons();
+  addons[groupId] = (Array.isArray(addons[groupId]) ? addons[groupId] : []).filter(id => id !== addonId);
+  writeGroupAddons(addons);
+  persistBootCache();
+  if (state.plGroupEntriesKey === `${groupId}:${addonId}`) resetLeaguePredictorGroupEntries();
 }
 
 function generalMarketsForGroup(group) {
   if (!group?.id) return [];
-  const ids = new Set(groupAddonIds(group.id));
-  return GENERAL_MARKET_POOL.filter(item => ids.has(item.id));
+  const ids = new Set(groupAddonIds(group));
+  const attachments = new Map((group.challenges || []).map(item => [item.id || item.challengeId, item]));
+  return GENERAL_MARKET_POOL
+    .filter(item => ids.has(item.id))
+    .map(item => ({ ...item, attachment: attachments.get(item.id) || null }));
 }
 
 function openGeneralMarketPoolModal() {
+  if (!state.globalMarketsLoaded) void loadGlobalMarkets().then(() => {
+    if (!dom.generalMarketModalOverlay.classList.contains("hidden")) renderGeneralMarketPoolModal();
+  }).catch(() => {});
   renderGeneralMarketPoolModal();
   openModal("generalMarket");
 }
@@ -4513,9 +4767,9 @@ function renderGeneralMarketStartModal() {
         <em>Write your own question.</em>
       </button>
       <button class="general-market-choice" type="button" data-show-general-market-pool>
-        <span aria-hidden="true">🏆</span>
+        <span aria-hidden="true">◎</span>
         <strong>General markets</strong>
-        <em>Bracket and shared contests.</em>
+        <em>Season markets and shared challenges.</em>
       </button>
       <button class="general-market-choice" type="button" data-create-group>
         <span aria-hidden="true">＋</span>
@@ -4537,6 +4791,9 @@ function renderGeneralMarketPoolModal() {
       <p>Pull in contests and global markets without recreating them for every group.</p>
     </div>
     <div class="general-market-list">
+      <div class="general-market-section-label">Markets</div>
+      ${state.globalMarketsLoading && !state.globalMarkets.length ? `<div class="general-market-loading">Loading markets...</div>` : state.globalMarkets.map(item => catalogMarketPoolRow(item, group)).join("")}
+      <div class="general-market-section-label">Challenges</div>
       ${GENERAL_MARKET_POOL.map(item => generalMarketPoolRow(item, group)).join("")}
     </div>
     <div class="general-market-footer">
@@ -4547,8 +4804,23 @@ function renderGeneralMarketPoolModal() {
   `;
 }
 
+function catalogMarketPoolRow(item, group) {
+  const added = catalogMarketImported(group, item);
+  return `
+    <article class="general-market-pool-row" data-catalog-card>
+      <div class="general-market-pool-icon" aria-hidden="true">${item.imageUrl ? `<img src="${esc(item.imageUrl)}" alt="" loading="lazy" />` : "PB"}</div>
+      <div class="general-market-pool-copy">
+        <p>${esc(item.category || "Global market")}</p>
+        <h3>${esc(item.title)}</h3>
+        <span>${Number(item.groupCount || 0)} groups · ${compactMoney(item.volume || 0)} volume</span>
+      </div>
+      <input type="hidden" data-catalog-group value="${esc(group?.id || "")}" />
+      <button class="btn ${added ? "btn-ghost" : "btn-primary"} btn-sm" type="button" data-add-catalog-market="${esc(item.id)}" ${added ? "disabled" : ""}>${added ? "Added" : "Add"}</button>
+    </article>`;
+}
+
 function generalMarketPoolRow(item, group) {
-  const added = group?.id ? groupAddonIds(group.id).includes(item.id) : false;
+  const added = group?.id ? groupAddonIds(group).includes(item.id) : false;
   const icon = item.type === "league-predictor" && item.logoUrl
     ? `<img src="${esc(item.logoUrl)}" alt="" loading="lazy" />`
     : esc(item.type === "league-predictor" ? item.leagueMark : "🏆");
@@ -4560,8 +4832,8 @@ function generalMarketPoolRow(item, group) {
         <h3>${esc(item.title)}</h3>
         <span>${esc(item.subtitle)} ${esc(item.prize)} prize.</span>
       </div>
-      <button class="btn ${added ? "btn-ghost" : "btn-primary"} btn-sm" type="button" data-add-general-market="${esc(item.id)}" ${added ? "disabled" : ""}>
-        ${added ? "Added" : "Add"}
+      <button class="btn ${added ? "btn-ghost" : "btn-primary"} btn-sm" type="button" ${added ? `data-remove-general-market="${esc(item.id)}"` : `data-add-general-market="${esc(item.id)}"`}>
+        ${added ? "Remove" : "Add"}
       </button>
     </article>
   `;
@@ -4675,6 +4947,88 @@ function premierLeagueClubBadge(club, small = false) {
     </span>`;
 }
 
+function leaguePredictorAddonId(predictorId = activeLeaguePredictor().id) {
+  return `${predictorId}-table-predictor`;
+}
+
+function personInitials(name) {
+  return String(name || "?")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part[0]?.toUpperCase() || "")
+    .join("") || "?";
+}
+
+function resetLeaguePredictorGroupEntries() {
+  state.plGroupEntries = [];
+  state.plGroupEntriesKey = "";
+  state.plGroupEntriesLoading = false;
+  state.plGroupEntriesError = "";
+}
+
+async function loadLeaguePredictorGroupEntries({ refresh = false, renderNow = true } = {}) {
+  const group = getCurrentGroup();
+  const challengeId = leaguePredictorAddonId();
+  if (!group || !groupAddonIds(group).includes(challengeId)) {
+    resetLeaguePredictorGroupEntries();
+    return;
+  }
+  const key = `${group.id}:${challengeId}`;
+  if (!refresh && state.plGroupEntriesKey === key) return;
+  state.plGroupEntriesLoading = true;
+  state.plGroupEntriesError = "";
+  state.plGroupEntriesKey = key;
+  if (renderNow && state.view === "plPredictor") renderPremierLeaguePredictor();
+  try {
+    const data = await api(`/api/groups/${encodeURIComponent(group.id)}/challenges/${encodeURIComponent(challengeId)}/leaderboard`);
+    if (state.plGroupEntriesKey !== key) return;
+    state.plGroupEntries = Array.isArray(data.rows) ? data.rows : [];
+  } catch (err) {
+    if (state.plGroupEntriesKey !== key) return;
+    state.plGroupEntries = [];
+    state.plGroupEntriesError = err.message || "Could not load group entries.";
+  } finally {
+    if (state.plGroupEntriesKey === key) state.plGroupEntriesLoading = false;
+    if (renderNow && state.view === "plPredictor") renderPremierLeaguePredictor();
+  }
+}
+
+function leaguePredictorGroupPanelHtml() {
+  const group = getCurrentGroup();
+  if (!group || !groupAddonIds(group).includes(leaguePredictorAddonId())) return "";
+  const rows = state.plGroupEntries || [];
+  const submitted = rows.filter(row => row.submitted).length;
+  return `
+    <section class="pl-group-board" aria-label="${esc(group.name)} challenge entries">
+      <div class="pl-group-board-head">
+        <div>
+          <p class="eyebrow">${esc(`${group.emoji || ""} ${group.name}`.trim())}</p>
+          <h2>Entry board</h2>
+        </div>
+        <span>${submitted}/${rows.length || (group.members || []).length} submitted</span>
+      </div>
+      ${state.plGroupEntriesLoading ? `<p class="pl-group-board-state">Loading group entries...</p>` : ""}
+      ${state.plGroupEntriesError ? `<p class="pl-group-board-state error">${esc(state.plGroupEntriesError)}</p>` : ""}
+      ${!state.plGroupEntriesLoading && !state.plGroupEntriesError ? `
+        <div class="pl-group-entry-list">
+          ${rows.length ? rows.map((row, index) => `
+            <article class="pl-group-entry-row ${row.submitted ? "submitted" : ""}">
+              <span class="pl-group-entry-rank">${index + 1}</span>
+              <span class="pl-group-entry-avatar">${esc(personInitials(row.participant || "?"))}</span>
+              <span class="pl-group-entry-person">
+                <strong>${esc(row.participant)}</strong>
+                <small>${row.submitted ? `${esc(row.champion || "Table submitted")} to win` : row.picked ? `${row.picked} clubs picked` : "Not entered"}</small>
+              </span>
+              <span class="pl-group-entry-status">${row.submitted ? "In" : "Open"}</span>
+            </article>`).join("") : `<p class="pl-group-board-state">No group members yet.</p>`}
+        </div>
+        <p class="pl-group-board-note">Scores unlock when the season starts. Challenge results stay separate from market PnL.</p>
+      ` : ""}
+    </section>`;
+}
+
 function renderPremierLeaguePredictor() {
   const predictor = activeLeaguePredictor();
   loadPremierLeagueDraftIntoState();
@@ -4760,6 +5114,7 @@ function renderPremierLeaguePredictor() {
           <p class="pl-picker-note">${complete ? "Every club has a position. Check the table before submitting." : "Select clubs in the exact order you think they will finish."}</p>
         </aside>
       </div>
+      ${leaguePredictorGroupPanelHtml()}
       <p class="pl-attribution">${esc(predictor.leagueName)} club marks are used for identification. Club list verified against the official league source.</p>
     </section>
   `;
@@ -4803,6 +5158,7 @@ async function loadRemotePremierLeagueEntry({ refresh = false } = {}) {
     state.plRemoteLoaded = true;
     savePremierLeagueDraft();
     render();
+    void loadLeaguePredictorGroupEntries({ refresh: true });
   } else {
     state.plRemoteLoaded = true;
   }
@@ -4840,6 +5196,7 @@ async function submitPremierLeagueEntry() {
     state.plSubmitted = Boolean(data.entry?.submittedAt);
     state.plRemoteLoaded = true;
     savePremierLeagueDraft();
+    await loadLeaguePredictorGroupEntries({ refresh: true, renderNow: false });
     toast(`${activeLeaguePredictor().leagueName} table saved.`);
   } catch (err) {
     toast(err.message || "Could not save predictor.");
@@ -4850,7 +5207,7 @@ async function submitPremierLeagueEntry() {
 }
 
 function premierLeagueShareUrl() {
-  const base = `${location.origin}${activeLeaguePredictor().route}`;
+  const base = `${sharePageBaseUrl()}/predictor/${encodeURIComponent(activeLeaguePredictor().id)}`;
   return state.plEntryId ? `${base}?entry=${encodeURIComponent(state.plEntryId)}` : base;
 }
 
@@ -4863,6 +5220,10 @@ function premierLeagueShareCardUrl() {
 }
 
 async function openPremierLeagueShareModal() {
+  if (!state.plEntryId) {
+    toast("Submit your table before sharing it.");
+    return;
+  }
   openModal("embed");
   dom.embedModalOverlay.querySelector(".modal-title").textContent = `Share ${activeLeaguePredictor().leagueName} predictor`;
   const link = premierLeagueShareUrl();
@@ -5000,6 +5361,313 @@ function updateSuggestPreviewModal() {
   }
 }
 
+function challengeHubPredictorState(predictor) {
+  let ranking = [];
+  let submitted = false;
+  try {
+    const saved = JSON.parse(localStorage.getItem(leaguePredictorDraftKey(predictor.id)) || "{}");
+    const validIds = new Set(predictor.clubs.map(club => club.id));
+    ranking = (Array.isArray(saved.ranking) ? saved.ranking : [])
+      .filter((id, index, rows) => validIds.has(id) && rows.indexOf(id) === index);
+    submitted = Boolean(saved.submitted);
+  } catch {
+    ranking = [];
+  }
+  if (predictor.id === state.activePredictorId && state.plRanking.length) {
+    ranking = normalizePremierLeagueRanking(state.plRanking);
+    submitted = state.plSubmitted;
+  }
+  const locked = Date.now() >= Date.parse(predictor.lockAt);
+  return {
+    ranking,
+    status: locked ? "Locked" : submitted ? "Submitted" : ranking.length ? `${ranking.length}/${predictor.clubs.length} picked` : "Open",
+  };
+}
+
+function challengeAttachedGroups(challengeId) {
+  return selectableNavGroups().filter(group => groupAddonIds(group).includes(challengeId));
+}
+
+function challengeGroupLine(challengeId) {
+  const groups = challengeAttachedGroups(challengeId);
+  if (!groups.length) return "Global challenge";
+  const shown = groups.slice(0, 2).map(group => `${group.emoji || ""} ${group.name}`.trim());
+  return `${shown.join(" · ")}${groups.length > 2 ? ` · +${groups.length - 2}` : ""}`;
+}
+
+function catalogMarketImported(group, item) {
+  if (!group || !item) return false;
+  return (group.markets || []).some(market => market.catalogMarketId === item.id || market.category === item.title);
+}
+
+function catalogMarketOutcomes(item, limit = 3) {
+  if (Array.isArray(item.consensus) && item.consensus.length) return item.consensus.slice(0, limit);
+  const outcomes = Array.isArray(item.outcomes) ? item.outcomes : [];
+  const initialProbabilities = item.initialProbabilities && typeof item.initialProbabilities === "object"
+    ? item.initialProbabilities
+    : {};
+  const seeded = outcomes.map((title, index) => ({
+    title,
+    probability: Number(initialProbabilities[title]),
+    index,
+  }));
+  const hasCompleteSeed = seeded.length > 0 && seeded.every(outcome => Number.isFinite(outcome.probability));
+  if (hasCompleteSeed) {
+    return seeded
+      .sort((a, b) => (b.probability - a.probability) || (a.index - b.index))
+      .slice(0, limit)
+      .map(({ title, probability }) => ({ title, probability }));
+  }
+  const probability = outcomes.length ? 1 / outcomes.length : 0.5;
+  return outcomes.slice(0, limit).map(title => ({ title, probability }));
+}
+
+function catalogImportedMarket(group, item, outcomeTitle = "") {
+  if (!group || !item) return null;
+  const markets = (group.markets || []).filter(market => market.catalogMarketId === item.id || market.category === item.title);
+  if (!markets.length) return null;
+  const wanted = String(outcomeTitle || "").trim().toLowerCase();
+  return markets.find(market => String(market.question || "").trim().toLowerCase() === wanted)
+    || markets.find(market => market.status === "open")
+    || markets[0];
+}
+
+function catalogPreferredGroup(item) {
+  const groups = selectableNavGroups();
+  return groups.find(group => group.id === state.currentGroupId)
+    || groups.find(group => catalogMarketImported(group, item))
+    || groups[0]
+    || null;
+}
+
+function openCatalogMarket(catalogId, outcomeTitle = "", side = "yes") {
+  const item = state.globalMarkets.find(market => market.id === catalogId);
+  if (!item) return;
+  const group = catalogPreferredGroup(item);
+  const importedMarket = catalogImportedMarket(group, item, outcomeTitle);
+  if (group && importedMarket) {
+    state.currentGroupId = group.id;
+    state.shell = "app";
+    state.view = "dashboard";
+    state.trade = { marketId: importedMarket.id, side: side === "no" ? "no" : "yes", mode: "buy" };
+    state.sharedMarketId = null;
+    localStorage.setItem(STORAGE_KEYS.groupId, group.id);
+    routeToMarket(importedMarket.id);
+    render();
+    requestAnimationFrame(() => window.scrollTo(0, 0));
+    return;
+  }
+  state.catalogPreviewId = catalogId;
+  state.catalogPreviewOutcome = outcomeTitle || catalogMarketOutcomes(item, 1)[0]?.title || item.outcomes?.[0] || "Yes";
+  state.catalogPreviewSide = side === "no" ? "no" : "yes";
+  render();
+}
+
+function catalogConsensusChart(item) {
+  const outcomes = catalogMarketOutcomes(item).slice(0, 4);
+  if (!outcomes.length) return "";
+  const colors = ["#2d9cff", "#8fc5ff", "#f5b84b", "#ff7a1a"];
+  const rows = outcomes.map((outcome, index) => {
+    const current = Math.max(0, Math.min(1, Number(outcome.probability || 0)));
+    const seeded = Number(item.initialProbabilities?.[outcome.title]);
+    return {
+      ...outcome,
+      current,
+      opening: Number.isFinite(seeded) ? Math.max(0, Math.min(1, seeded)) : current,
+      color: colors[index],
+    };
+  });
+  const values = rows.flatMap(row => [row.opening, row.current]);
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  const padding = Math.max(0.025, (rawMax - rawMin) * 0.35);
+  const min = Math.max(0, rawMin - padding);
+  const max = Math.min(1, rawMax + padding);
+  const range = Math.max(0.05, max - min);
+  const y = value => 178 - ((value - min) / range) * 142;
+  const ticks = [max, (max + min) / 2, min];
+  return `
+    <div class="catalog-consensus-legend">
+      ${rows.map(row => `<span><i style="--market-color:${row.color}"></i>${esc(row.title)} <strong>${Math.round(row.current * 100)}%</strong></span>`).join("")}
+    </div>
+    <svg class="catalog-consensus-chart" viewBox="0 0 560 210" role="img" aria-label="Opening prices compared with current group consensus">
+      ${ticks.map(value => `<line x1="18" x2="520" y1="${y(value).toFixed(1)}" y2="${y(value).toFixed(1)}" class="catalog-chart-grid"/><text x="552" y="${(y(value) + 4).toFixed(1)}" text-anchor="end">${Math.round(value * 100)}%</text>`).join("")}
+      ${rows.map(row => `<path d="M 22 ${y(row.opening).toFixed(1)} L 516 ${y(row.current).toFixed(1)}" fill="none" stroke="${row.color}" stroke-width="2.5" stroke-linecap="round"/><circle cx="516" cy="${y(row.current).toFixed(1)}" r="4.5" fill="${row.color}"/><circle cx="22" cy="${y(row.opening).toFixed(1)}" r="2.5" fill="${row.color}"/>`).join("")}
+      <text x="18" y="202" text-anchor="start">OPENING</text><text x="520" y="202" text-anchor="end">NOW</text>
+    </svg>`;
+}
+
+function catalogMarketImage(item, className = "catalog-market-logo") {
+  return `<span class="${className}">${item.imageUrl ? `<img src="${esc(item.imageUrl)}" alt="" loading="lazy" />` : "PB"}</span>`;
+}
+
+function catalogOutcomeControls(item, outcome, compact = false) {
+  const pct = Math.max(0, Math.min(100, Math.round(Number(outcome.probability || 0) * 100)));
+  return `<div class="catalog-outcome-row ${compact ? "compact" : ""}">
+    <button class="catalog-outcome-open" type="button" data-open-catalog-market="${esc(item.id)}" data-catalog-outcome="${esc(outcome.title)}" data-catalog-side="yes">
+      <span>${outcomeTitleHtml(outcome.title)}</span><strong>${pct}%</strong>
+    </button>
+    <div class="catalog-quick-trade" aria-label="Trade ${esc(outcome.title)}">
+      <button class="yes" type="button" data-open-catalog-market="${esc(item.id)}" data-catalog-outcome="${esc(outcome.title)}" data-catalog-side="yes">Yes</button>
+      <button class="no" type="button" data-open-catalog-market="${esc(item.id)}" data-catalog-outcome="${esc(outcome.title)}" data-catalog-side="no">No</button>
+    </div>
+  </div>`;
+}
+
+function globalMarketCard(item) {
+  const outcomes = catalogMarketOutcomes(item, 2);
+  const extra = Math.max(0, (item.outcomes?.length || 0) - outcomes.length);
+  const preferred = catalogPreferredGroup(item);
+  const added = catalogMarketImported(preferred, item);
+  return `
+    <article class="catalog-market-card motion-item ${added ? "is-live" : ""}" data-catalog-card data-market-search-item="${esc(`${item.title} ${item.category} ${(item.outcomes || []).join(" ")}`.toLowerCase())}">
+      <button class="catalog-card-open" type="button" data-open-catalog-market="${esc(item.id)}" data-catalog-outcome="${esc(outcomes[0]?.title || "")}" data-catalog-side="yes" aria-label="Open ${esc(item.title)}"></button>
+      <header class="catalog-card-header">
+        ${catalogMarketImage(item)}
+        <div><p>${esc(item.category || "General")}${added ? " · live in your group" : ""}</p><h3>${esc(item.title)}</h3></div>
+      </header>
+      <div class="catalog-outcomes">
+        ${outcomes.map(outcome => catalogOutcomeControls(item, outcome)).join("")}
+        ${extra ? `<button class="catalog-more-outcomes" type="button" data-open-catalog-market="${esc(item.id)}" data-catalog-outcome="${esc(outcomes[0]?.title || "")}">+${extra} more</button>` : ""}
+      </div>
+      <footer>
+        <div class="catalog-market-stats"><span>${compactMoney(item.volume || 0)} vol.</span><span>${Number(item.groupCount || 0)} groups</span></div>
+        <span class="catalog-card-state">${added ? "Trade →" : "Open →"}</span>
+      </footer>
+    </article>`;
+}
+
+function featuredCatalogMarket(item) {
+  if (!item) return "";
+  const outcomes = catalogMarketOutcomes(item, 4);
+  const extra = Math.max(0, (item.outcomes?.length || 0) - outcomes.length);
+  return `
+    <article class="catalog-featured-market motion-item" data-catalog-card data-market-search-item="${esc(`${item.title} ${item.category} ${(item.outcomes || []).join(" ")}`.toLowerCase())}">
+      <div class="catalog-feature-copy">
+        <header>${catalogMarketImage(item, "catalog-feature-logo")}<div><p>${esc(item.category || "Featured")}</p><button class="catalog-feature-title" type="button" data-open-catalog-market="${esc(item.id)}" data-catalog-outcome="${esc(outcomes[0]?.title || "")}"><h2>${esc(item.title)}</h2></button></div></header>
+        <div class="catalog-feature-outcomes">
+          ${outcomes.map(outcome => catalogOutcomeControls(item, outcome, true)).join("")}
+        </div>
+        <div class="catalog-feature-foot"><span>${compactMoney(item.volume || 0)} volume · ${Number(item.groupCount || 0)} groups${extra ? ` · ${extra} more outcomes` : ""}</span><button type="button" data-open-catalog-market="${esc(item.id)}" data-catalog-outcome="${esc(outcomes[0]?.title || "")}">Open market →</button></div>
+      </div>
+      <div class="catalog-feature-chart">
+        <div class="catalog-chart-label"><span>Group consensus</span><em>Opening → now</em></div>
+        ${catalogConsensusChart(item)}
+      </div>
+    </article>`;
+}
+
+function catalogHotMarkets(markets) {
+  return [...markets]
+    .sort((a, b) => (Number(b.volume || 0) - Number(a.volume || 0)) || (Number(b.groupCount || 0) - Number(a.groupCount || 0)))
+    .slice(0, 5)
+    .map((item, index) => {
+      const leader = catalogMarketOutcomes(item)[0];
+      return `<li><span>${index + 1}</span><button type="button" data-open-catalog-market="${esc(item.id)}" data-catalog-outcome="${esc(leader?.title || "")}"><strong>${esc(item.title)}</strong><small>${leader ? `${outcomeTitleHtml(leader.title)} ${Math.round(Number(leader.probability || 0) * 100)}%` : esc(item.category)}</small></button><em>${Number(item.groupCount || 0)} groups</em></li>`;
+    }).join("");
+}
+
+function catalogPreviewPanel(item) {
+  if (!item) return "";
+  const outcomes = catalogMarketOutcomes(item, Math.min(8, item.outcomes?.length || 8));
+  const selected = outcomes.find(outcome => outcome.title === state.catalogPreviewOutcome) || outcomes[0];
+  const pct = Math.round(Number(selected?.probability || 0) * 100);
+  const groups = selectableNavGroups();
+  return `<div class="catalog-preview-backdrop" data-close-catalog-preview>
+    <section class="catalog-preview-panel" role="dialog" aria-modal="true" aria-labelledby="catalogPreviewTitle">
+      <header><div>${catalogMarketImage(item, "catalog-feature-logo")}<div><span>${esc(item.category || "Market")}</span><h2 id="catalogPreviewTitle">${esc(item.title)}</h2></div></div><button type="button" data-close-catalog-preview aria-label="Close">×</button></header>
+      <div class="catalog-preview-prices">
+        <p>${outcomeTitleHtml(selected?.title || "Outcome")}</p><strong>${pct}%</strong>
+        <div><button class="yes ${state.catalogPreviewSide === "yes" ? "active" : ""}" type="button" data-open-catalog-market="${esc(item.id)}" data-catalog-outcome="${esc(selected?.title || "")}" data-catalog-side="yes">Yes ${pct}¢</button><button class="no ${state.catalogPreviewSide === "no" ? "active" : ""}" type="button" data-open-catalog-market="${esc(item.id)}" data-catalog-outcome="${esc(selected?.title || "")}" data-catalog-side="no">No ${100 - pct}¢</button></div>
+      </div>
+      ${outcomes.length > 1 ? `<div class="catalog-preview-outcomes">${outcomes.map(outcome => `<button type="button" class="${outcome.title === selected?.title ? "active" : ""}" data-open-catalog-market="${esc(item.id)}" data-catalog-outcome="${esc(outcome.title)}" data-catalog-side="${state.catalogPreviewSide}"><span>${outcomeTitleHtml(outcome.title)}</span><strong>${Math.round(Number(outcome.probability || 0) * 100)}%</strong></button>`).join("")}</div>` : ""}
+      <div class="catalog-preview-action">
+        ${groups.length ? `<p>Add this question to a group to create its independent prices and leaderboard.</p><div class="catalog-preview-groups">${groups.map(group => {
+          const imported = catalogMarketImported(group, item);
+          return `<button type="button" data-add-catalog-market="${esc(item.id)}" data-catalog-group-id="${esc(group.id)}" data-open-after-add="true"><span>${esc(group.emoji || "")} ${esc(group.name)}</span><strong>${imported ? "Trade" : "Add & trade"}</strong></button>`;
+        }).join("")}</div>` : `<p>Create or join a group before trading this market.</p><button class="btn btn-primary" type="button" data-create-group>Create group</button>`}
+      </div>
+    </section>
+  </div>`;
+}
+
+function renderMarketsHub() {
+  if (!state.globalMarketsLoaded && !state.globalMarketsLoading) void loadGlobalMarkets().catch(() => {});
+  const categories = ["All", ...new Set(state.globalMarkets.map(item => item.category).filter(Boolean))];
+  const filtered = state.globalMarketCategory === "All"
+    ? state.globalMarkets
+    : state.globalMarkets.filter(item => item.category === state.globalMarketCategory);
+  const featured = filtered.find(item => item.id === "pl-2026-27-winner") || filtered.find(item => item.featured) || filtered[0];
+  dom.mainContent.innerHTML = `
+    <section class="markets-hub">
+      <header class="markets-discovery-head motion-item">
+        <label class="markets-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input type="search" data-market-search placeholder="Search markets" aria-label="Search markets" /></label>
+        <div class="markets-head-meta"><strong>${state.globalMarkets.length}</strong><span>live markets</span></div>
+      </header>
+      <div class="market-category-tabs motion-item" role="tablist" aria-label="Market categories">
+        ${categories.map(category => `<button type="button" data-market-category="${esc(category)}" class="${state.globalMarketCategory === category ? "active" : ""}">${esc(category)}</button>`).join("")}
+      </div>
+      ${state.globalMarketsLoading && !state.globalMarkets.length ? `<div class="catalog-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>Loading markets</strong></div>` : ""}
+      ${state.globalMarketsError ? `<div class="catalog-error"><p>${esc(state.globalMarketsError)}</p><button class="btn btn-ghost btn-sm" type="button" data-go-markets>Retry</button></div>` : ""}
+      ${featured ? `<div class="markets-lead-grid"><div>${featuredCatalogMarket(featured)}<div class="catalog-carousel-dots" aria-hidden="true"><b></b><i></i><i></i><i></i></div></div><aside class="markets-side-rail"><section><p class="eyebrow">Run it with friends</p><h3>Your group. Its own market.</h3><span>Import a question, trade with a shared bankroll and settle it together.</span><button class="catalog-side-action" type="button" data-group-id="__new">Create a group</button></section><section class="hot-markets"><header><h3>Hot markets</h3><span>Now</span></header><ol>${catalogHotMarkets(filtered)}</ol></section></aside></div>` : ""}
+      <div class="catalog-section-head motion-item"><div><h2>All markets</h2></div><span>Click any market or price to open it.</span></div>
+      <div class="catalog-market-grid">${filtered.map(globalMarketCard).join("")}</div>
+      ${state.globalMarketsLoaded && !filtered.length ? `<div class="catalog-empty">No markets in this category yet.</div>` : ""}
+      <footer class="markets-hub-foot motion-item"><span>Each group gets independent prices, trades and a leaderboard.</span><button type="button" data-go-challenges>Explore challenges →</button></footer>
+      ${catalogPreviewPanel(state.globalMarkets.find(item => item.id === state.catalogPreviewId))}
+    </section>`;
+}
+
+function renderChallengesHub() {
+  const predictors = LEAGUE_PREDICTOR_LIST.map(predictor => ({
+    predictor,
+    ...challengeHubPredictorState(predictor),
+  }));
+
+  dom.mainContent.innerHTML = `
+    <section class="challenges-page">
+      <header class="challenges-hero motion-item">
+        <div>
+          <p class="eyebrow">Challenge pool</p>
+          <h1>Call the season before it happens.</h1>
+          <p>Build your tables once, then compare every pick with your groups.</p>
+        </div>
+        ${getCurrentGroup() ? `<button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back to ${esc(getCurrentGroup().name)}</button>` : ""}
+      </header>
+
+      <div class="challenge-section-head motion-item">
+        <div>
+          <p class="eyebrow">2026/27</p>
+          <h2>League table predictors</h2>
+        </div>
+        <span>Pick every finish from champion to relegation.</span>
+      </div>
+
+      <div class="challenge-league-grid">
+        ${predictors.map(({ predictor, ranking, status }) => {
+          const leader = predictor.clubs.find(club => club.id === ranking[0]);
+          return `<button class="challenge-league-card motion-item" type="button" data-go-league-predictor="${esc(predictor.id)}">
+            <span class="challenge-league-logo">${predictor.logoUrl ? `<img src="${esc(predictor.logoUrl)}" alt="" loading="lazy" />` : esc(predictor.leagueMark)}</span>
+            <span class="challenge-league-copy">
+              <em>${esc(predictor.season)}</em>
+              <strong>${esc(predictor.title)}</strong>
+              <small>${esc(challengeGroupLine(leaguePredictorAddonId(predictor.id)))}</small>
+            </span>
+            <span class="challenge-league-progress">
+              <b>${esc(status)}</b>
+              <small>${leader ? `${esc(leader.name)} 1st` : "Start table"}</small>
+            </span>
+          </button>`;
+        }).join("")}
+      </div>
+
+      <footer class="challenges-foot motion-item">
+        <span>Challenges stay separate from fake-money market PnL.</span>
+        ${getCurrentGroup() ? `<button type="button" data-show-general-market-pool>Add one to ${esc(getCurrentGroup().name)} →</button>` : ""}
+      </footer>
+    </section>`;
+}
+
 function renderDashboard() {
   const group = getCurrentGroup();
   if (!group) {
@@ -5051,6 +5719,17 @@ function renderDashboard() {
           </button>
         </div>
       </div>
+
+      <button class="dashboard-challenge-strip motion-item" type="button" data-go-challenges>
+        <span>
+          <em>Season challenges</em>
+          <strong>Premier League, La Liga, Serie A, Bundesliga and Ligue 1</strong>
+        </span>
+        <span class="dashboard-challenge-logos" aria-hidden="true">
+          ${LEAGUE_PREDICTOR_LIST.map(predictor => predictor.logoUrl ? `<img src="${esc(predictor.logoUrl)}" alt="" />` : `<b>${esc(predictor.leagueMark)}</b>`).join("")}
+        </span>
+        <span class="dashboard-challenge-cta">View challenges →</span>
+      </button>
 
       <div class="dashboard-layout">
         <section class="market-column">
@@ -5505,15 +6184,6 @@ function renderEmptyDashboard() {
       <button class="btn btn-ghost btn-lg" type="button" data-join-group>Join group</button>
     </div>
     <button class="welcome-demo-link" type="button" data-try-demo>New here? Try the 2-minute demo</button>`;
-  const bracketPromo = `
-    <button class="welcome-bracket-card" type="button" data-go-bracket>
-      <span class="welcome-bracket-copy">
-        <em>New</em>
-        <strong>${BRACKET_CHALLENGE.prize} for perfect knockouts</strong>
-        <small>Free to enter. Build your World Cup bracket.</small>
-      </span>
-      <span class="welcome-bracket-prize">🏆</span>
-    </button>`;
   const welcomeCreateForm = `
     <form class="welcome-inline-form" id="dashboardCreateForm">
       <div class="form-topline">
@@ -5579,7 +6249,6 @@ function renderEmptyDashboard() {
             <p class="eyebrow">Enter market mode</p>
           </div>
           <div class="welcome-action-stack">
-            ${bracketPromo}
             ${welcomeEntry}
           </div>
         </div>
@@ -8560,28 +9229,26 @@ function renderPositions() {
 }
 
 function portfolioChallengesHtml() {
-  const bracketComplete = bracketCompletion().complete;
-  const bracketStatus = state.bracketSubmitted ? "Submitted" : bracketComplete ? "Ready" : "Draft";
-  const bracketChampion = bracketDisplayWinner("final") || "No champion yet";
+  const group = getCurrentGroup();
+  const attached = new Set(group ? groupAddonIds(group) : []);
+  const attachedPredictors = LEAGUE_PREDICTOR_LIST.filter(predictor => attached.has(leaguePredictorAddonId(predictor.id)));
   return `
     <section class="portfolio-challenges motion-item" aria-label="Season challenges">
       <div class="portfolio-challenges-head">
         <div>
           <p class="eyebrow">Challenges</p>
-          <h2>Season picks</h2>
+          <h2>${esc(group?.name || "Group")} picks</h2>
         </div>
-        <span>Bracket and table contests live here.</span>
+        <span>Contests stay separate from market PnL.</span>
       </div>
       <div class="portfolio-challenge-grid">
-        <button class="portfolio-challenge-card" type="button" data-go-bracket>
-          <span class="portfolio-challenge-icon">🏆</span>
-          <span>
-            <strong>${esc(BRACKET_CHALLENGE.title)}</strong>
-            <em>${esc(BRACKET_CHALLENGE.prize)} prize · ${esc(bracketStatus)}</em>
-          </span>
-          <small>${esc(bracketChampion)}</small>
-        </button>
-        ${LEAGUE_PREDICTOR_LIST.map(predictor => portfolioLeaguePredictorCard(predictor)).join("")}
+        ${attachedPredictors.map(predictor => portfolioLeaguePredictorCard(predictor)).join("")}
+        ${!attachedPredictors.length ? `
+          <button class="portfolio-challenge-empty" type="button" data-show-general-market-pool>
+            <span>＋</span>
+            <strong>Add a challenge</strong>
+            <small>Table predictors and seasonal contests.</small>
+          </button>` : ""}
       </div>
     </section>
   `;
