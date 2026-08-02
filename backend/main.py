@@ -3420,6 +3420,25 @@ def season_prediction_share_entry_by_code(share_code: str) -> dict | None:
         return None
 
 
+@app.get("/api/predictor-links/{predictor_code}")
+def resolve_predictor_link(predictor_code: str) -> dict:
+    """Resolve a compact share URL without sending a human through Render HTML."""
+    clean_code = re.sub(r"[^a-zA-Z0-9_-]", "", str(predictor_code or ""))[:32].lower()
+    challenge_id = PREDICTOR_SHORT_CODES.get(clean_code)
+    entry = None
+    if not challenge_id:
+        entry = season_prediction_share_entry_by_code(clean_code)
+        challenge_id = str((entry or {}).get("challengeId") or "")
+    if challenge_id not in LEAGUE_PREDICTORS:
+        raise HTTPException(404, "Prediction link not found")
+    predictor = LEAGUE_PREDICTORS[challenge_id]
+    return {
+        "challengeId": challenge_id,
+        "route": predictor.get("route"),
+        "entry": entry,
+    }
+
+
 def league_predictor_share_payload(
     challenge_id: str,
     request: Request | None = None,

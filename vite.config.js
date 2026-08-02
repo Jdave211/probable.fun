@@ -7,8 +7,6 @@ export default defineConfig({
     host: true,
     proxy: {
       "/api": "http://127.0.0.1:8000",
-      "^/p/": "http://127.0.0.1:8000",
-      "^/predictor/": "http://127.0.0.1:8000",
     },
   },
 });

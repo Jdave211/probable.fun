@@ -400,6 +400,8 @@ const state = {
   plSharedEntry: null,
   plSharedEntryLoading: false,
   plSharedEntryError: "",
+  plShareRouteCode: "",
+  plShareRouteResolving: false,
   plGroupEntries: [],
   plGroupEntriesKey: "",
   plGroupEntriesLoading: false,
@@ -915,7 +917,7 @@ async function init() {
     const savedWantsWelcome = savedShell === "welcome" && initialRoute.name === "welcome";
     if (state.authUser && savedGroup) state.currentGroupId = savedGroup;
     const isEmbedRoute = initialRoute.name === "embedMarket" || initialRoute.name === "embedEvent";
-    if (state.authUser && !isEmbedRoute && !state.inviteToken && !savedWantsWelcome && (initialRoute.name === "app" || initialRoute.name === "leaderboard" || initialRoute.name === "admin" || initialRoute.name === "plPredictor" || savedShell === "app" || savedGroup || state.sharedMarketId)) {
+    if (state.authUser && !isEmbedRoute && !state.inviteToken && !savedWantsWelcome && (initialRoute.name === "app" || initialRoute.name === "leaderboard" || initialRoute.name === "admin" || initialRoute.name === "plPredictor" || initialRoute.name === "predictorShare" || savedShell === "app" || savedGroup || state.sharedMarketId)) {
       state.shell = "app";
       state.view = appViewFromRouteOrSaved(initialRoute, savedView);
       if (initialRoute.name === "welcome") {
@@ -986,6 +988,22 @@ async function loadInitialAppData() {
   if (state.view === "bracket" && !state.sharedMarketId && !state.inviteToken) {
     loadBracketEntryIntoState();
     if (isLoggedIn() || state.sharedBracketEntryId) void loadRemoteBracketEntry({ refresh: true });
+    return;
+  }
+  if (state.plShareRouteCode && !state.sharedMarketId && !state.inviteToken) {
+    await resolveLeaguePredictorShareCode(state.plShareRouteCode);
+    if (isLoggedIn()) {
+      void loadGroupsForBoot()
+        .then(data => {
+          if (Array.isArray(data.groups)) setGroups(data.groups);
+          normalizeSelection();
+          return loadLeaguePredictorGroupEntries({ refresh: true });
+        })
+        .catch(err => console.warn("Predictor group context deferred", err));
+    } else {
+      state.plEntryBoardScope = "global";
+      void loadLeaguePredictorGroupEntries({ refresh: true });
+    }
     return;
   }
   if (state.view === "plPredictor" && !state.sharedMarketId && !state.inviteToken) {
@@ -1157,6 +1175,7 @@ function routeFromLocation() {
   if (parts[0] === "positions") return { name: "positions", legacyPath: "/portfolio" };
   if (parts[0] === "challenges") return { name: "challenges" };
   if (parts[0] === "markets") return { name: "challenges", legacyPath: "/challenges" };
+  if (parts[0] === "p" && parts[1]) return { name: "predictorShare", code: parts[1] };
   const leaguePredictor = LEAGUE_PREDICTOR_LIST.find(predictor => predictor.route === path);
   if (leaguePredictor) return {
     name: "plPredictor",
@@ -1219,6 +1238,7 @@ function shouldHoldAppShell() {
     route.name === "challenges" ||
     route.name === "bracket" ||
     route.name === "plPredictor" ||
+    route.name === "predictorShare" ||
     route.name === "market" ||
     route.name === "embedMarket" ||
     route.name === "embedEvent" ||
@@ -1237,6 +1257,8 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
   state.plSharedEntry = null;
   state.plSharedEntryLoading = false;
   state.plSharedEntryError = "";
+  state.plShareRouteCode = "";
+  state.plShareRouteResolving = false;
   state.joinPreFill = null;
   state.embedRoute = null;
 
@@ -1297,6 +1319,12 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
     state.trade = emptyTrade();
     state.activePredictorId = nextPredictorId;
     state.plSharedEntryId = route.entry || "";
+  } else if (route.name === "predictorShare") {
+    state.shell = "app";
+    state.view = "plPredictor";
+    state.trade = emptyTrade();
+    state.plShareRouteCode = String(route.code || "").trim();
+    state.plShareRouteResolving = true;
   } else if (route.name === "app") {
     state.shell = "app";
     state.view = "dashboard";
@@ -1375,6 +1403,7 @@ function appViewFromRouteOrSaved(route, savedView = "dashboard") {
   if (route.name === "challenges") return "challenges";
   if (route.name === "bracket") return "bracket";
   if (route.name === "plPredictor") return "plPredictor";
+  if (route.name === "predictorShare") return "plPredictor";
   if (savedView === "leaderboard") return "leaderboard";
   if (savedView === "admin") return "admin";
   if (savedView === "positions") return "positions";
@@ -5153,6 +5182,10 @@ function leaguePredictorGroupPanelHtml() {
 }
 
 function renderPremierLeaguePredictor() {
+  if (state.plShareRouteResolving) {
+    dom.mainContent.innerHTML = `<section class="pl-predictor-page pl-shared-predictor"><div class="pl-shared-state"><p class="eyebrow">Shared prediction</p><h1>Opening prediction...</h1><p>Loading the submitted table.</p></div></section>`;
+    return;
+  }
   if (state.plSharedEntryId) {
     renderSharedLeaguePrediction();
     return;
@@ -5246,6 +5279,47 @@ function renderPremierLeaguePredictor() {
       <p class="pl-attribution">${esc(predictor.leagueName)} club marks are used for identification. Club list verified against the official league source.</p>
     </section>
   `;
+}
+
+async function resolveLeaguePredictorShareCode(rawCode) {
+  const code = String(rawCode || "").trim();
+  if (!code) return;
+  state.plShareRouteResolving = true;
+  state.plSharedEntryError = "";
+  try {
+    const data = await api(`/api/predictor-links/${encodeURIComponent(code)}`);
+    const predictorId = String(data.challengeId || "");
+    if (!LEAGUE_PREDICTORS[predictorId]) throw new Error("That prediction challenge is unavailable.");
+    if (state.activePredictorId !== predictorId) {
+      state.plRanking = [];
+      state.plEntryId = "";
+      state.plShareCode = "";
+      state.plSubmitted = false;
+      state.plRemoteLoaded = false;
+      resetLeaguePredictorGroupEntries();
+    }
+    state.activePredictorId = predictorId;
+    if (data.entry?.id) {
+      state.plSharedEntryId = String(data.entry.id);
+      state.plSharedEntry = {
+        ...data.entry,
+        ranking: normalizePremierLeagueRanking(data.entry.ranking || []),
+      };
+      state.plSharedEntryLoading = false;
+    } else {
+      state.plSharedEntryId = "";
+      state.plSharedEntry = null;
+      loadPremierLeagueDraftIntoState();
+      if (isLoggedIn()) void loadRemotePremierLeagueEntry({ refresh: true });
+    }
+  } catch (err) {
+    state.plSharedEntryId = "share-link-error";
+    state.plSharedEntry = null;
+    state.plSharedEntryError = err.message || "This prediction link could not be opened.";
+  } finally {
+    state.plShareRouteResolving = false;
+    if (state.view === "plPredictor") renderPremierLeaguePredictor();
+  }
 }
 
 function premierLeagueMobileTableHtml({ locked = false } = {}) {
