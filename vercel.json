@@ -6,7 +6,7 @@
         {
           "type": "header",
           "key": "user-agent",
-          "value": "(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|Slackbot|Discordbot|Googlebot|bingbot|TelegramBot|Pinterestbot|Applebot)"
+          "value": ".*(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|Slackbot|Discordbot|Googlebot|bingbot|TelegramBot|Pinterestbot|Applebot).*"
         }
       ],
       "destination": "https://probable-fun.onrender.com/market/:path*"
@@ -17,7 +17,7 @@
         {
           "type": "header",
           "key": "user-agent",
-          "value": "(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|Slackbot|Discordbot|Googlebot|bingbot|TelegramBot|Pinterestbot|Applebot)"
+          "value": ".*(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|Slackbot|Discordbot|Googlebot|bingbot|TelegramBot|Pinterestbot|Applebot).*"
         }
       ],
       "destination": "https://probable-fun.onrender.com/p/:path*"
@@ -28,7 +28,7 @@
         {
           "type": "header",
           "key": "user-agent",
-          "value": "(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|Slackbot|Discordbot|Googlebot|bingbot|TelegramBot|Pinterestbot|Applebot)"
+          "value": ".*(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|Slackbot|Discordbot|Googlebot|bingbot|TelegramBot|Pinterestbot|Applebot).*"
         }
       ],
       "destination": "https://probable-fun.onrender.com/predictor/:path*"
