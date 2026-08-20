@@ -2667,7 +2667,10 @@ def create_group(payload: GroupCreate) -> dict:
     return groups_response(groupId=group_id)
 
 
-PREDICTOR_DATA_PATH = BASE_DIR / "data" / "league-predictors.json"
+# Keep the API on the predictor data shipped with the backend. A legacy copy at
+# the repository root can otherwise drift from the frontend and silently serve
+# stale lock dates or labels.
+PREDICTOR_DATA_PATH = Path(__file__).resolve().parent / "data" / "league-predictors.json"
 try:
     _predictor_rows = json.loads(PREDICTOR_DATA_PATH.read_text(encoding="utf-8"))
 except Exception as exc:

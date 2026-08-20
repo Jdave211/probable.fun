@@ -18,7 +18,7 @@ export const LEAGUE_PREDICTORS = {
     logoUrl: "/league-logos/premier-league-dark.png",
     title: "Premier League",
     season: "2026/27",
-    lockAt: "2026-08-15T11:30:00+00:00",
+    lockAt: "2026-09-01T03:59:00+00:00",
     sourceUrl: "https://www.premierleague.com/en/clubs",
     sourceLabel: "Official Premier League clubs page",
     zones: [
@@ -59,7 +59,7 @@ export const LEAGUE_PREDICTORS = {
     logoUrl: "/league-logos/la-liga.png",
     title: "La Liga",
     season: "2026/27",
-    lockAt: "2026-08-15T19:00:00+02:00",
+    lockAt: "2026-09-01T03:59:00+00:00",
     sourceUrl: "https://www.laliga.com/en-US/laliga-easports/clubs",
     sourceLabel: "Official LaLiga clubs page",
     zones: [
@@ -100,7 +100,7 @@ export const LEAGUE_PREDICTORS = {
     logoUrl: "/league-logos/serie-a-dark.png",
     title: "Serie A",
     season: "2026/27",
-    lockAt: "2026-08-22T18:30:00+02:00",
+    lockAt: "2026-09-01T03:59:00+00:00",
     sourceUrl: "https://www.legaseriea.it/team",
     sourceLabel: "Official Serie A clubs page",
     zones: [
@@ -141,7 +141,7 @@ export const LEAGUE_PREDICTORS = {
     logoUrl: "/league-logos/bundesliga-dark.png",
     title: "Bundesliga",
     season: "2026/27",
-    lockAt: "2026-08-28T20:30:00+02:00",
+    lockAt: "2026-09-01T03:59:00+00:00",
     sourceUrl: "https://www.bundesliga.com/en/bundesliga/clubs",
     sourceLabel: "Official Bundesliga clubs page",
     zones: [
@@ -181,7 +181,7 @@ export const LEAGUE_PREDICTORS = {
     logoUrl: "/league-logos/ligue-1.png",
     title: "Ligue 1",
     season: "2026/27",
-    lockAt: "2026-08-21T20:45:00+02:00",
+    lockAt: "2026-09-01T03:59:00+00:00",
     sourceUrl: "https://ligue1.com/en/articles/l1_article_5292-the-2026-27-ligue-1-mc-donald-s-calendar-is-released",
     sourceLabel: "Official Ligue 1 2026/27 calendar",
     zones: [

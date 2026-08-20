@@ -1,15 +1,4 @@
 import "./styles.css";
-import {
-  Chart,
-  CategoryScale,
-  LinearScale,
-  LineController,
-  LineElement,
-  PointElement,
-  Filler,
-  Tooltip,
-} from "chart.js";
-import { animate, stagger } from "motion";
 import { supabase } from "./supabase.js";
 import { DEMO_GROUP_ID, buildDemoGroup, simulateDemoApi, resolveDemoMarket } from "./demo.js";
 import { startTutorial, stopTutorial, tutorialOnRender } from "./tutorial.js";
@@ -297,7 +286,37 @@ function roundRect(ctx, x, y, width, height, radius) {
   ctx.closePath();
 }
 
-Chart.register(CategoryScale, LinearScale, LineController, LineElement, PointElement, Filler, Tooltip, probableCursorShadePlugin, probableChartActiveDotsPlugin, portfolioEndMarkerPlugin);
+let Chart = null;
+let chartRuntimePromise = null;
+let motionRuntimePromise = null;
+
+async function loadChartRuntime() {
+  if (Chart) return Chart;
+  if (!chartRuntimePromise) {
+    chartRuntimePromise = import("chart.js").then(module => {
+      Chart = module.Chart;
+      Chart.register(
+        module.CategoryScale,
+        module.LinearScale,
+        module.LineController,
+        module.LineElement,
+        module.PointElement,
+        module.Filler,
+        module.Tooltip,
+        probableCursorShadePlugin,
+        probableChartActiveDotsPlugin,
+        portfolioEndMarkerPlugin,
+      );
+      return Chart;
+    });
+  }
+  return chartRuntimePromise;
+}
+
+function loadMotionRuntime() {
+  motionRuntimePromise ||= import("motion");
+  return motionRuntimePromise;
+}
 
 const API = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 const API_CONFIG_ERROR = "Production API is not configured. Set VITE_API_BASE_URL in Vercel to your Render backend URL.";
@@ -1046,6 +1065,8 @@ async function loadInitialAppData() {
     normalizeSelection();
     return;
   }
+  // Public entry screens should never depend on the API being warm.
+  if (state.shell !== "app" && !state.inviteToken) return;
   const data = await loadGroupsForBoot();
   setGroups(data.groups);
   if (state.inviteToken) await loadInvitePreview(state.inviteToken);
@@ -1690,7 +1711,7 @@ async function onGlobalClick(e) {
     if (state.plEntryBoardScope !== nextScope) {
       state.plEntryBoardScope = nextScope;
       resetLeaguePredictorGroupEntries();
-      renderPremierLeaguePredictor();
+      refreshPremierLeaguePredictor();
       void loadLeaguePredictorGroupEntries({ refresh: true });
     }
     return;
@@ -1719,8 +1740,7 @@ async function onGlobalClick(e) {
   if (plClubPick) {
     e.preventDefault();
     selectPremierLeagueClub(plClubPick.dataset.plClubPick);
-    renderPremierLeaguePredictor();
-    revealPremierLeagueMobileCurrentRow();
+    refreshPremierLeaguePredictor({ revealCurrent: true });
     return;
   }
 
@@ -1728,16 +1748,14 @@ async function onGlobalClick(e) {
   if (plClearPick) {
     e.preventDefault();
     clearPremierLeaguePosition(Number(plClearPick.dataset.plClearPosition));
-    renderPremierLeaguePredictor();
-    revealPremierLeagueMobileCurrentRow();
+    refreshPremierLeaguePredictor({ revealCurrent: true });
     return;
   }
 
   if (e.target.closest("[data-pl-undo]")) {
     e.preventDefault();
     undoPremierLeaguePick();
-    renderPremierLeaguePredictor();
-    revealPremierLeagueMobileCurrentRow();
+    refreshPremierLeaguePredictor({ revealCurrent: true });
     return;
   }
 
@@ -1750,7 +1768,7 @@ async function onGlobalClick(e) {
     state.plRanking = [];
     state.plSubmitted = false;
     savePremierLeagueDraft();
-    renderPremierLeaguePredictor();
+    refreshPremierLeaguePredictor({ revealCurrent: true });
     toast("Draft reset.");
     return;
   }
@@ -2581,7 +2599,7 @@ function onGlobalChange(e) {
     state.plEntryBoardGroupId = groupId;
     state.plEntryBoardScope = "group";
     resetLeaguePredictorGroupEntries();
-    renderPremierLeaguePredictor();
+    refreshPremierLeaguePredictor();
     void loadLeaguePredictorGroupEntries({ refresh: true });
     return;
   }
@@ -4721,6 +4739,8 @@ function hydrateWelcomeVideos() {
   const load = () => {
     if (!document.querySelector(".welcome-hero")) return;
     document.querySelectorAll(".welcome-video-tile video[data-src]").forEach(video => {
+      const tile = video.closest(".welcome-video-tile");
+      if (tile && getComputedStyle(tile).display === "none") return;
       video.src = video.dataset.src;
       video.removeAttribute("data-src");
       video.load();
@@ -5110,7 +5130,7 @@ async function loadLeaguePredictorGroupEntries({ refresh = false, renderNow = tr
   state.plGroupEntriesLoading = true;
   state.plGroupEntriesError = "";
   state.plGroupEntriesKey = key;
-  if (renderNow && state.view === "plPredictor") renderPremierLeaguePredictor();
+  if (renderNow && state.view === "plPredictor") refreshPremierLeaguePredictor();
   try {
     const endpoint = scope === "global"
       ? `/api/predictors/${encodeURIComponent(activeLeaguePredictor().id)}/entries`
@@ -5124,7 +5144,7 @@ async function loadLeaguePredictorGroupEntries({ refresh = false, renderNow = tr
     state.plGroupEntriesError = err.message || "Could not load group entries.";
   } finally {
     if (state.plGroupEntriesKey === key) state.plGroupEntriesLoading = false;
-    if (renderNow && state.view === "plPredictor") renderPremierLeaguePredictor();
+    if (renderNow && state.view === "plPredictor") refreshPremierLeaguePredictor();
   }
 }
 
@@ -5281,6 +5301,30 @@ function renderPremierLeaguePredictor() {
   `;
 }
 
+function refreshPremierLeaguePredictor({ revealCurrent = false } = {}) {
+  if (state.view !== "plPredictor") return;
+  const viewport = { x: window.scrollX, y: window.scrollY };
+  const scrollPositions = [...document.querySelectorAll(".pl-ranking-list, .pl-mobile-table-rows, .pl-club-picker-grid")]
+    .map((element, index) => ({ index, top: element.scrollTop, left: element.scrollLeft }));
+  const activeClubId = document.activeElement?.dataset?.plClubPick || "";
+
+  document.documentElement.classList.add("component-refreshing");
+  renderPremierLeaguePredictor();
+  requestAnimationFrame(() => {
+    const scrollables = document.querySelectorAll(".pl-ranking-list, .pl-mobile-table-rows, .pl-club-picker-grid");
+    scrollPositions.forEach(({ index, top, left }) => {
+      const element = scrollables[index];
+      if (!element) return;
+      element.scrollTop = top;
+      element.scrollLeft = left;
+    });
+    window.scrollTo(viewport.x, viewport.y);
+    if (revealCurrent) revealPremierLeagueMobileCurrentRow();
+    if (activeClubId) document.querySelector(`[data-pl-club-pick="${CSS.escape(activeClubId)}"]`)?.focus({ preventScroll: true });
+    document.documentElement.classList.remove("component-refreshing");
+  });
+}
+
 async function resolveLeaguePredictorShareCode(rawCode) {
   const code = String(rawCode || "").trim();
   if (!code) return;
@@ -5318,7 +5362,7 @@ async function resolveLeaguePredictorShareCode(rawCode) {
     state.plSharedEntryError = err.message || "This prediction link could not be opened.";
   } finally {
     state.plShareRouteResolving = false;
-    if (state.view === "plPredictor") renderPremierLeaguePredictor();
+    if (state.view === "plPredictor") refreshPremierLeaguePredictor();
   }
 }
 
@@ -5461,7 +5505,7 @@ async function loadRemotePremierLeagueEntry({ refresh = false } = {}) {
     state.plSharedEntryLoading = true;
     state.plSharedEntryError = "";
     state.plSharedEntry = null;
-    if (state.view === "plPredictor") renderPremierLeaguePredictor();
+    if (state.view === "plPredictor") refreshPremierLeaguePredictor();
     try {
       const data = await api(`/api/predictors/${activeLeaguePredictor().id}/entry?entry=${encodeURIComponent(requestedEntryId)}`);
       if (state.plSharedEntryId !== requestedEntryId) return;
@@ -5479,7 +5523,7 @@ async function loadRemotePremierLeagueEntry({ refresh = false } = {}) {
     } finally {
       if (state.plSharedEntryId === requestedEntryId) {
         state.plSharedEntryLoading = false;
-        if (state.view === "plPredictor") renderPremierLeaguePredictor();
+        if (state.view === "plPredictor") refreshPremierLeaguePredictor();
         void loadLeaguePredictorGroupEntries({ refresh: true });
       }
     }
@@ -5497,7 +5541,7 @@ async function loadRemotePremierLeagueEntry({ refresh = false } = {}) {
     state.plSubmitted = Boolean(data.entry.submittedAt);
     state.plRemoteLoaded = true;
     savePremierLeagueDraft();
-    render();
+    refreshPremierLeaguePredictor();
     void loadLeaguePredictorGroupEntries({ refresh: true });
   } else {
     state.plRemoteLoaded = true;
@@ -5546,7 +5590,7 @@ async function submitPremierLeagueEntry() {
     return;
   }
   state.plSaving = true;
-  renderPremierLeaguePredictor();
+  refreshPremierLeaguePredictor();
   try {
     const data = await api(`/api/predictors/${activeLeaguePredictor().id}/entry`, {
       method: "POST",
@@ -5568,7 +5612,7 @@ async function submitPremierLeagueEntry() {
     toast(err.message || "Could not save predictor.");
   } finally {
     state.plSaving = false;
-    renderPremierLeaguePredictor();
+    refreshPremierLeaguePredictor();
   }
 }
 
@@ -8625,9 +8669,10 @@ function refreshBracketChallenge({ preserveScroll = true } = {}) {
   });
 }
 
-function animateBracketAdvance() {
+async function animateBracketAdvance() {
   if (!state.bracketLastPickedId) return;
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const { animate } = await loadMotionRuntime();
   const targets = document.querySelectorAll(".bracket-mini-match.just-picked, .bracket-matchup.just-picked");
   if (!targets.length) return;
   animate(targets, { scale: [0.985, 1.012, 1], opacity: [0.92, 1] }, { duration: 0.38, easing: "ease-out" });
@@ -10973,7 +11018,11 @@ function renderPortfolioCharts() {
   });
 }
 
-function renderCharts() {
+async function renderCharts() {
+  const selector = "[data-portfolio-chart], [data-event-chart-canvas], [data-market-chart]";
+  if (!document.querySelector(selector)) return;
+  await loadChartRuntime();
+  if (!document.querySelector(selector)) return;
   renderPortfolioCharts();
 
   document.querySelectorAll("[data-event-chart-canvas]").forEach(canvas => {
@@ -11413,9 +11462,14 @@ function destroyCharts() {
   charts.clear();
 }
 
-function animateIn() {
+async function animateIn() {
   const items = document.querySelectorAll(".motion-item");
-  if (!items.length) return;
+  if (!items.length) {
+    initGooeyText();
+    return;
+  }
+  const { animate, stagger } = await loadMotionRuntime();
+  if (!document.documentElement.contains(items[0])) return;
   animate(items, { opacity: [0, 1], y: [8, 0] }, { duration: 0.28, delay: stagger(0.025), easing: "ease-out" });
   initGooeyText();
 }
