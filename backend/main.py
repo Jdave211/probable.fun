@@ -11,11 +11,12 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
-from urllib.parse import quote_plus, urlparse, urlunparse
-from uuid import UUID, uuid4
+from urllib.parse import quote_plus, unquote, urlparse, urlunparse
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import httpx
 from dotenv import load_dotenv
@@ -148,6 +149,13 @@ class CatalogMarketAdd(BaseModel):
 class OracleVote(BaseModel):
     participant: str = Field(min_length=1, max_length=40)
     outcome: str = Field(min_length=1, max_length=80)
+
+
+@dataclass(frozen=True)
+class AuthIdentity:
+    user_id: str
+    display_name: str
+    email: str | None = None
 
 
 # ── AMM math ───────────────────────────────────────────────────────────
@@ -735,6 +743,7 @@ def assemble_bracket_entry(row: dict | None) -> dict | None:
     return {
         "id": row.get("id"),
         "challengeId": row.get("challenge_id"),
+        "userId": row.get("user_id"),
         "participant": row.get("participant"),
         "userEmail": row.get("user_email"),
         "picks": row.get("picks") or {},
@@ -796,6 +805,8 @@ def close_expired_markets(db, *, force: bool = False) -> None:
 # ── Supabase client ────────────────────────────────────────────────────
 
 _db = None
+_legacy_identity_claim_lock = threading.Lock()
+_legacy_identity_claims_checked: set[str] = set()
 
 
 def get_db():
@@ -816,11 +827,334 @@ def get_db():
     return _db
 
 
+def identity_display_name(user: object) -> str:
+    metadata = getattr(user, "user_metadata", None) or {}
+    email = clean_person(getattr(user, "email", None), "")
+    return clean_person(
+        metadata.get("full_name") or metadata.get("name") or metadata.get("display_name"),
+        email.split("@", 1)[0] if email else "Member",
+    )
+
+
+def request_identity(request: Request, *, required: bool = False) -> AuthIdentity | None:
+    authorization = request.headers.get("authorization", "").strip()
+    if authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+        if not token:
+            raise HTTPException(401, "Sign in again to continue")
+        try:
+            response = get_db().auth.get_user(token)
+            user = getattr(response, "user", None)
+            user_id = str(getattr(user, "id", "") or "")
+            UUID(user_id)
+        except Exception as exc:
+            raise HTTPException(401, "Your sign-in expired. Sign in again to continue") from exc
+        return AuthIdentity(
+            user_id=user_id,
+            display_name=identity_display_name(user),
+            email=clean_person(getattr(user, "email", None), "") or None,
+        )
+
+    # The frontend's explicit dev bypass never runs in production builds. Keep
+    # local development usable without weakening production authorization.
+    if os.environ.get("ALLOW_DEV_AUTH_BYPASS", "").lower() in {"1", "true", "yes"}:
+        dev_user_id = request.headers.get("x-probable-dev-user", "").strip()
+        if dev_user_id:
+            raw_name = unquote(request.headers.get("x-probable-dev-name", ""))
+            stable_dev_id = str(uuid5(NAMESPACE_URL, f"probable.local/{dev_user_id[:80]}"))
+            return AuthIdentity(user_id=stable_dev_id, display_name=clean_person(raw_name, "Dev"))
+
+    if required:
+        raise HTTPException(401, "Sign in to continue")
+    return None
+
+
+def group_member_for_identity(db, group_id: str, identity: AuthIdentity) -> dict | None:
+    rows = (
+        db.table("group_members")
+        .select("*")
+        .eq("group_id", group_id)
+        .eq("user_id", identity.user_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return rows[0] if rows else None
+
+
+def require_group_member_identity(db, group_id: str, identity: AuthIdentity) -> dict:
+    member = group_member_for_identity(db, group_id, identity)
+    if not member:
+        raise HTTPException(403, "Join this group before making changes")
+    return member
+
+
+def legacy_identity_aliases(identity: AuthIdentity) -> list[str]:
+    aliases = [identity.display_name, identity.email]
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in aliases:
+        alias = clean_person(value, "")
+        key = alias.casefold()
+        if not alias or key in seen:
+            continue
+        seen.add(key)
+        result.append(alias)
+    return result
+
+
+def is_default_personal_group_row(group: dict) -> bool:
+    return (
+        clean_person(group.get("name"), "").casefold() == "my markets"
+        and clean_person(group.get("emoji"), "").casefold() == "pb"
+    )
+
+
+def legacy_membership_has_identity_evidence(db, group: dict, member: dict, identity: AuthIdentity) -> bool:
+    member_name = clean_person(member.get("name"), "")
+    member_key = member_name.casefold()
+    if identity.email and member_key == clean_person(identity.email, "").casefold():
+        return True
+    if member_key == clean_person(group.get("created_by"), "").casefold():
+        return True
+    if abs(float(member.get("balance") or DEFAULT_FAKE_BALANCE) - DEFAULT_FAKE_BALANCE) > 0.009:
+        return True
+
+    group_id = str(group.get("id") or "")
+    events = db.table("market_events").select("id").eq("group_id", group_id).execute().data or []
+    event_ids = [str(row.get("id")) for row in events if row.get("id")]
+    if event_ids:
+        for table in ("event_positions", "event_trades"):
+            rows = (
+                db.table(table)
+                .select("id")
+                .in_("event_id", event_ids)
+                .eq("participant", member_name)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if rows:
+                return True
+
+    markets = db.table("markets").select("id").eq("group_id", group_id).execute().data or []
+    market_ids = [str(row.get("id")) for row in markets if row.get("id")]
+    if market_ids:
+        rows = (
+            db.table("trades")
+            .select("id")
+            .in_("market_id", market_ids)
+            .eq("participant", member_name)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if rows:
+            return True
+    return False
+
+
+def link_legacy_group_activity(db, group_id: str, member_name: str, user_id: str) -> None:
+    db.table("groups").update({"created_by_user_id": user_id}).eq("id", group_id).eq(
+        "created_by", member_name
+    ).is_("created_by_user_id", "null").execute()
+    db.table("group_invites").update({"created_by_user_id": user_id}).eq("group_id", group_id).eq(
+        "created_by", member_name
+    ).is_("created_by_user_id", "null").execute()
+    db.table("group_challenges").update({"added_by_user_id": user_id}).eq("group_id", group_id).eq(
+        "added_by", member_name
+    ).is_("added_by_user_id", "null").execute()
+
+    events = db.table("market_events").select("id").eq("group_id", group_id).execute().data or []
+    event_ids = [str(row.get("id")) for row in events if row.get("id")]
+    db.table("market_events").update({"created_by_user_id": user_id}).eq("group_id", group_id).eq(
+        "created_by", member_name
+    ).is_("created_by_user_id", "null").execute()
+    db.table("market_events").update({"resolved_by_user_id": user_id}).eq("group_id", group_id).eq(
+        "resolved_by", member_name
+    ).is_("resolved_by_user_id", "null").execute()
+    if event_ids:
+        db.table("event_positions").update({"user_id": user_id}).in_("event_id", event_ids).eq(
+            "participant", member_name
+        ).is_("user_id", "null").execute()
+        db.table("event_trades").update({"user_id": user_id}).in_("event_id", event_ids).eq(
+            "participant", member_name
+        ).is_("user_id", "null").execute()
+        db.table("market_outcomes").update({"eliminated_by_user_id": user_id}).in_("event_id", event_ids).eq(
+            "eliminated_by", member_name
+        ).is_("eliminated_by_user_id", "null").execute()
+        db.table("market_resolution_approvals").update({"resolver_user_id": user_id}).in_("event_id", event_ids).eq(
+            "resolver", member_name
+        ).is_("resolver_user_id", "null").execute()
+
+    markets = db.table("markets").select("id").eq("group_id", group_id).execute().data or []
+    market_ids = [str(row.get("id")) for row in markets if row.get("id")]
+    if market_ids:
+        db.table("trades").update({"user_id": user_id}).in_("market_id", market_ids).eq(
+            "participant", member_name
+        ).is_("user_id", "null").execute()
+
+
+def claim_legacy_identity_memberships(db, identity: AuthIdentity) -> int:
+    """Attach pre-auth name-based memberships after the identity is verified."""
+    with _legacy_identity_claim_lock:
+        if identity.user_id in _legacy_identity_claims_checked:
+            return 0
+
+        aliases = legacy_identity_aliases(identity)
+        candidates_by_id: dict[str, dict] = {}
+        email_key = clean_person(identity.email, "").casefold()
+        alias_priority = {
+            alias.casefold(): 2 if email_key and alias.casefold() == email_key else 1
+            for alias in aliases
+        }
+        for alias in aliases:
+            rows = (
+                db.table("group_members")
+                .select("id,group_id,name,user_id,balance")
+                .eq("name", alias)
+                .is_("user_id", "null")
+                .execute()
+                .data
+                or []
+            )
+            for row in rows:
+                row_id = str(row.get("id") or "")
+                if row_id:
+                    candidates_by_id[row_id] = row
+
+        candidates = list(candidates_by_id.values())
+        if not candidates:
+            _legacy_identity_claims_checked.add(identity.user_id)
+            return 0
+
+        candidate_group_ids = sorted({str(row.get("group_id")) for row in candidates if row.get("group_id")})
+        group_rows = (
+            db.table("groups")
+            .select("id,name,emoji,created_by,created_at")
+            .in_("id", candidate_group_ids)
+            .execute()
+            .data
+            or []
+        )
+        groups_by_id = {str(row.get("id")): row for row in group_rows if row.get("id")}
+        existing_rows = (
+            db.table("group_members")
+            .select("group_id")
+            .eq("user_id", identity.user_id)
+            .execute()
+            .data
+            or []
+        )
+        existing_group_ids = {str(row.get("group_id")) for row in existing_rows if row.get("group_id")}
+
+        personal_group_ids = {
+            group_id for group_id, group in groups_by_id.items()
+            if is_default_personal_group_row(group)
+        }
+        content_group_ids: set[str] = set()
+        if personal_group_ids:
+            for table in ("markets", "market_events"):
+                rows = (
+                    db.table(table)
+                    .select("group_id")
+                    .in_("group_id", sorted(personal_group_ids))
+                    .execute()
+                    .data
+                    or []
+                )
+                content_group_ids.update(str(row.get("group_id")) for row in rows if row.get("group_id"))
+
+        fallback_personal_group_id = None
+        if not existing_group_ids:
+            empty_personal_groups = [
+                group for group_id, group in groups_by_id.items()
+                if group_id in personal_group_ids and group_id not in content_group_ids
+            ]
+            if empty_personal_groups:
+                fallback = max(empty_personal_groups, key=lambda row: str(row.get("created_at") or ""))
+                fallback_personal_group_id = str(fallback.get("id"))
+
+        selected_by_group: dict[str, dict] = {}
+        for candidate in candidates:
+            group_id = str(candidate.get("group_id") or "")
+            if not group_id or group_id in existing_group_ids or group_id not in groups_by_id:
+                continue
+            if (
+                group_id in personal_group_ids
+                and group_id not in content_group_ids
+                and group_id != fallback_personal_group_id
+            ):
+                continue
+            if (
+                group_id not in personal_group_ids
+                and not legacy_membership_has_identity_evidence(
+                    db, groups_by_id[group_id], candidate, identity
+                )
+            ):
+                continue
+            current = selected_by_group.get(group_id)
+            candidate_score = alias_priority.get(clean_person(candidate.get("name"), "").casefold(), 0)
+            current_score = alias_priority.get(clean_person(current.get("name"), "").casefold(), 0) if current else -1
+            if current is None or candidate_score > current_score:
+                selected_by_group[group_id] = candidate
+
+        claimed = 0
+        for group_id, candidate in selected_by_group.items():
+            member_name = clean_person(candidate.get("name"), identity.display_name)
+            link_legacy_group_activity(db, group_id, member_name, identity.user_id)
+            db.table("group_members").update({"user_id": identity.user_id}).eq(
+                "id", candidate["id"]
+            ).is_("user_id", "null").execute()
+            claimed += 1
+
+        _legacy_identity_claims_checked.add(identity.user_id)
+        return claimed
+
+
+def event_admin_identity(db, event: dict, identity: AuthIdentity) -> dict:
+    group_rows = (
+        db.table("groups")
+        .select("id,created_by,created_by_user_id")
+        .eq("id", event["group_id"])
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not group_rows:
+        raise HTTPException(404, "Group not found")
+    group = group_rows[0]
+    member = require_group_member_identity(db, event["group_id"], identity)
+    allowed_ids = {
+        str(value)
+        for value in (group.get("created_by_user_id"), event.get("created_by_user_id"))
+        if value
+    }
+    if identity.user_id in allowed_ids:
+        return member
+
+    # Migration bridge for founder/creator rows created before UUID identity.
+    member_name = person_key(member.get("name"))
+    legacy_admin_names = {person_key(group.get("created_by")), person_key(event.get("created_by"))} - {""}
+    if member_name and member_name in legacy_admin_names:
+        if person_key(group.get("created_by")) == member_name and not group.get("created_by_user_id"):
+            db.table("groups").update({"created_by_user_id": identity.user_id}).eq("id", group["id"]).execute()
+        if person_key(event.get("created_by")) == member_name and not event.get("created_by_user_id"):
+            db.table("market_events").update({"created_by_user_id": identity.user_id}).eq("id", event["id"]).execute()
+        return member
+    raise HTTPException(403, "Only the group founder or market creator can verify this market")
+
+
 # ── Data assembly (Supabase snake_case → frontend camelCase) ──────────
 
 def assemble_trade(t: dict) -> dict:
     return {
         "id":          t["id"],
+        "userId":      t.get("user_id"),
         "participant": t["participant"],
         "side":        t["side"],
         "amount":      t["amount"],
@@ -845,6 +1179,7 @@ def assemble_event_trade(t: dict, outcome_lookup: dict[str, dict]) -> dict:
     after = 1.0 - after_raw if display_side == "no" else after_raw
     return {
         "id": t["id"],
+        "userId": t.get("user_id"),
         "participant": t["participant"],
         "side": display_side,
         "action": t["action"],
@@ -1048,6 +1383,7 @@ def assemble_event_markets(event: dict) -> list[dict]:
             "description": event.get("description") or "",
             "imageUrl": event.get("image_url"),
             "creator": event.get("created_by"),
+            "creatorUserId": event.get("created_by_user_id"),
             "catalogMarketId": event.get("catalog_market_id"),
             "status": status,
             "mode": event["mode"],
@@ -1169,8 +1505,19 @@ def assemble_group(g: dict) -> dict:
         "emoji":     g["emoji"],
         "mode":      g["mode"],
         "createdBy": g.get("created_by"),
+        "createdByUserId": g.get("created_by_user_id"),
         "createdAt": g["created_at"],
         "members":   [m["name"] for m in members_raw],
+        "memberRecords": [
+            {
+                "id": m.get("id"),
+                "userId": m.get("user_id"),
+                "name": m.get("name"),
+                "balance": m.get("balance"),
+                "joinedAt": m.get("joined_at"),
+            }
+            for m in members_raw
+        ],
         "balances":  {m["name"]: m["balance"] for m in members_raw},
         "markets":   [*event_markets, *legacy_markets],
         "challenges": [
@@ -1192,7 +1539,7 @@ EVENT_SELECT_COMPACT = (
     "image_url,catalog_market_id,"
     "closes_at,created_at,outcome_id,resolved_at,oracle_proposal,legacy_key,"
     "resolution_source,edge_cases,verification_status,verification_attempts,"
-    "resolved_by,resolution_notes,created_by,"
+    "resolved_by,resolution_notes,created_by,created_by_user_id,"
     "market_outcomes(*),event_trades(*),event_positions(*)"
 )
 EVENT_SELECT_CONTEXT = (
@@ -1200,11 +1547,11 @@ EVENT_SELECT_CONTEXT = (
     "image_url,catalog_market_id,"
     "closes_at,created_at,outcome_id,resolved_at,oracle_proposal,legacy_key,"
     "resolution_source,edge_cases,verification_status,verification_attempts,"
-    "resolved_by,resolution_notes,created_by,"
+    "resolved_by,resolution_notes,created_by,created_by_user_id,"
     "market_outcomes(*),event_trades(*),event_positions(*)"
 )
 GROUPS_SELECT_COMPACT = (
-    "id,name,emoji,mode,created_by,created_at,"
+    "id,name,emoji,mode,created_by,created_by_user_id,created_at,"
     "group_members(*),"
     f"market_events({EVENT_SELECT_COMPACT}),"
     "markets(*)"
@@ -1259,6 +1606,7 @@ def groups_response(
     include: str | None = None,
     limit: int | None = None,
     members: str | None = None,
+    user_id: str | None = None,
     **extra,
 ) -> dict:
     aliases = {
@@ -1267,9 +1615,14 @@ def groups_response(
         if clean_person(item)
     }
     aliases = expand_member_aliases(aliases)
-    groups = load_all_groups(compact=compact, group_id=group_id, limit=None if aliases else limit)
-    if aliases:
-        def matches_member_alias(group: dict) -> bool:
+    filter_by_identity = bool(user_id or aliases)
+    groups = load_all_groups(compact=compact, group_id=group_id, limit=None if filter_by_identity else limit)
+    if filter_by_identity:
+        def matches_current_identity(group: dict) -> bool:
+            if user_id:
+                if str(group.get("createdByUserId") or "") == user_id:
+                    return True
+                return any(str(member.get("userId") or "") == user_id for member in group.get("memberRecords", []))
             creator = clean_person(group.get("createdBy"))
             if creator.casefold() in aliases:
                 return True
@@ -1277,12 +1630,22 @@ def groups_response(
 
         groups = [
             group for group in groups
-            if matches_member_alias(group)
+            if matches_current_identity(group)
         ]
         if limit:
             groups = groups[:max(1, min(int(limit), 50))]
     if include and not any(group.get("id") == include for group in groups):
         groups.extend(load_all_groups(compact=compact, group_id=include))
+    if user_id:
+        for group in groups:
+            member = next(
+                (
+                    record for record in group.get("memberRecords", [])
+                    if str(record.get("userId") or "") == user_id
+                ),
+                None,
+            )
+            group["currentMemberName"] = member.get("name") if member else None
     return {"groups": groups, **extra}
 
 
@@ -1292,7 +1655,7 @@ def load_market_context_group(market_id: str) -> dict:
     try:
         event, _route_outcome = require_event_or_outcome(market_id)
         group_id = event["group_id"]
-        group_rows = db.table("groups").select("id,name,emoji,mode,created_by,created_at,group_members(*)").eq("id", group_id).execute().data or []
+        group_rows = db.table("groups").select("id,name,emoji,mode,created_by,created_by_user_id,created_at,group_members(*)").eq("id", group_id).execute().data or []
         event_rows = db.table("market_events").select(EVENT_SELECT_CONTEXT).eq("id", event["id"]).execute().data or []
         if not group_rows or not event_rows:
             raise HTTPException(404, "Market group not found")
@@ -1307,7 +1670,7 @@ def load_market_context_group(market_id: str) -> dict:
         if not legacy_rows:
             raise
         group_id = legacy_rows[0]["group_id"]
-        group_rows = db.table("groups").select("id,name,emoji,mode,created_by,created_at,group_members(*)").eq("id", group_id).execute().data or []
+        group_rows = db.table("groups").select("id,name,emoji,mode,created_by,created_by_user_id,created_at,group_members(*)").eq("id", group_id).execute().data or []
         if not group_rows:
             raise HTTPException(404, "Market group not found")
         group = deepcopy(group_rows[0])
@@ -1767,25 +2130,66 @@ def active_invite_for_group(group_id: str) -> dict | None:
     return result.data[0] if result.data else None
 
 
-def create_group_invite(group_id: str, created_by: str | None = None) -> dict:
+def create_group_invite(group_id: str, identity: AuthIdentity) -> dict:
     db = get_db()
     row = {
         "token": create_invite_token(),
         "group_id": group_id,
-        "created_by": (created_by or "").strip() or None,
+        "created_by": identity.display_name,
+        "created_by_user_id": identity.user_id,
     }
     db.table("group_invites").insert(row).execute()
     return require_invite(row["token"])
 
 
-def add_group_member(group_id: str, name: str) -> None:
+def add_group_member(group_id: str, identity: AuthIdentity, requested_name: str | None = None) -> str:
     db = get_db()
-    cleaned = name.strip()
-    db.table("group_members").upsert({
+    existing = group_member_for_identity(db, group_id, identity)
+    if existing:
+        return clean_person(existing.get("name"), identity.display_name)
+
+    cleaned = clean_person(requested_name, identity.display_name)
+    legacy_rows = (
+        db.table("group_members")
+        .select("*")
+        .eq("group_id", group_id)
+        .eq("name", cleaned)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if legacy_rows and not legacy_rows[0].get("user_id"):
+        db.table("group_members").update({"user_id": identity.user_id}).eq("id", legacy_rows[0]["id"]).execute()
+        return cleaned
+
+    if legacy_rows:
+        base = cleaned[:34] or "Member"
+        suffix = 2
+        while suffix < 100:
+            candidate = f"{base} ({suffix})"[:40]
+            taken = (
+                db.table("group_members")
+                .select("id")
+                .eq("group_id", group_id)
+                .eq("name", candidate)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if not taken:
+                cleaned = candidate
+                break
+            suffix += 1
+
+    db.table("group_members").insert({
         "group_id": group_id,
         "name": cleaned,
+        "user_id": identity.user_id,
         "balance": DEFAULT_FAKE_BALANCE,
-    }, on_conflict="group_id,name", ignore_duplicates=True).execute()
+    }).execute()
+    return cleaned
 
 
 def legacy_event_title(market: dict) -> str:
@@ -2270,29 +2674,36 @@ def resolve_event_market_all_outcomes(
 
     resolved_by_clean = (resolved_by or "manual").strip()[:80] or "manual"
     note = (notes or "").strip()[:1200] or "Resolved as draw: all listed outcomes were correct."
-    positions = db.table("event_positions").select("participant, shares").eq("event_id", event_id).gt("shares", 0).execute().data or []
-    payouts_by_participant: dict[str, float] = {}
-    shares_by_participant: dict[str, float] = {}
+    positions = db.table("event_positions").select("participant,user_id,shares").eq("event_id", event_id).gt("shares", 0).execute().data or []
+    payouts_by_owner: dict[str, float] = {}
+    shares_by_owner: dict[str, float] = {}
+    owner_details: dict[str, dict] = {}
     for position in positions:
         participant = str(position.get("participant") or "").strip()
+        user_id = str(position.get("user_id") or "").strip()
         shares = float(position.get("shares") or 0)
         if not participant or shares <= 0:
             continue
-        shares_by_participant[participant] = shares_by_participant.get(participant, 0.0) + shares
-        payouts_by_participant[participant] = payouts_by_participant.get(participant, 0.0) + shares
+        owner_key = user_id or f"legacy:{participant.casefold()}"
+        owner_details[owner_key] = {"participant": participant, "user_id": user_id or None}
+        shares_by_owner[owner_key] = shares_by_owner.get(owner_key, 0.0) + shares
+        payouts_by_owner[owner_key] = payouts_by_owner.get(owner_key, 0.0) + shares
 
     payouts = []
-    for participant in sorted(payouts_by_participant):
-        payout = round(payouts_by_participant[participant], 2)
+    for owner_key in sorted(payouts_by_owner):
+        participant = owner_details[owner_key]["participant"]
+        user_id = owner_details[owner_key]["user_id"]
+        payout = round(payouts_by_owner[owner_key], 2)
         balance_after = None
-        member_res = db.table("group_members").select("balance").eq("group_id", event["group_id"]).eq("name", participant).execute()
+        member_query = db.table("group_members").select("id,balance").eq("group_id", event["group_id"])
+        member_res = member_query.eq("user_id", user_id).execute() if user_id else member_query.eq("name", participant).execute()
         if member_res.data:
             current_balance = float(member_res.data[0].get("balance") or 0)
             balance_after = round(current_balance + payout, 2)
-            db.table("group_members").update({"balance": balance_after}).eq("group_id", event["group_id"]).eq("name", participant).execute()
+            db.table("group_members").update({"balance": balance_after}).eq("id", member_res.data[0]["id"]).execute()
         payouts.append({
             "participant": participant,
-            "shares": round(shares_by_participant.get(participant, 0.0), 8),
+            "shares": round(shares_by_owner.get(owner_key, 0.0), 8),
             "payout": payout,
             "balanceAfter": balance_after,
         })
@@ -2383,6 +2794,7 @@ def record_resolution_approval(
     outcome_id: str,
     outcome_title: str,
     resolver: str,
+    resolver_user_id: str | None = None,
     resolver_aliases: list[str] | None = None,
     notes: str | None = None,
 ) -> dict:
@@ -2403,6 +2815,7 @@ def record_resolution_approval(
         "event_id": event["id"],
         "outcome_id": outcome_id,
         "resolver": matched_admin,
+        "resolver_user_id": resolver_user_id,
         "role": role,
         "notes": note,
     }, on_conflict="event_id,resolver").execute()
@@ -2435,6 +2848,7 @@ def record_resolution_approval(
         "approvals": [
             {
                 "resolver": row.get("resolver"),
+                "resolverUserId": row.get("resolver_user_id"),
                 "role": row.get("role"),
                 "outcomeId": row.get("outcome_id"),
                 "notes": row.get("notes"),
@@ -2464,6 +2878,7 @@ def eliminate_event_outcome(
     outcome_id: str,
     *,
     eliminated_by: str = "manual",
+    eliminated_by_user_id: str | None = None,
     notes: str | None = None,
 ) -> dict:
     event_id = event["id"]
@@ -2494,6 +2909,7 @@ def eliminate_event_outcome(
             "status": "eliminated",
             "eliminated_at": eliminated_at,
             "eliminated_by": eliminated_by_clean,
+            "eliminated_by_user_id": eliminated_by_user_id,
             "elimination_notes": note,
             "price": 0,
             "quantity": -1_000_000_000,
@@ -2580,12 +2996,22 @@ def health() -> dict:
 
 @app.get("/api/groups")
 def list_groups(
+    request: Request,
     compact: bool = True,
     limit: int | None = None,
     include: str | None = None,
     members: str | None = None,
 ) -> dict:
-    return groups_response(compact=compact, limit=limit, include=include, members=members)
+    identity = request_identity(request)
+    if identity:
+        claim_legacy_identity_memberships(get_db(), identity)
+    return groups_response(
+        compact=compact,
+        limit=limit,
+        include=include,
+        members=members,
+        user_id=identity.user_id if identity else None,
+    )
 
 
 @app.get("/api/markets/{market_id}/context")
@@ -2635,36 +3061,40 @@ def get_market_image(market_id: str) -> Response:
 
 
 @app.post("/api/groups", status_code=201)
-def create_group(payload: GroupCreate) -> dict:
+def create_group(payload: GroupCreate, request: Request) -> dict:
     db = get_db()
-    cleaned = [m.strip() for m in payload.members if m.strip()]
-    if not cleaned:
-        raise HTTPException(400, "At least one member is required")
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    cleaned = [identity.display_name]
+    cleaned.extend(m.strip() for m in payload.members if m.strip() and person_key(m) != person_key(identity.display_name))
 
     group_id = create_id()
-    founder = (payload.createdBy or cleaned[0]).strip()[:80] or cleaned[0]
+    founder = identity.display_name
     group_row = {
         "id":    group_id,
         "name":  payload.name.strip(),
         "emoji": payload.emoji.strip() or "📣",
         "mode":  payload.mode,
         "created_by": founder,
+        "created_by_user_id": identity.user_id,
     }
-    try:
-        db.table("groups").insert(group_row).execute()
-    except Exception:
-        # Older live databases may not have groups.created_by until the migration
-        # is applied. Creation should still work; admin hardening uses the first
-        # member as founder fallback in that case.
-        group_row.pop("created_by", None)
-        db.table("groups").insert(group_row).execute()
+    db.table("groups").insert(group_row).execute()
 
-    db.table("group_members").insert([
-        {"group_id": group_id, "name": m, "balance": DEFAULT_FAKE_BALANCE}
-        for m in cleaned
-    ]).execute()
+    member_rows = [
+        {
+            "group_id": group_id,
+            "name": founder,
+            "user_id": identity.user_id,
+            "balance": DEFAULT_FAKE_BALANCE,
+        }
+    ]
+    member_rows.extend(
+        {"group_id": group_id, "name": member, "balance": DEFAULT_FAKE_BALANCE}
+        for member in cleaned[1:]
+    )
+    db.table("group_members").insert(member_rows).execute()
 
-    return groups_response(groupId=group_id)
+    return groups_response(groupId=group_id, user_id=identity.user_id)
 
 
 # Keep the API on the predictor data shipped with the backend. A legacy copy at
@@ -3109,6 +3539,7 @@ def assemble_group_challenge(row: dict) -> dict:
         "attachmentId": row.get("id"),
         "groupId": row.get("group_id"),
         "addedBy": row.get("added_by"),
+        "addedByUserId": row.get("added_by_user_id"),
         "addedAt": row.get("created_at"),
     }
 
@@ -3140,15 +3571,20 @@ def get_group_challenges(group_id: str) -> dict:
 
 
 @app.post("/api/groups/{group_id}/challenges", status_code=201)
-def add_group_challenge(group_id: str, payload: GroupChallengeAdd) -> dict:
+def add_group_challenge(group_id: str, payload: GroupChallengeAdd, request: Request) -> dict:
     challenge_id = clean_group_challenge_id(payload.challengeId)
     db = get_db()
     if not (db.table("groups").select("id").eq("id", group_id).limit(1).execute().data or []):
         raise HTTPException(404, "Group not found")
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    member = require_group_member_identity(db, group_id, identity)
+    creator_name = clean_person(member.get("name"), identity.display_name)
     row = {
         "group_id": group_id,
         "challenge_id": challenge_id,
-        "added_by": clean_person(payload.addedBy, "") or None,
+        "added_by": creator_name,
+        "added_by_user_id": identity.user_id,
     }
     result = db.table("group_challenges").upsert(row, on_conflict="group_id,challenge_id").execute()
     saved = result.data[0] if result.data else row
@@ -3156,9 +3592,12 @@ def add_group_challenge(group_id: str, payload: GroupChallengeAdd) -> dict:
 
 
 @app.delete("/api/groups/{group_id}/challenges/{challenge_id}")
-def remove_group_challenge(group_id: str, challenge_id: str) -> dict:
+def remove_group_challenge(group_id: str, challenge_id: str, request: Request) -> dict:
     clean_challenge = clean_group_challenge_id(challenge_id)
     db = get_db()
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    require_group_member_identity(db, group_id, identity)
     db.table("group_challenges").delete().eq("group_id", group_id).eq("challenge_id", clean_challenge).execute()
     return {"removed": True, "challengeId": clean_challenge}
 
@@ -3172,7 +3611,7 @@ def get_group_challenge_leaderboard(group_id: str, challenge_id: str) -> dict:
     db = get_db()
     member_rows = (
         db.table("group_members")
-        .select("name,joined_at")
+        .select("name,user_id,joined_at")
         .eq("group_id", group_id)
         .order("joined_at")
         .execute()
@@ -3181,8 +3620,8 @@ def get_group_challenge_leaderboard(group_id: str, challenge_id: str) -> dict:
     )
     if not member_rows:
         raise HTTPException(404, "Group not found")
-    members = [clean_person(row.get("name")) for row in member_rows if clean_person(row.get("name"))]
-    member_lookup = {member.casefold(): member for member in members}
+    members = [row for row in member_rows if clean_person(row.get("name"))]
+    member_lookup = {clean_person(row.get("name")).casefold(): row for row in members}
     entries = (
         db.table("season_predictions")
         .select("*")
@@ -3191,15 +3630,14 @@ def get_group_challenge_leaderboard(group_id: str, challenge_id: str) -> dict:
         .data
         or []
     )
-    entries_by_member = {
-        str(row.get("participant") or "").casefold(): row
-        for row in entries
-        if str(row.get("participant") or "").casefold() in member_lookup
-    }
+    entries_by_user_id = {str(row.get("user_id")): row for row in entries if row.get("user_id")}
+    entries_by_member = {str(row.get("participant") or "").casefold(): row for row in entries}
     clubs = {str(club.get("id")): club for club in LEAGUE_PREDICTORS[predictor_id].get("clubs") or []}
     rows = []
-    for member in members:
-        entry = entries_by_member.get(member.casefold())
+    for member_record in members:
+        member = clean_person(member_record.get("name"))
+        entry = entries_by_user_id.get(str(member_record.get("user_id"))) if member_record.get("user_id") else None
+        entry = entry or entries_by_member.get(member.casefold())
         assembled = assemble_season_prediction(entry)
         ranking = assembled.get("ranking") if assembled else []
         champion = clubs.get(str(ranking[0])) if ranking else None
@@ -3315,6 +3753,7 @@ def assemble_season_prediction(row: dict | None) -> dict | None:
         "id": row.get("id"),
         "shareCode": row.get("share_code") or season_prediction_share_code(row.get("id")),
         "challengeId": row.get("challenge_id"),
+        "userId": row.get("user_id"),
         "participant": row.get("participant"),
         "userEmail": row.get("user_email"),
         "ranking": ranking if isinstance(ranking, list) else [],
@@ -3523,13 +3962,17 @@ def get_league_predictor_config(challenge_id: str, request: Request) -> dict:
 
 
 @app.get("/api/predictors/{challenge_id}/entry")
-def get_season_prediction_entry(challenge_id: str, participant: str | None = None, entry: str | None = None) -> dict:
+def get_season_prediction_entry(request: Request, challenge_id: str, participant: str | None = None, entry: str | None = None) -> dict:
     clean_challenge = clean_predictor_id(challenge_id)
     db = get_db()
     query = db.table("season_predictions").select("*").eq("challenge_id", clean_challenge)
     if entry:
         rows = query.eq("id", entry).not_.is_("submitted_at", "null").limit(1).execute().data or []
         return {"entry": public_season_prediction(rows[0] if rows else None)}
+    identity = request_identity(request)
+    if identity:
+        rows = query.eq("user_id", identity.user_id).limit(1).execute().data or []
+        return {"entry": assemble_season_prediction(rows[0] if rows else None)}
     clean_participant = clean_person(participant)
     if not clean_participant:
         raise HTTPException(400, "Prediction entry identity is missing")
@@ -3538,21 +3981,21 @@ def get_season_prediction_entry(challenge_id: str, participant: str | None = Non
 
 
 @app.post("/api/predictors/{challenge_id}/entry", status_code=201)
-def save_season_prediction_entry(challenge_id: str, payload: SeasonPredictionSave) -> dict:
+def save_season_prediction_entry(challenge_id: str, payload: SeasonPredictionSave, request: Request) -> dict:
     clean_challenge = clean_predictor_id(challenge_id)
     config = LEAGUE_PREDICTORS[clean_challenge]
     if predictor_locked(config):
         raise HTTPException(423, f"{config.get('leagueName')} predictor is locked.")
-    participant = clean_person(payload.participant)
-    if not participant:
-        raise HTTPException(400, "Prediction entry identity is missing")
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    participant = identity.display_name
     ranking = normalize_predictor_ranking(payload.ranking, config)
     db = get_db()
     existing_rows = (
         db.table("season_predictions")
         .select("*")
         .eq("challenge_id", clean_challenge)
-        .eq("participant", participant)
+        .eq("user_id", identity.user_id)
         .limit(1)
         .execute()
         .data
@@ -3564,14 +4007,18 @@ def save_season_prediction_entry(challenge_id: str, payload: SeasonPredictionSav
         "id": entry_id,
         "share_code": existing.get("share_code") or season_prediction_share_code(entry_id),
         "challenge_id": clean_challenge,
+        "user_id": identity.user_id,
         "participant": participant,
-        "user_email": clean_person(payload.userEmail, "") or None,
+        "user_email": identity.email,
         "ranking": ranking,
         "submitted_at": existing.get("submitted_at") or (now_iso() if payload.submitted else None),
         "locked_at": None,
         "updated_at": now_iso(),
     }
-    result = db.table("season_predictions").upsert(row, on_conflict="challenge_id,participant").execute()
+    if existing:
+        result = db.table("season_predictions").update(row).eq("id", entry_id).execute()
+    else:
+        result = db.table("season_predictions").insert(row).execute()
     saved = result.data[0] if result.data else row
     return {"entry": assemble_season_prediction(saved), "config": league_predictor_config(clean_challenge)}
 
@@ -3773,11 +4220,24 @@ def short_league_predictor_open_graph_page(
 
 
 @app.get("/api/brackets/{challenge_id}/entry")
-def get_bracket_entry(challenge_id: str, participant: str | None = None, entry: str | None = None) -> dict:
+def get_bracket_entry(request: Request, challenge_id: str, participant: str | None = None, entry: str | None = None) -> dict:
     db = get_db()
     clean_challenge = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id)[:80]
     if entry:
         return {"entry": get_bracket_entry_by_id(clean_challenge, entry)}
+    identity = request_identity(request)
+    if identity:
+        rows = (
+            db.table("bracket_entries")
+            .select("*")
+            .eq("challenge_id", clean_challenge)
+            .eq("user_id", identity.user_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return {"entry": assemble_bracket_entry(rows[0] if rows else None)}
     clean_participant = clean_person(participant)
     if not clean_challenge or not clean_participant:
         raise HTTPException(400, "Bracket entry identity is missing")
@@ -3795,10 +4255,12 @@ def get_bracket_entry(challenge_id: str, participant: str | None = None, entry: 
 
 
 @app.post("/api/brackets/{challenge_id}/entry", status_code=201)
-def save_bracket_entry(challenge_id: str, payload: BracketEntrySave) -> dict:
+def save_bracket_entry(challenge_id: str, payload: BracketEntrySave, request: Request) -> dict:
     db = get_db()
     clean_challenge = re.sub(r"[^a-zA-Z0-9_-]", "", challenge_id)[:80]
-    participant = clean_person(payload.participant)
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    participant = identity.display_name
     if not clean_challenge or not participant:
         raise HTTPException(400, "Bracket entry identity is missing")
     cleaned_picks = clean_bracket_picks(payload.picks)
@@ -3806,7 +4268,7 @@ def save_bracket_entry(challenge_id: str, payload: BracketEntrySave) -> dict:
         db.table("bracket_entries")
         .select("*")
         .eq("challenge_id", clean_challenge)
-        .eq("participant", participant)
+        .eq("user_id", identity.user_id)
         .limit(1)
         .execute()
         .data
@@ -3820,17 +4282,17 @@ def save_bracket_entry(challenge_id: str, payload: BracketEntrySave) -> dict:
         return {"entry": existing_entry}
     row = {
         "challenge_id": clean_challenge,
+        "user_id": identity.user_id,
         "participant": participant,
-        "user_email": clean_person(payload.userEmail, "") or None,
+        "user_email": identity.email,
         "picks": cleaned_picks,
         "submitted_at": now_iso() if payload.submitted else None,
         "updated_at": now_iso(),
     }
-    result = (
-        db.table("bracket_entries")
-        .upsert(row, on_conflict="challenge_id,participant")
-        .execute()
-    )
+    if existing_rows:
+        result = db.table("bracket_entries").update(row).eq("id", existing_rows[0]["id"]).execute()
+    else:
+        result = db.table("bracket_entries").insert(row).execute()
     saved = None
     if result.data:
         saved = result.data[0]
@@ -3839,7 +4301,7 @@ def save_bracket_entry(challenge_id: str, payload: BracketEntrySave) -> dict:
             db.table("bracket_entries")
             .select("*")
             .eq("challenge_id", clean_challenge)
-            .eq("participant", participant)
+            .eq("user_id", identity.user_id)
             .limit(1)
             .execute()
             .data
@@ -4486,11 +4948,12 @@ def bracket_open_graph_page(
 
 
 @app.post("/api/groups/{group_id}/join")
-def join_group(group_id: str, payload: JoinGroup) -> dict:
+def join_group(group_id: str, payload: JoinGroup, request: Request) -> dict:
     require_group(group_id)
-    name = payload.name.strip()
-    add_group_member(group_id, name)
-    return groups_response(groupId=group_id, memberName=name)
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    name = add_group_member(group_id, identity, identity.display_name)
+    return groups_response(groupId=group_id, memberName=name, user_id=identity.user_id)
 
 
 @app.get("/api/invites/{token}")
@@ -4500,32 +4963,46 @@ def get_invite(token: str) -> dict:
 
 
 @app.post("/api/groups/{group_id}/invites", status_code=201)
-def create_or_get_group_invite(group_id: str, payload: InviteCreate | None = None) -> dict:
+def create_or_get_group_invite(group_id: str, request: Request, payload: InviteCreate | None = None) -> dict:
     require_group(group_id)
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    event_stub = {"id": "", "group_id": group_id, "created_by": None, "created_by_user_id": None}
+    event_admin_identity(get_db(), event_stub, identity)
     invite = active_invite_for_group(group_id)
     if not invite:
-        invite = create_group_invite(group_id, payload.createdBy if payload else None)
+        invite = create_group_invite(group_id, identity)
     return {"invite": invite_preview(invite)}
 
 
 @app.post("/api/groups/{group_id}/invites/regenerate", status_code=201)
-def regenerate_group_invite(group_id: str, payload: InviteCreate | None = None) -> dict:
+def regenerate_group_invite(group_id: str, request: Request, payload: InviteCreate | None = None) -> dict:
     db = get_db()
     require_group(group_id)
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    event_stub = {"id": "", "group_id": group_id, "created_by": None, "created_by_user_id": None}
+    event_admin_identity(db, event_stub, identity)
     db.table("group_invites").update({"revoked_at": now_iso()}).eq("group_id", group_id).is_("revoked_at", "null").execute()
-    invite = create_group_invite(group_id, payload.createdBy if payload else None)
+    invite = create_group_invite(group_id, identity)
     return {"invite": invite_preview(invite)}
 
 
 @app.post("/api/invites/{token}/join")
-def join_group_with_invite(token: str, payload: InviteJoin) -> dict:
+def join_group_with_invite(token: str, payload: InviteJoin, request: Request) -> dict:
     invite = require_invite(token)
     if not invite_is_active(invite):
         raise HTTPException(410, "Invite link has been revoked")
 
-    name = payload.name.strip()
-    add_group_member(invite["group_id"], name)
-    return groups_response(groupId=invite["group_id"], memberName=name, invite=invite_preview(invite))
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    name = add_group_member(invite["group_id"], identity, identity.display_name)
+    return groups_response(
+        groupId=invite["group_id"],
+        memberName=name,
+        invite=invite_preview(invite),
+        user_id=identity.user_id,
+    )
 
 
 @app.post("/api/markets/rules/draft")
@@ -4548,8 +5025,16 @@ async def seed_market_odds(payload: MarketOddsSeed) -> dict:
     return {"seed": seed}
 
 
-def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded_outcome_id: str, payload: TradeCreate) -> dict:
-    participant = payload.participant.strip()
+def place_complement_event_trade(
+    db,
+    event: dict,
+    outcomes: list[dict],
+    excluded_outcome_id: str,
+    payload: TradeCreate,
+    identity: AuthIdentity,
+) -> dict:
+    member = require_group_member_identity(db, event["group_id"], identity)
+    participant = clean_person(member.get("name"), identity.display_name)
     amount = round(float(payload.amount or 0), 4)
     if amount <= 0:
         raise HTTPException(400, "Trade amount must be positive")
@@ -4576,19 +5061,11 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
         db.table("group_members")
         .select("balance")
         .eq("group_id", event["group_id"])
-        .eq("name", participant)
+        .eq("user_id", identity.user_id)
         .execute()
         .data or []
     )
-    if not member_rows:
-        db.table("group_members").insert({
-            "group_id": event["group_id"],
-            "name": participant,
-            "balance": DEFAULT_FAKE_BALANCE,
-        }).execute()
-        balance = DEFAULT_FAKE_BALANCE
-    else:
-        balance = float(member_rows[0].get("balance") or 0)
+    balance = float(member_rows[0].get("balance") or 0)
 
     b = float(event.get("liquidity_b") or DEFAULT_FAKE_BALANCE)
     prices_before = {item["id"]: round(float(item.get("price") or 0), 8) for item in outcomes}
@@ -4607,7 +5084,7 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
             db.table("event_positions")
             .select("outcome_id, shares")
             .eq("event_id", event["id"])
-            .eq("participant", participant)
+            .eq("user_id", identity.user_id)
             .execute()
             .data or []
         )
@@ -4638,13 +5115,13 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
 
     db.table("group_members").update({
         "balance": round(balance + cash_delta, 2),
-    }).eq("group_id", event["group_id"]).eq("name", participant).execute()
+    }).eq("group_id", event["group_id"]).eq("user_id", identity.user_id).execute()
 
     existing_positions = (
         db.table("event_positions")
-        .select("outcome_id, shares")
+        .select("id,outcome_id,shares")
         .eq("event_id", event["id"])
-        .eq("participant", participant)
+        .eq("user_id", identity.user_id)
         .execute()
         .data or []
     )
@@ -4653,13 +5130,21 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
         next_shares = round(position_lookup.get(item["id"], 0.0) + share_delta, 8)
         if next_shares < -0.0001:
             raise HTTPException(400, f"{participant} does not have enough NO shares to sell")
-        db.table("event_positions").upsert({
-            "event_id": event["id"],
-            "outcome_id": item["id"],
+        existing_position = next((row for row in existing_positions if row["outcome_id"] == item["id"]), None)
+        position_values = {
             "participant": participant,
+            "user_id": identity.user_id,
             "shares": max(0.0, next_shares),
             "updated_at": now,
-        }, on_conflict="event_id,outcome_id,participant").execute()
+        }
+        if existing_position:
+            db.table("event_positions").update(position_values).eq("id", existing_position["id"]).execute()
+        else:
+            db.table("event_positions").insert({
+                "event_id": event["id"],
+                "outcome_id": item["id"],
+                **position_values,
+            }).execute()
 
     allocation_weights = [max(0.000001, float(prices_before.get(item["id"], 0))) for item in complement]
     allocation_total = sum(allocation_weights) or len(complement)
@@ -4677,6 +5162,7 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
             "event_id": event["id"],
             "outcome_id": item["id"],
             "participant": participant,
+            "user_id": identity.user_id,
             "action": payload.action,
             "cash_amount": cash_amount,
             "shares_delta": round(share_delta, 8),
@@ -4704,11 +5190,14 @@ def place_complement_event_trade(db, event: dict, outcomes: list[dict], excluded
 
 
 @app.post("/api/groups/{group_id}/questions/suggest")
-async def suggest_market_questions(group_id: str) -> dict:
+async def suggest_market_questions(group_id: str, request: Request) -> dict:
     group = require_group(group_id)
     group_name = group["name"]
 
     db = get_db()
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    require_group_member_identity(db, group_id, identity)
     events_row = (
         db.table("market_events")
         .select("title")
@@ -4789,9 +5278,13 @@ async def suggest_market_questions(group_id: str) -> dict:
 
 
 @app.post("/api/groups/{group_id}/markets", status_code=201)
-def create_market(group_id: str, payload: MarketCreate) -> dict:
+def create_market(group_id: str, payload: MarketCreate, request: Request) -> dict:
     db = get_db()
     group = require_group(group_id)
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    member = require_group_member_identity(db, group_id, identity)
+    creator_name = clean_person(member.get("name"), identity.display_name)
     event_title = clean_market_question(payload.question)
     description = clean_market_description(payload)
     outcomes = normalize_outcomes(payload.outcomes)
@@ -4818,11 +5311,11 @@ def create_market(group_id: str, payload: MarketCreate) -> dict:
         "liquidity_b": liquidity,
         "total_volume": 0.0,
         "closes_at": closes_at.isoformat(),
+        "created_by": creator_name,
+        "created_by_user_id": identity.user_id,
     }
     if payload.imageUrl:
         event_row["image_url"] = payload.imageUrl.strip()
-    if payload.createdBy:
-        event_row["created_by"] = payload.createdBy.strip()
     if payload.slug:
         event_row["slug"] = payload.slug.strip()
 
@@ -4864,7 +5357,13 @@ def create_market(group_id: str, payload: MarketCreate) -> dict:
     db.table("market_outcomes").insert(outcome_rows).execute()
     db.rpc("probable_reprice_event", {"p_event_id": event_id}).execute()
 
-    return groups_response(marketId=outcome_rows[0]["id"], eventId=event_id, marketIds=[row["id"] for row in outcome_rows])
+    return groups_response(
+        marketId=outcome_rows[0]["id"],
+        eventId=event_id,
+        marketIds=[row["id"] for row in outcome_rows],
+        user_id=identity.user_id,
+        include=group_id,
+    )
 
 
 @app.get("/api/market-catalog")
@@ -4933,8 +5432,11 @@ def get_market_catalog() -> dict:
 
 
 @app.post("/api/groups/{group_id}/market-catalog/{catalog_id}", status_code=201)
-def add_catalog_market_to_group(group_id: str, catalog_id: str, payload: CatalogMarketAdd) -> dict:
+def add_catalog_market_to_group(group_id: str, catalog_id: str, payload: CatalogMarketAdd, request: Request) -> dict:
     require_group(group_id)
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    require_group_member_identity(get_db(), group_id, identity)
     item = next((row for row in market_catalog() if row["id"] == catalog_id), None)
     if not item:
         raise HTTPException(404, "Global market not found")
@@ -4967,7 +5469,7 @@ def add_catalog_market_to_group(group_id: str, catalog_id: str, payload: Catalog
             db.table("market_events").update({"catalog_market_id": catalog_id}).eq("id", existing[0]["id"]).execute()
         except Exception:
             pass
-        return groups_response(groupId=group_id, eventId=existing[0]["id"], alreadyAdded=True)
+        return groups_response(groupId=group_id, eventId=existing[0]["id"], alreadyAdded=True, user_id=identity.user_id, include=group_id)
 
     result = create_market(group_id, MarketCreate(
         question=item["title"],
@@ -4983,7 +5485,7 @@ def add_catalog_market_to_group(group_id: str, catalog_id: str, payload: Catalog
         imageUrl=item.get("imageUrl"),
         createdBy=payload.addedBy,
         slug=item.get("slug"),
-    ))
+    ), request)
     event_id = result.get("eventId")
     if event_id:
         try:
@@ -4991,7 +5493,7 @@ def add_catalog_market_to_group(group_id: str, catalog_id: str, payload: Catalog
         except Exception:
             # The market is still usable while the additive migration rolls out.
             pass
-    return groups_response(groupId=group_id, eventId=event_id, catalogMarketId=catalog_id)
+    return groups_response(groupId=group_id, eventId=event_id, catalogMarketId=catalog_id, user_id=identity.user_id, include=group_id)
 
 
 @app.get("/api/markets/{market_id}/share")
@@ -5384,9 +5886,14 @@ def market_open_graph_page(market_id: str, request: Request):
 
 
 @app.post("/api/markets/{market_id}/trade")
-def place_trade(market_id: str, payload: TradeCreate) -> dict:
+def place_trade(market_id: str, payload: TradeCreate, request: Request) -> dict:
     db = get_db()
     event, route_outcome = require_event_or_outcome(market_id)
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    member = require_group_member_identity(db, event["group_id"], identity)
+    participant = clean_person(member.get("name"), identity.display_name)
+    trusted_payload = payload.model_copy(update={"participant": participant})
     outcomes = db.table("market_outcomes").select("*").eq("event_id", event["id"]).order("sort_order").execute().data or []
     active = active_outcomes(outcomes)
 
@@ -5412,15 +5919,16 @@ def place_trade(market_id: str, payload: TradeCreate) -> dict:
         raise HTTPException(400, "Market does not have enough active outcomes to trade")
 
     try:
-        if len(outcomes) > 2 and len(active) > 1 and payload.side == "no":
-            trade_result_data = place_complement_event_trade(db, event, outcomes, outcome_id, payload)
+        if len(outcomes) > 2 and len(active) > 1 and trusted_payload.side == "no":
+            trade_result_data = place_complement_event_trade(db, event, outcomes, outcome_id, trusted_payload, identity)
         else:
-            trade_result = db.rpc("place_event_trade", {
+            trade_result = db.rpc("place_event_trade_for_user", {
                 "p_event_id": event["id"],
                 "p_outcome_id": outcome_id,
-                "p_participant": payload.participant.strip(),
-                "p_action": payload.action,
-                "p_cash_amount": payload.amount,
+                "p_participant": participant,
+                "p_action": trusted_payload.action,
+                "p_cash_amount": trusted_payload.amount,
+                "p_user_id": identity.user_id,
             }).execute()
             trade_result_data = trade_result.data
     except Exception as exc:
@@ -5430,20 +5938,24 @@ def place_trade(market_id: str, payload: TradeCreate) -> dict:
             message = first_arg["message"]
         raise HTTPException(400, message)
 
-    return groups_response(trade=trade_result_data)
+    return groups_response(trade=trade_result_data, user_id=identity.user_id, include=event["group_id"])
 
 
 @app.post("/api/markets/{market_id}/resolve")
-def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
+def resolve_market(market_id: str, payload: ResolveMarket, request: Request) -> dict:
     db = get_db()
+    identity = request_identity(request, required=True)
+    assert identity is not None
     try:
         event, route_outcome = require_event_or_outcome(market_id)
+        member = event_admin_identity(db, event, identity)
         if event["status"] == "resolved":
             raise HTTPException(400, "Already resolved")
 
         outcomes = db.table("market_outcomes").select("*").eq("event_id", event["id"]).execute().data or []
         wanted = payload.outcome.strip().lower()
-        resolver = (payload.resolvedBy or "manual").strip()[:80] or "manual"
+        resolver = clean_person(member.get("name"), identity.display_name)
+        resolver_aliases = [resolver, identity.display_name, identity.email or ""]
         note = (payload.reasoning or "").strip()
         if wanted in (ALL_OUTCOMES_RESOLUTION, "all", "draw", "all_correct", "all outcomes", "all outcomes correct"):
             if len(outcomes) < 2:
@@ -5459,18 +5971,20 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
                 outcome_id=ALL_OUTCOMES_RESOLUTION,
                 outcome_title="Draw / all outcomes correct",
                 resolver=resolver,
-                resolver_aliases=payload.resolverAliases,
+                resolver_user_id=identity.user_id,
+                resolver_aliases=resolver_aliases,
                 notes=note,
             )
             if approval["status"] != "ready_to_resolve":
-                return groups_response(resolutionApproval=approval)
+                return groups_response(resolutionApproval=approval, user_id=identity.user_id, include=event["group_id"])
             settlement = resolve_event_market_all_outcomes(
                 db,
                 event,
                 resolved_by=resolver,
                 notes=note,
             )
-            return groups_response(settlement=settlement, resolutionApproval=approval)
+            db.table("market_events").update({"resolved_by_user_id": identity.user_id}).eq("id", event["id"]).execute()
+            return groups_response(settlement=settlement, resolutionApproval=approval, user_id=identity.user_id, include=event["group_id"])
 
         outcome = (
             next((item for item in outcomes if item["id"] == payload.outcome), None)
@@ -5497,11 +6011,12 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
             outcome_id=outcome["id"],
             outcome_title=outcome["title"],
             resolver=resolver,
-            resolver_aliases=payload.resolverAliases,
+            resolver_user_id=identity.user_id,
+            resolver_aliases=resolver_aliases,
             notes=note,
         )
         if approval["status"] != "ready_to_resolve":
-            return groups_response(resolutionApproval=approval)
+            return groups_response(resolutionApproval=approval, user_id=identity.user_id, include=event["group_id"])
         settlement = resolve_event_market_rpc(
             db,
             event["id"],
@@ -5509,17 +6024,25 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
             resolved_by=resolver,
             notes=note,
         )
-        return groups_response(settlement=settlement, resolutionApproval=approval)
+        db.table("market_events").update({"resolved_by_user_id": identity.user_id}).eq("id", event["id"]).execute()
+        return groups_response(settlement=settlement, resolutionApproval=approval, user_id=identity.user_id, include=event["group_id"])
     except HTTPException as exc:
         if exc.status_code != 404:
             raise
 
     market = require_market(market_id)
+    legacy_event = {
+        "id": market_id,
+        "group_id": market["group_id"],
+        "created_by": market.get("created_by"),
+        "created_by_user_id": market.get("created_by_user_id"),
+    }
+    member = event_admin_identity(db, legacy_event, identity)
 
     if market["status"] == "resolved":
         raise HTTPException(400, "Already resolved")
 
-    legacy_resolver = (payload.resolvedBy or "manual").strip()[:80] or "manual"
+    legacy_resolver = clean_person(member.get("name"), identity.display_name)
     legacy_notes = (payload.reasoning or "").strip()[:1200] or None
     legacy_update = {
         "status":      "resolved",
@@ -5545,21 +6068,25 @@ def resolve_market(market_id: str, payload: ResolveMarket) -> dict:
     settlement = legacy_settlement_payload(market, payload.outcome, trades_res.data or [], legacy_resolver, legacy_notes)
     _credit_winners(db, market["group_id"], market, trades_res.data)
 
-    return groups_response(settlement=settlement)
+    return groups_response(settlement=settlement, user_id=identity.user_id, include=market["group_id"])
 
 
 @app.post("/api/markets/{market_id}/outcomes/{outcome_id}/eliminate")
-def eliminate_market_outcome(market_id: str, outcome_id: str, payload: EliminateOutcome) -> dict:
+def eliminate_market_outcome(market_id: str, outcome_id: str, payload: EliminateOutcome, request: Request) -> dict:
     db = get_db()
     event, _route_outcome = require_event_or_outcome(market_id)
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    member = event_admin_identity(db, event, identity)
     elimination = eliminate_event_outcome(
         db,
         event,
         outcome_id,
-        eliminated_by=payload.eliminatedBy or "manual",
+        eliminated_by=clean_person(member.get("name"), identity.display_name),
+        eliminated_by_user_id=identity.user_id,
         notes=payload.reasoning,
     )
-    return groups_response(elimination=elimination)
+    return groups_response(elimination=elimination, user_id=identity.user_id, include=event["group_id"])
 
 
 # ── AI Oracle ──────────────────────────────────────────────────────────
@@ -5687,9 +6214,12 @@ async def run_ai_oracle(event: dict, outcomes: list[dict],
 
 
 @app.post("/api/markets/{market_id}/oracle/trigger")
-async def trigger_ai_oracle(market_id: str) -> dict:
+async def trigger_ai_oracle(market_id: str, request: Request) -> dict:
     db = get_db()
     event, _route_outcome = require_event_or_outcome(market_id)
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    event_admin_identity(db, event, identity)
 
     if event["status"] == "resolved":
         raise HTTPException(400, "Market is already resolved")
@@ -5748,7 +6278,7 @@ async def trigger_ai_oracle(market_id: str) -> dict:
             proposal=resolved_proposal,
         )
         db.table("market_events").update({"verification_attempts": attempts}).eq("id", event["id"]).execute()
-        return groups_response(oracleProposal=proposal, settlement=settlement)
+        return groups_response(oracleProposal=proposal, settlement=settlement, user_id=identity.user_id, include=event["group_id"])
     else:
         db.table("market_events").update({
             "oracle_proposal": proposal,
@@ -5756,13 +6286,16 @@ async def trigger_ai_oracle(market_id: str) -> dict:
             "verification_attempts": attempts,
         }).eq("id", event["id"]).execute()
 
-    return groups_response(oracleProposal=proposal)
+    return groups_response(oracleProposal=proposal, user_id=identity.user_id, include=event["group_id"])
 
 
 @app.post("/api/markets/{market_id}/oracle/accept")
-def accept_oracle_proposal(market_id: str) -> dict:
+def accept_oracle_proposal(market_id: str, request: Request) -> dict:
     db = get_db()
     event, _route_outcome = require_event_or_outcome(market_id)
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    event_admin_identity(db, event, identity)
 
     if event["status"] == "resolved":
         raise HTTPException(400, "Market is already resolved")
@@ -5787,13 +6320,16 @@ def accept_oracle_proposal(market_id: str) -> dict:
         proposal=accepted,
     )
 
-    return groups_response(settlement=settlement)
+    return groups_response(settlement=settlement, user_id=identity.user_id, include=event["group_id"])
 
 
 @app.post("/api/markets/{market_id}/oracle/dispute")
-def dispute_oracle_proposal(market_id: str) -> dict:
+def dispute_oracle_proposal(market_id: str, request: Request) -> dict:
     db = get_db()
     event, _route_outcome = require_event_or_outcome(market_id)
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    event_admin_identity(db, event, identity)
 
     proposal = event.get("oracle_proposal")
     if not proposal:
@@ -5806,13 +6342,16 @@ def dispute_oracle_proposal(market_id: str) -> dict:
         "resolution_notes": "AI proposal disputed. Manual settlement required.",
     }).eq("id", event["id"]).execute()
 
-    return groups_response()
+    return groups_response(user_id=identity.user_id, include=event["group_id"])
 
 
 @app.post("/api/markets/{market_id}/oracle/vote")
-def submit_oracle_vote(market_id: str, payload: OracleVote) -> dict:
+def submit_oracle_vote(market_id: str, payload: OracleVote, request: Request) -> dict:
     db = get_db()
     event, _route_outcome = require_event_or_outcome(market_id)
+    identity = request_identity(request, required=True)
+    assert identity is not None
+    member = require_group_member_identity(db, event["group_id"], identity)
 
     if event["status"] != "closed":
         raise HTTPException(400, "Market must be closed before voting")
@@ -5826,23 +6365,23 @@ def submit_oracle_vote(market_id: str, payload: OracleVote) -> dict:
 
     proposal = event.get("oracle_proposal") or {}
     votes = proposal.setdefault("votes", {item["id"]: 0 for item in outcomes})
-    votes_by_participant = proposal.setdefault("votesByParticipant", {})
-    participant = payload.participant.strip()
-    previous_vote = votes_by_participant.get(participant)
+    votes_by_user = proposal.setdefault("votesByUserId", {})
+    participant = clean_person(member.get("name"), identity.display_name)
+    previous_vote = votes_by_user.get(identity.user_id, {}).get("outcomeId")
 
     if previous_vote == outcome_id:
-        return groups_response()
+        return groups_response(user_id=identity.user_id, include=event["group_id"])
 
     if previous_vote in votes:
         votes[previous_vote] = max(0, int(votes.get(previous_vote, 0)) - 1)
 
-    votes_by_participant[participant] = outcome_id
+    votes_by_user[identity.user_id] = {"participant": participant, "outcomeId": outcome_id}
     votes[outcome_id] = int(votes.get(outcome_id, 0)) + 1
     proposal["status"] = "voting"
     proposal["proposedAt"] = proposal.get("proposedAt") or now_iso()
     proposal["lastUpdatedAt"] = now_iso()
 
-    voter_count = len(votes_by_participant)
+    voter_count = len(votes_by_user)
     resolved_outcome_id = None
     if voter_count >= 3:
         ranked = sorted(votes.items(), key=lambda item: int(item[1]), reverse=True)
@@ -5872,7 +6411,7 @@ def submit_oracle_vote(market_id: str, payload: OracleVote) -> dict:
             notes=f"Group vote resolved to {outcome_title}.",
             proposal=resolved_proposal,
         )
-        return groups_response(settlement=settlement)
+        return groups_response(settlement=settlement, user_id=identity.user_id, include=event["group_id"])
 
     if voter_count >= 3:
         proposal["status"] = "needs_review"
@@ -5881,7 +6420,7 @@ def submit_oracle_vote(market_id: str, payload: OracleVote) -> dict:
         "oracle_proposal": proposal,
         "verification_status": "voting" if proposal["status"] == "voting" else "needs_review",
     }).eq("id", event["id"]).execute()
-    return groups_response()
+    return groups_response(user_id=identity.user_id, include=event["group_id"])
 
 
 if DIST_DIR.exists():

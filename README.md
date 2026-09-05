@@ -40,6 +40,8 @@ PUBLIC_SHARE_BASE_URL=https://your-render-service.onrender.com
 
 Auth uses Supabase Auth on the frontend. Enable the Google provider for Google sign-in and add your local and deployed app URLs to the Supabase Auth redirect URL allow list.
 
+Before deploying the identity-aware API, run `backend/migrations/20260820_stable_user_identity.sql` in the Supabase SQL editor. It adds durable user IDs without removing legacy display-name data.
+
 Market rule drafting uses `OPENAI_API_KEY`. Do not commit `.env.local` or any real API keys.
 
 AI oracle resolution uses `ANTHROPIC_API_KEY`. `BRAVE_SEARCH_API_KEY` is optional and improves source lookup. If `ANTHROPIC_API_KEY` is missing, AI markets show a manual fallback path.
@@ -83,6 +85,8 @@ npm run dev
 ```
 
 Then open [http://localhost:5173](http://localhost:5173).
+
+For the explicit local-only fake sign-in, set both `VITE_ENABLE_DEV_AUTH_BYPASS=true` and `ALLOW_DEV_AUTH_BYPASS=true`. Never enable the backend flag in production.
 
 ## Build
 

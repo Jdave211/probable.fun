@@ -7,6 +7,7 @@ import argparse
 import math
 import time
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import httpx
 
@@ -22,12 +23,26 @@ class Pipeline:
         self.group_id = ""
 
     def request(self, method: str, path: str, **kwargs) -> dict:
+        actor = kwargs.pop("actor", DAVE)
+        headers = {
+            "X-Probable-Dev-User": f"qa-{actor.lower()}",
+            "X-Probable-Dev-Name": quote(actor),
+            **kwargs.pop("headers", {}),
+        }
+        kwargs["headers"] = headers
         response = self.client.request(method, path, **kwargs)
         if response.status_code >= 400:
             raise AssertionError(f"{method} {path} failed {response.status_code}: {response.text}")
         return response.json()
 
     def expect_fail(self, method: str, path: str, **kwargs) -> str:
+        actor = kwargs.pop("actor", DAVE)
+        headers = {
+            "X-Probable-Dev-User": f"qa-{actor.lower()}",
+            "X-Probable-Dev-Name": quote(actor),
+            **kwargs.pop("headers", {}),
+        }
+        kwargs["headers"] = headers
         response = self.client.request(method, path, **kwargs)
         if response.status_code < 400:
             raise AssertionError(f"{method} {path} unexpectedly succeeded: {response.text}")
@@ -54,6 +69,7 @@ class Pipeline:
             "members": [DAVE, TESTER],
         })
         self.group_id = data["groupId"]
+        self.request("POST", f"/api/groups/{self.group_id}/join", actor=TESTER, json={"name": TESTER})
         return self.group_from(data)
 
     def create_market(self, question: str, outcomes: list[str], close_seconds: int = 10) -> tuple[str, dict]:
@@ -109,7 +125,7 @@ class Pipeline:
     def trade(self, event: dict, participant: str, title: str, side: str, amount: float, action: str = "buy") -> dict:
         market_id = self.route_market_id(event, title)
         outcome_id = self.outcome_id(event, title)
-        data = self.request("POST", f"/api/markets/{market_id}/trade", json={
+        data = self.request("POST", f"/api/markets/{market_id}/trade", actor=participant, json={
             "participant": participant,
             "side": side,
             "action": action,
@@ -123,7 +139,7 @@ class Pipeline:
     def quote(self, event: dict, participant: str, title: str, side: str, amount: float, action: str = "sell") -> dict:
         market_id = self.route_market_id(event, title)
         outcome_id = self.outcome_id(event, title)
-        return self.request("POST", f"/api/markets/{market_id}/quote", json={
+        return self.request("POST", f"/api/markets/{market_id}/quote", actor=participant, json={
             "participant": participant,
             "side": side,
             "action": action,

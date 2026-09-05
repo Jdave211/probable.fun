@@ -119,17 +119,27 @@ export function applyDemoTrade(group, { participant, amount, outcomeId, side, ac
   const positions = group.markets[0].positions;
   positions[participant] = positions[participant] || {};
   positions[participant][target.id] = (positions[participant][target.id] || 0) + shares;
-  const trade = {
+  const createdAt = new Date().toISOString();
+  const baseTrade = {
     participant,
     side: side || "yes",
     action: "buy",
     cashAmount: cash,
     cash_amount: cash,
+    amount: cash,
     shares,
     outcomeId: target.id,
-    createdAt: new Date().toISOString(),
+    createdAt,
   };
   group.markets.forEach(m => {
+    const probBefore = Number(m.probability || 0);
+    const probAfter = Number(m.probability || 0);
+    const trade = {
+      ...baseTrade,
+      probBefore,
+      probAfter,
+      avgPrice: Number(m.probability || 0),
+    };
     m.eventTrades = [...(m.eventTrades || []), trade];
     if (m.outcomeId === target.id) m.trades = [...(m.trades || []), trade];
     m.volume = (m.volume || 0) + cash;

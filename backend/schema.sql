@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS groups (
   emoji       text        NOT NULL DEFAULT '📣',
   mode        text        NOT NULL DEFAULT 'fake',
   created_by  text,
+  created_by_user_id uuid,
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
@@ -18,6 +19,7 @@ CREATE TABLE IF NOT EXISTS groups (
 CREATE TABLE IF NOT EXISTS group_members (
   id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   group_id    text        NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  user_id     uuid,
   name        text        NOT NULL,
   balance     numeric     NOT NULL DEFAULT 100000.0,
   joined_at   timestamptz NOT NULL DEFAULT now(),
@@ -30,6 +32,7 @@ CREATE TABLE IF NOT EXISTS group_invites (
   token      text        PRIMARY KEY,
   group_id   text        NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
   created_by text,
+  created_by_user_id uuid,
   created_at timestamptz NOT NULL DEFAULT now(),
   revoked_at timestamptz
 );
@@ -63,6 +66,7 @@ CREATE TABLE IF NOT EXISTS trades (
   id          text        PRIMARY KEY,
   market_id   text        NOT NULL REFERENCES markets(id) ON DELETE CASCADE,
   participant text        NOT NULL,
+  user_id     uuid,
   side        text        NOT NULL,   -- 'yes' | 'no'
   amount      numeric     NOT NULL,
   shares      numeric     NOT NULL,
@@ -90,12 +94,14 @@ CREATE TABLE IF NOT EXISTS market_events (
   oracle_proposal jsonb,
   image_url       text,
   created_by      text,
+  created_by_user_id uuid,
   legacy_key      text,
   resolution_source text,
   edge_cases text,
   verification_status text NOT NULL DEFAULT 'not_started',
   verification_attempts jsonb NOT NULL DEFAULT '[]',
   resolved_by text,
+  resolved_by_user_id uuid,
   resolution_notes text
 );
 
@@ -109,6 +115,7 @@ CREATE TABLE IF NOT EXISTS market_outcomes (
   status           text        NOT NULL DEFAULT 'active',
   eliminated_at    timestamptz,
   eliminated_by    text,
+  eliminated_by_user_id uuid,
   elimination_notes text,
   legacy_market_id text,
   created_at       timestamptz NOT NULL DEFAULT now(),
@@ -120,6 +127,7 @@ CREATE TABLE IF NOT EXISTS event_positions (
   event_id    text        NOT NULL REFERENCES market_events(id) ON DELETE CASCADE,
   outcome_id  text        NOT NULL REFERENCES market_outcomes(id) ON DELETE CASCADE,
   participant text        NOT NULL,
+  user_id     uuid,
   shares      numeric     NOT NULL DEFAULT 0.0,
   updated_at  timestamptz NOT NULL DEFAULT now(),
   UNIQUE (event_id, outcome_id, participant)
@@ -130,6 +138,7 @@ CREATE TABLE IF NOT EXISTS event_trades (
   event_id      text        NOT NULL REFERENCES market_events(id) ON DELETE CASCADE,
   outcome_id    text        NOT NULL REFERENCES market_outcomes(id) ON DELETE CASCADE,
   participant   text        NOT NULL,
+  user_id       uuid,
   action        text        NOT NULL,
   cash_amount   numeric     NOT NULL,
   shares_delta  numeric     NOT NULL,
@@ -150,6 +159,7 @@ CREATE TABLE IF NOT EXISTS bracket_entries (
   challenge_id text       NOT NULL,
   participant  text       NOT NULL,
   user_email   text,
+  user_id      uuid,
   picks        jsonb      NOT NULL DEFAULT '{}',
   submitted_at timestamptz,
   created_at   timestamptz NOT NULL DEFAULT now(),
@@ -165,6 +175,7 @@ CREATE TABLE IF NOT EXISTS season_predictions (
   challenge_id text       NOT NULL,
   participant  text       NOT NULL,
   user_email   text,
+  user_id      uuid,
   ranking      jsonb      NOT NULL DEFAULT '[]',
   submitted_at timestamptz,
   locked_at    timestamptz,
@@ -190,6 +201,7 @@ CREATE TABLE IF NOT EXISTS group_challenges (
   group_id     text        NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
   challenge_id text        NOT NULL,
   added_by     text,
+  added_by_user_id uuid,
   created_at   timestamptz NOT NULL DEFAULT now(),
   UNIQUE (group_id, challenge_id)
 );
@@ -201,6 +213,7 @@ CREATE TABLE IF NOT EXISTS market_resolution_approvals (
   event_id   text       NOT NULL REFERENCES market_events(id) ON DELETE CASCADE,
   outcome_id text       NOT NULL,
   resolver   text       NOT NULL,
+  resolver_user_id uuid,
   role       text       NOT NULL DEFAULT 'admin',
   notes      text,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -212,12 +225,27 @@ ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_outcome_id text;
 ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_side text;
 ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS display_shares numeric;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS created_by text;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS created_by_user_id uuid;
+ALTER TABLE group_members ADD COLUMN IF NOT EXISTS user_id uuid;
+ALTER TABLE group_invites ADD COLUMN IF NOT EXISTS created_by_user_id uuid;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS user_id uuid;
+ALTER TABLE market_events ADD COLUMN IF NOT EXISTS created_by_user_id uuid;
+ALTER TABLE market_events ADD COLUMN IF NOT EXISTS resolved_by_user_id uuid;
+ALTER TABLE market_outcomes ADD COLUMN IF NOT EXISTS eliminated_by_user_id uuid;
+ALTER TABLE event_positions ADD COLUMN IF NOT EXISTS user_id uuid;
+ALTER TABLE event_trades ADD COLUMN IF NOT EXISTS user_id uuid;
+ALTER TABLE bracket_entries ADD COLUMN IF NOT EXISTS user_id uuid;
+ALTER TABLE season_predictions ADD COLUMN IF NOT EXISTS user_id uuid;
+ALTER TABLE group_challenges ADD COLUMN IF NOT EXISTS added_by_user_id uuid;
+ALTER TABLE market_resolution_approvals ADD COLUMN IF NOT EXISTS resolver_user_id uuid;
 
 -- Indexes for common lookups
 CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_group_members_group_user ON group_members(group_id, user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_group_invites_group ON group_invites(group_id);
 CREATE INDEX IF NOT EXISTS idx_group_invites_active ON group_invites(group_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_groups_created_by ON groups(created_by);
+CREATE INDEX IF NOT EXISTS idx_groups_created_by_user ON groups(created_by_user_id) WHERE created_by_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_markets_group       ON markets(group_id);
 CREATE INDEX IF NOT EXISTS idx_trades_market       ON trades(market_id);
 CREATE INDEX IF NOT EXISTS idx_market_events_group ON market_events(group_id);
@@ -225,9 +253,13 @@ CREATE INDEX IF NOT EXISTS idx_market_events_open ON market_events(group_id, clo
 CREATE INDEX IF NOT EXISTS idx_market_outcomes_event ON market_outcomes(event_id);
 CREATE INDEX IF NOT EXISTS idx_market_outcomes_legacy ON market_outcomes(legacy_market_id);
 CREATE INDEX IF NOT EXISTS idx_event_positions_event_participant ON event_positions(event_id, participant);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_event_positions_event_outcome_user ON event_positions(event_id, outcome_id, user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_event_trades_event ON event_trades(event_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_event_trades_user ON event_trades(user_id, created_at) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bracket_entries_challenge ON bracket_entries(challenge_id, submitted_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bracket_entries_challenge_user ON bracket_entries(challenge_id, user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_season_predictions_challenge ON season_predictions(challenge_id, submitted_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_season_predictions_challenge_user ON season_predictions(challenge_id, user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_group_challenges_group ON group_challenges(group_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_market_resolution_approvals_event ON market_resolution_approvals(event_id, created_at);
 ALTER TABLE market_events ADD COLUMN IF NOT EXISTS image_url text;
@@ -556,18 +588,21 @@ BEGIN
       FROM event_positions ep
       WHERE ep.event_id = p_event_id
         AND ep.outcome_id = p_outcome_id
-        AND ep.participant = gm.name
+        AND (
+          (ep.user_id IS NOT NULL AND ep.user_id = gm.user_id)
+          OR (ep.user_id IS NULL AND ep.participant = gm.name)
+        )
         AND ep.shares > 0
     )
   ORDER BY gm.name
   FOR UPDATE;
 
   WITH winning_positions AS (
-    SELECT participant, ROUND(SUM(shares), 8) AS shares
+    SELECT user_id, participant, ROUND(SUM(shares), 8) AS shares
     FROM event_positions
     WHERE event_id = p_event_id
       AND outcome_id = p_outcome_id
-    GROUP BY participant
+    GROUP BY user_id, participant
     HAVING SUM(shares) > 0
   ),
   credited AS (
@@ -575,7 +610,10 @@ BEGIN
     SET balance = ROUND(gm.balance + wp.shares, 2)
     FROM winning_positions wp
     WHERE gm.group_id = v_event.group_id
-      AND gm.name = wp.participant
+      AND (
+        (wp.user_id IS NOT NULL AND gm.user_id = wp.user_id)
+        OR (wp.user_id IS NULL AND gm.name = wp.participant)
+      )
     RETURNING wp.participant, wp.shares, gm.balance
   )
   SELECT
@@ -615,6 +653,64 @@ BEGIN
     'payouts', v_payouts,
     'totalPaid', ROUND(v_total_paid, 2)
   );
+END;
+$$;
+
+-- Authenticated wrapper for the legacy LMSR function. The backend resolves the
+-- participant name from this UUID-bound membership before calling it; the
+-- wrapper stamps the resulting position and trade with the durable user ID in
+-- the same transaction.
+CREATE OR REPLACE FUNCTION place_event_trade_for_user(
+  p_event_id text,
+  p_outcome_id text,
+  p_participant text,
+  p_action text,
+  p_cash_amount numeric,
+  p_user_id uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_event market_events%ROWTYPE;
+  v_result jsonb;
+BEGIN
+  SELECT * INTO v_event FROM market_events WHERE id = p_event_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Market not found';
+  END IF;
+  IF p_user_id IS NULL THEN
+    RAISE EXCEPTION 'Authenticated user is required';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM group_members
+    WHERE group_id = v_event.group_id
+      AND user_id = p_user_id
+      AND name = btrim(p_participant)
+  ) THEN
+    RAISE EXCEPTION 'Join this group before trading';
+  END IF;
+
+  v_result := place_event_trade(
+    p_event_id,
+    p_outcome_id,
+    p_participant,
+    p_action,
+    p_cash_amount
+  );
+
+  UPDATE event_positions
+  SET user_id = p_user_id
+  WHERE event_id = p_event_id
+    AND outcome_id = p_outcome_id
+    AND participant = btrim(p_participant)
+    AND user_id IS NULL;
+
+  UPDATE event_trades
+  SET user_id = p_user_id
+  WHERE id = v_result->>'tradeId';
+
+  RETURN v_result;
 END;
 $$;
 

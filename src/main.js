@@ -1,8 +1,7 @@
 import "./styles.css";
-import { supabase } from "./supabase.js";
-import { DEMO_GROUP_ID, buildDemoGroup, simulateDemoApi, resolveDemoMarket } from "./demo.js";
+import { DEMO_GROUP_ID, DEMO_NO_ID, DEMO_YES_ID, applyDemoTrade, buildDemoGroup, resolveDemoMarket, simulateDemoApi } from "./demo.js";
 import { startTutorial, stopTutorial, tutorialOnRender } from "./tutorial.js";
-import { DEFAULT_PREDICTOR_ID, LEAGUE_PREDICTORS, LEAGUE_PREDICTOR_LIST } from "./league-predictors.js";
+import { DEFAULT_PREDICTOR_ID, LEAGUE_PREDICTOR_LIST, LEAGUE_PREDICTOR_ROUTES as LEAGUE_PREDICTORS } from "./challenge-routes.js";
 
 const probableCursorShadePlugin = {
   id: "probableCursorShade",
@@ -289,6 +288,7 @@ function roundRect(ctx, x, y, width, height, radius) {
 let Chart = null;
 let chartRuntimePromise = null;
 let motionRuntimePromise = null;
+let supabaseRuntimePromise = null;
 
 async function loadChartRuntime() {
   if (Chart) return Chart;
@@ -316,6 +316,11 @@ async function loadChartRuntime() {
 function loadMotionRuntime() {
   motionRuntimePromise ||= import("motion");
   return motionRuntimePromise;
+}
+
+function loadSupabaseRuntime() {
+  supabaseRuntimePromise ||= import("./supabase.js").then(module => module.supabase);
+  return supabaseRuntimePromise;
 }
 
 const API = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
@@ -375,12 +380,14 @@ const state = {
   oracleErrors: {},
   pendingAuthAction: null,
   authUser: null,
+  authAccessToken: null,
   accountMenuOpen: false,
   leaderboardMode: "chart",
   leaderboardMetric: "nominal",
   portfolioChartMetric: "mark",
   portfolioChartRange: "all",
   positionsStatus: "open",
+  adminQueueMode: "ready",
   expandedParticipants: new Set(),
   expandedOutcomeEvents: new Set(),
   marketSort: "trending",
@@ -438,92 +445,70 @@ const state = {
 const tradeQuoteCache = new Map();
 const tradeQuoteInflight = new Map();
 
-const BRACKET_CHALLENGE = {
-  id: "wc26-bracket-r32",
-  prize: "up to $500",
-  title: "World Cup Bracket Challenge",
-  subtitle: "Free to enter. Submit the cleanest knockout bracket from the Round of 32 onward.",
-  matchups: [
-    { id: "m73", matchNo: 73, teams: ["South Africa", "Canada"], winner: "Canada", completed: true },
-    { id: "m74", matchNo: 74, teams: ["Germany", "Paraguay"], winner: "Paraguay", completed: true },
-    { id: "m75", matchNo: 75, teams: ["Netherlands", "Morocco"], winner: "Morocco", completed: true },
-    { id: "m76", matchNo: 76, teams: ["Brazil", "Japan"], winner: "Brazil", completed: true },
-    { id: "m77", matchNo: 77, teams: ["France", "Sweden"], winner: "France", completed: true },
-    { id: "m78", matchNo: 78, teams: ["Ivory Coast", "Norway"], winner: "Norway", completed: true },
-    { id: "m79", matchNo: 79, teams: ["Mexico", "Ecuador"], winner: "Mexico", completed: true },
-    { id: "m80", matchNo: 80, teams: ["England", "DR Congo"], winner: "England", completed: true },
-    { id: "m81", matchNo: 81, teams: ["USA", "Bosnia and Herzegovina"], winner: "USA", completed: true },
-    { id: "m82", matchNo: 82, teams: ["Belgium", "Senegal"], winner: "Belgium", completed: true },
-    { id: "m83", matchNo: 83, teams: ["Portugal", "Croatia"], winner: "Portugal", completed: true },
-    { id: "m84", matchNo: 84, teams: ["Spain", "Austria"], winner: "Spain", completed: true },
-    { id: "m85", matchNo: 85, teams: ["Switzerland", "Algeria"], winner: "Switzerland", completed: true },
-    { id: "m86", matchNo: 86, teams: ["Argentina", "Cabo Verde"], winner: "Argentina", completed: true },
-    { id: "m87", matchNo: 87, teams: ["Colombia", "Ghana"], winner: "Colombia", completed: true },
-    { id: "m88", matchNo: 88, teams: ["Australia", "Egypt"], winner: "Egypt", completed: true },
-  ],
-};
-const BRACKET_DERIVED_RESULTS = {
-  m89: "France",
-  m90: "Morocco",
-  m91: "Norway",
-  m92: "England",
-  m93: "Belgium",
-  m94: "Spain",
-  m95: "Argentina",
-  m96: "Switzerland",
-  m97: "France",
-  m98: "Spain",
-  m99: "England",
-  m100: "Argentina",
-  m101: "Spain",
-  m102: "Argentina",
-  final: "Spain",
-};
-const BRACKET_LOCKED_WINNERS = {
-  ...Object.fromEntries(
-    BRACKET_CHALLENGE.matchups
-      .filter(matchup => matchup.completed && matchup.winner)
-      .map(matchup => [matchup.id, matchup.winner])
-  ),
-  ...BRACKET_DERIVED_RESULTS,
-};
-const BRACKET_TEAM_CHANCES = {
-  France: 23,
-  Spain: 11,
-  Argentina: 10,
-  Brazil: 9,
-  England: 8,
-  Portugal: 6,
-  Netherlands: 5,
-  Germany: 4,
-  Colombia: 4,
-  Belgium: 3,
-  USA: 3,
-  Mexico: 3,
-  Canada: 2,
-  Switzerland: 2,
-  Croatia: 1,
-  Morocco: 1,
-  Senegal: 1,
-  Japan: 1,
-  Norway: 1,
-  Austria: 1,
-  Ecuador: 1,
-  Ghana: 1,
-  Sweden: 1,
-  "Ivory Coast": 1,
-  Australia: 1,
-  Egypt: 1,
-  Algeria: 1,
-  Paraguay: 1,
-  "DR Congo": 1,
-  "Bosnia and Herzegovina": 1,
-  "Cabo Verde": 1,
-  "South Africa": 0.5,
-};
+let BRACKET_CHALLENGE = null;
+let BRACKET_LOCKED_WINNERS = null;
+let BRACKET_TEAM_CHANCES = null;
+let bracketRuntimePromise = null;
+let leaguePredictorConfigs = null;
+let leaguePredictorRuntimePromise = null;
+
+function loadBracketRuntime() {
+  if (!bracketRuntimePromise) {
+    bracketRuntimePromise = import("./bracket-runtime.js").then(module => {
+      BRACKET_CHALLENGE = module.BRACKET_CHALLENGE;
+      BRACKET_LOCKED_WINNERS = module.BRACKET_LOCKED_WINNERS;
+      BRACKET_TEAM_CHANCES = module.BRACKET_TEAM_CHANCES;
+      return module;
+    });
+  }
+  return bracketRuntimePromise;
+}
+
+function loadLeaguePredictorRuntime() {
+  if (!leaguePredictorRuntimePromise) {
+    leaguePredictorRuntimePromise = import("./league-predictors.js").then(module => {
+      leaguePredictorConfigs = module.LEAGUE_PREDICTORS;
+      return module;
+    });
+  }
+  return leaguePredictorRuntimePromise;
+}
 
 function activeLeaguePredictor() {
-  return LEAGUE_PREDICTORS[state.activePredictorId] || LEAGUE_PREDICTORS[DEFAULT_PREDICTOR_ID];
+  const configured = leaguePredictorConfigs?.[state.activePredictorId];
+  if (configured) return configured;
+
+  const fallbackSeed = LEAGUE_PREDICTORS[state.activePredictorId]
+    || LEAGUE_PREDICTORS[DEFAULT_PREDICTOR_ID]
+    || LEAGUE_PREDICTOR_LIST[0];
+  if (!fallbackSeed) {
+    return {
+      id: DEFAULT_PREDICTOR_ID,
+      route: `/${DEFAULT_PREDICTOR_ID}`,
+      leagueName: "Premier League",
+      leagueMark: "PL",
+      logoUrl: "/league-logos/premier-league-dark.png",
+      title: "Premier League",
+      season: "2026/27",
+      lockAt: "2026-09-01T03:59:00+00:00",
+      clubCount: 20,
+      sourceUrl: "",
+      sourceLabel: "",
+      zones: [],
+      clubs: [],
+    };
+  }
+
+  return {
+    ...fallbackSeed,
+    zones: Array.isArray(fallbackSeed.zones) ? fallbackSeed.zones : [],
+    clubs: Array.isArray(fallbackSeed.clubs) ? fallbackSeed.clubs : [],
+  };
+}
+
+function hasActivePredictorRuntime() {
+  const predictorId = LEAGUE_PREDICTORS[state.activePredictorId]?.id || LEAGUE_PREDICTORS[DEFAULT_PREDICTOR_ID]?.id;
+  return Boolean(predictorId && leaguePredictorConfigs?.[predictorId]);
 }
 
 function leaguePredictorDraftKey(predictorId = state.activePredictorId) {
@@ -539,7 +524,7 @@ const GENERAL_MARKET_POOL = [
     leagueMark: predictor.leagueMark,
     logoUrl: predictor.logoUrl,
     title: predictor.title,
-    subtitle: `Rank all ${predictor.clubs.length} clubs before kickoff.`,
+    subtitle: `Rank all ${predictor.clubCount} clubs before kickoff.`,
     eyebrow: "General pool",
     prize: "Season contest",
   })),
@@ -858,36 +843,56 @@ const dom = {
   toast: document.querySelector("#toast"),
 };
 
-document.querySelector("#closeGroupModal").addEventListener("click", () => closeModal("group"));
-document.querySelector("#cancelGroupModal").addEventListener("click", () => closeModal("group"));
-document.querySelector("#closeJoinModal").addEventListener("click", () => closeModal("join"));
-document.querySelector("#cancelJoinModal").addEventListener("click", () => closeModal("join"));
-document.querySelector("#closeInviteModal").addEventListener("click", () => closeModal("invite"));
-document.querySelector("#closeGeneralMarketModal").addEventListener("click", () => closeModal("generalMarket"));
-document.querySelector("#closeEmbedModal").addEventListener("click", () => closeModal("embed"));
-document.querySelector("#closeLeaderProfileModal").addEventListener("click", () => closeModal("leaderProfile"));
-document.querySelector("#closeTradeHistoryModal").addEventListener("click", () => closeModal("tradeHistory"));
-document.querySelector("#closeLoginModal").addEventListener("click", () => closeModal("login"));
-document.querySelector("#closeMarketModal").addEventListener("click", () => closeModal("market"));
-document.querySelector("#closeSuggestPreviewModal").addEventListener("click", () => closeModal("suggestPreview"));
-document.querySelector("#dismissSuggestPreview").addEventListener("click", () => closeModal("suggestPreview"));
-dom.suggestPreviewModalOverlay.addEventListener("click", e => { if (e.target === dom.suggestPreviewModalOverlay) closeModal("suggestPreview"); });
-dom.groupModalOverlay.addEventListener("click", e => { if (e.target === dom.groupModalOverlay) closeModal("group"); });
-dom.joinModalOverlay.addEventListener("click", e => { if (e.target === dom.joinModalOverlay) closeModal("join"); });
-dom.inviteModalOverlay.addEventListener("click", e => { if (e.target === dom.inviteModalOverlay) closeModal("invite"); });
-dom.generalMarketModalOverlay.addEventListener("click", e => { if (e.target === dom.generalMarketModalOverlay) closeModal("generalMarket"); });
-dom.embedModalOverlay.addEventListener("click", e => { if (e.target === dom.embedModalOverlay) closeModal("embed"); });
-dom.leaderProfileModalOverlay.addEventListener("click", e => { if (e.target === dom.leaderProfileModalOverlay) closeModal("leaderProfile"); });
-dom.tradeHistoryModalOverlay.addEventListener("click", e => { if (e.target === dom.tradeHistoryModalOverlay) closeModal("tradeHistory"); });
-dom.loginModalOverlay.addEventListener("click", e => { if (e.target === dom.loginModalOverlay) closeModal("login"); });
-dom.marketModalOverlay.addEventListener("click", e => { if (e.target === dom.marketModalOverlay) closeModal("market"); });
-dom.groupForm.addEventListener("submit", onCreateGroup);
-dom.joinForm.addEventListener("submit", onJoinGroupSubmit);
-dom.loginForm.addEventListener("submit", onLogin);
-dom.googleSignInBtn.addEventListener("click", onGoogleSignIn);
-dom.signOutBtn.addEventListener("click", onSignOut);
-document.querySelector("#authSignUpBtn").addEventListener("click", () => dom.authNameInput?.focus());
-dom.marketForm.addEventListener("submit", onCreateMarket);
+document.querySelector("#closeGroupModal")?.addEventListener("click", () => closeModal("group"));
+document.querySelector("#cancelGroupModal")?.addEventListener("click", () => closeModal("group"));
+document.querySelector("#closeJoinModal")?.addEventListener("click", () => closeModal("join"));
+document.querySelector("#cancelJoinModal")?.addEventListener("click", () => closeModal("join"));
+document.querySelector("#closeInviteModal")?.addEventListener("click", () => closeModal("invite"));
+document.querySelector("#closeGeneralMarketModal")?.addEventListener("click", () => closeModal("generalMarket"));
+document.querySelector("#closeEmbedModal")?.addEventListener("click", () => closeModal("embed"));
+document.querySelector("#closeLeaderProfileModal")?.addEventListener("click", () => closeModal("leaderProfile"));
+document.querySelector("#closeTradeHistoryModal")?.addEventListener("click", () => closeModal("tradeHistory"));
+document.querySelector("#closeLoginModal")?.addEventListener("click", () => closeModal("login"));
+document.querySelector("#closeMarketModal")?.addEventListener("click", () => closeModal("market"));
+document.querySelector("#closeSuggestPreviewModal")?.addEventListener("click", () => closeModal("suggestPreview"));
+document.querySelector("#dismissSuggestPreview")?.addEventListener("click", () => closeModal("suggestPreview"));
+dom.suggestPreviewModalOverlay?.addEventListener("click", e => {
+  if (e.target === dom.suggestPreviewModalOverlay) closeModal("suggestPreview");
+});
+dom.groupModalOverlay?.addEventListener("click", e => {
+  if (e.target === dom.groupModalOverlay) closeModal("group");
+});
+dom.joinModalOverlay?.addEventListener("click", e => {
+  if (e.target === dom.joinModalOverlay) closeModal("join");
+});
+dom.inviteModalOverlay?.addEventListener("click", e => {
+  if (e.target === dom.inviteModalOverlay) closeModal("invite");
+});
+dom.generalMarketModalOverlay?.addEventListener("click", e => {
+  if (e.target === dom.generalMarketModalOverlay) closeModal("generalMarket");
+});
+dom.embedModalOverlay?.addEventListener("click", e => {
+  if (e.target === dom.embedModalOverlay) closeModal("embed");
+});
+dom.leaderProfileModalOverlay?.addEventListener("click", e => {
+  if (e.target === dom.leaderProfileModalOverlay) closeModal("leaderProfile");
+});
+dom.tradeHistoryModalOverlay?.addEventListener("click", e => {
+  if (e.target === dom.tradeHistoryModalOverlay) closeModal("tradeHistory");
+});
+dom.loginModalOverlay?.addEventListener("click", e => {
+  if (e.target === dom.loginModalOverlay) closeModal("login");
+});
+dom.marketModalOverlay?.addEventListener("click", e => {
+  if (e.target === dom.marketModalOverlay) closeModal("market");
+});
+dom.groupForm?.addEventListener("submit", onCreateGroup);
+dom.joinForm?.addEventListener("submit", onJoinGroupSubmit);
+dom.loginForm?.addEventListener("submit", onLogin);
+dom.googleSignInBtn?.addEventListener("click", onGoogleSignIn);
+dom.signOutBtn?.addEventListener("click", onSignOut);
+document.querySelector("#authSignUpBtn")?.addEventListener("click", () => dom.authNameInput?.focus());
+dom.marketForm?.addEventListener("submit", onCreateMarket);
 
 document.addEventListener("click", onGlobalClick);
 document.addEventListener("click", onTradeSubmitClickCapture, true);
@@ -925,7 +930,9 @@ window.addEventListener("popstate", () => {
 async function init() {
   const initialRoute = routeFromLocation();
   applyRouteToState(initialRoute, { replaceLegacy: true });
+  render();
 
+  const supabase = await loadSupabaseRuntime();
   try {
     const { data, error } = await withTimeout(supabase.auth.getSession(), AUTH_TIMEOUT_MS, "Sign-in check");
     if (error) throw error;
@@ -963,6 +970,24 @@ async function init() {
   let keepInitialLoading = false;
   loadInitialAppData()
     .catch(err => {
+      if (
+        !restoredFromCache &&
+        !state.sharedMarketId &&
+        !state.inviteToken &&
+        isRecoverableBackendError(err)
+      ) {
+        state.bootError = "";
+        state.marketLinkError = "";
+        keepInitialLoading = false;
+        const hasCachedState = restoreBootCacheState();
+        if (isLoggedIn() && (state.groups.length || hasCachedState)) {
+          state.shell = "app";
+          state.view = "dashboard";
+          return;
+        }
+        enterDemo({ skipTutorial: true });
+        return;
+      }
       if (!restoredFromCache && isWakeTimeoutError(err)) {
         state.bootError = "";
         state.marketLinkError = "";
@@ -983,15 +1008,15 @@ async function init() {
       if (!keepInitialLoading) {
         if (state.currentGroupId) loadQuestionSuggestions(state.currentGroupId);
         if (
-          isLoggedIn() &&
           !state.bootError &&
-          !state.groups.some(groupHasCurrentMember) &&
           !state.inviteToken &&
           !state.sharedMarketId &&
+          !state.currentGroupId &&
+          !state.groups.some(groupHasCurrentMember) &&
           !localStorage.getItem("probable_demo_done") &&
           !sessionStorage.getItem("probable_pending_auth_action")
         ) {
-          enterDemo();
+          enterDemo({ skipTutorial: true });
         }
         runStoredPendingAuthAction();
       }
@@ -1005,11 +1030,13 @@ async function loadInitialAppData() {
   state.marketLinkError = "";
   if (state.view === "markets") void loadGlobalMarkets().catch(() => {});
   if (state.view === "bracket" && !state.sharedMarketId && !state.inviteToken) {
+    await loadBracketRuntime();
     loadBracketEntryIntoState();
     if (isLoggedIn() || state.sharedBracketEntryId) void loadRemoteBracketEntry({ refresh: true });
     return;
   }
   if (state.plShareRouteCode && !state.sharedMarketId && !state.inviteToken) {
+    await loadLeaguePredictorRuntime();
     await resolveLeaguePredictorShareCode(state.plShareRouteCode);
     if (isLoggedIn()) {
       void loadGroupsForBoot()
@@ -1026,6 +1053,7 @@ async function loadInitialAppData() {
     return;
   }
   if (state.view === "plPredictor" && !state.sharedMarketId && !state.inviteToken) {
+    await loadLeaguePredictorRuntime();
     loadPremierLeagueDraftIntoState();
     if (isLoggedIn() || state.plSharedEntryId) void loadRemotePremierLeagueEntry({ refresh: true });
     if (isLoggedIn()) {
@@ -1116,7 +1144,7 @@ async function addCatalogMarketToGroup(groupId, catalogId) {
 async function loadGroupsForBoot() {
   const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
   const include = savedGroup ? `&include=${encodeURIComponent(savedGroup)}` : "";
-  const members = currentMemberAliases();
+  const members = isLoggedIn() ? [] : currentMemberAliases();
   const memberQuery = members.length ? `&members=${encodeURIComponent(members.join(","))}` : "";
   const path = `/api/groups?compact=1&limit=50${include}${memberQuery}`;
   try {
@@ -1149,6 +1177,10 @@ function isWakeTimeoutError(err) {
   return /timed out|still waking|connection timed out|waking the server/i.test(err?.message || "");
 }
 
+function isRecoverableBackendError(err) {
+  return /bad gateway|badgateway|502|503|service unavailable|failed to fetch|econnrefused|connection refused|could not connect|connection is closed/i.test(String(err?.message || ""));
+}
+
 function scheduleInitialLoadRetry() {
   if (bootRetryTimer) window.clearTimeout(bootRetryTimer);
   bootRetryTimer = window.setTimeout(() => {
@@ -1167,6 +1199,23 @@ async function retryInitialLoad({ auto = false } = {}) {
   try {
     await loadInitialAppData();
   } catch (err) {
+    if (!state.sharedMarketId && !state.inviteToken && isRecoverableBackendError(err)) {
+      const hasCachedState = restoreBootCacheState();
+      if (isLoggedIn() && (state.groups.length || hasCachedState)) {
+        state.shell = "app";
+        state.view = "dashboard";
+        state.bootError = "";
+        state.marketLinkError = "";
+        state.loaded = true;
+        return;
+      }
+      state.bootError = "";
+      state.marketLinkError = "";
+      state.loaded = true;
+      enterDemo({ skipTutorial: true });
+      if (!auto) toast("Backend is unavailable. Showing practice market demo.");
+      return;
+    }
     if (isWakeTimeoutError(err)) {
       keepLoading = true;
       scheduleInitialLoadRetry();
@@ -1269,6 +1318,9 @@ function shouldHoldAppShell() {
 }
 
 function applyRouteToState(route, { replaceLegacy = false } = {}) {
+  // Route changes must also clear errors owned by the screen being left.
+  state.bootError = "";
+  state.marketLinkError = "";
   state.inviteToken = null;
   state.invitePreview = null;
   state.inviteError = "";
@@ -1365,6 +1417,7 @@ function navigateTo(path, { replace = false } = {}) {
   if (`${location.pathname}${location.search}${location.hash}` !== target) {
     history[replace ? "replaceState" : "pushState"](null, "", target);
   }
+  applyRouteToState(routeFromLocation());
 }
 
 function routeToWelcome({ replace = false } = {}) {
@@ -1403,7 +1456,8 @@ function routeToPremierLeaguePredictor({ replace = false, entry = "" } = {}) {
   const params = new URLSearchParams();
   if (entry) params.set("entry", entry);
   const query = params.toString();
-  navigateTo(`${activeLeaguePredictor().route}${query ? `?${query}` : ""}`, { replace });
+  const predictor = activeLeaguePredictor() || LEAGUE_PREDICTORS[state.activePredictorId] || LEAGUE_PREDICTORS[DEFAULT_PREDICTOR_ID];
+  navigateTo(`${predictor.route}${query ? `?${query}` : ""}`, { replace });
 }
 
 function routeToMarket(marketId, { replace = false } = {}) {
@@ -1468,6 +1522,13 @@ function onKeyDown(e) {
 }
 
 async function onGlobalClick(e) {
+  const adminQueueFilter = e.target.closest("[data-admin-queue-filter]");
+  if (adminQueueFilter) {
+    state.adminQueueMode = adminQueueFilter.dataset.adminQueueFilter === "live" ? "live" : "ready";
+    renderAdminVerification();
+    return;
+  }
+
   const openPositionsBtn = e.target.closest("[data-open-positions]");
   if (openPositionsBtn) {
     e.preventDefault();
@@ -1661,6 +1722,7 @@ async function onGlobalClick(e) {
   }
 
   if (e.target.closest("[data-go-bracket]")) {
+    await loadBracketRuntime();
     state.shell = "app";
     state.view = "bracket";
     state.trade = emptyTrade();
@@ -1675,6 +1737,7 @@ async function onGlobalClick(e) {
 
   const leaguePredictorButton = e.target.closest("[data-go-league-predictor], [data-go-pl-predictor]");
   if (leaguePredictorButton) {
+    await loadLeaguePredictorRuntime();
     const predictorId = leaguePredictorButton.dataset.goLeaguePredictor || DEFAULT_PREDICTOR_ID;
     if (state.activePredictorId !== predictorId) {
       state.activePredictorId = LEAGUE_PREDICTORS[predictorId] ? predictorId : DEFAULT_PREDICTOR_ID;
@@ -1862,12 +1925,12 @@ async function onGlobalClick(e) {
         await ensureMarketGroup();
       }
       state.shell = "app";
-      state.view = "markets";
+      state.view = "dashboard";
       state.welcomeMode = "actions";
       state.trade = emptyTrade();
       state.bootError = "";
       state.marketLinkError = "";
-      routeToMarkets();
+      routeToApp();
       normalizeSelection();
       render();
     } catch (err) {
@@ -1991,7 +2054,7 @@ async function onGlobalClick(e) {
   }
 
   if (e.target.closest("[data-try-demo]")) {
-    enterDemo();
+    enterDemo({ skipTutorial: true });
     return;
   }
 
@@ -2852,7 +2915,7 @@ async function onLogin(e) {
   const email = new FormData(e.currentTarget).get("email")?.toString().trim() ?? "";
   const displayName = readAuthDisplayNameInput();
   if (!displayName) return;
-  if (import.meta.env.DEV) {
+  if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_DEV_AUTH_BYPASS === "true") {
     applyDevAuthBypass(displayName, email || `${slug(displayName)}@probable.local`);
     return;
   }
@@ -2868,6 +2931,7 @@ async function onLogin(e) {
   }
   const action = state.pendingAuthAction;
   if (action) sessionStorage.setItem("probable_pending_auth_action", action);
+  const supabase = await loadSupabaseRuntime();
   const { error } = await supabase.auth.signInWithOtp({
     email,
     options: {
@@ -2922,7 +2986,7 @@ function devAuthSession(displayName, email = "dev@probable.local") {
 }
 
 function restoreDevAuthSession() {
-  if (!import.meta.env.DEV) return null;
+  if (!import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEV_AUTH_BYPASS !== "true") return null;
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.devAuth);
     const stored = raw ? JSON.parse(raw) : {};
@@ -2964,6 +3028,7 @@ function readAuthDisplayNameInput() {
 async function onOAuthSignIn(provider) {
   const action = state.pendingAuthAction;
   if (action) sessionStorage.setItem("probable_pending_auth_action", action);
+  const supabase = await loadSupabaseRuntime();
   const { error } = await supabase.auth.signInWithOAuth({
     provider,
     options: { redirectTo: authRedirectUrl() },
@@ -2977,6 +3042,7 @@ function authRedirectUrl() {
 
 async function onSignOut() {
   localStorage.removeItem(STORAGE_KEYS.devAuth);
+  const supabase = await loadSupabaseRuntime();
   const { error } = state.authUser?.id === "dev-user" ? { error: null } : await supabase.auth.signOut();
   if (error) {
     toast(error.message || "Sign out failed.");
@@ -3334,7 +3400,7 @@ async function loadQuestionSuggestions(groupId) {
   try {
     const data = await api(`/api/groups/${groupId}/questions/suggest`, { method: "POST", timeoutMs: 35000 });
     if (state.currentGroupId === groupId) {
-      state.questionSuggestions = data.questions || [];
+      state.questionSuggestions = uniqueQuestionSuggestions(data.questions || []);
       state.questionSuggestionsGroupId = groupId;
     }
   } catch {
@@ -3346,6 +3412,17 @@ async function loadQuestionSuggestions(groupId) {
       loadQuestionSuggestions(state.currentGroupId);
     }
   }
+}
+
+function uniqueQuestionSuggestions(questions = [], limit = 5) {
+  const seen = new Set();
+  return questions.filter(question => {
+    const normalized = String(question || "").trim().replace(/\s+/g, " ");
+    const key = normalized.toLowerCase().replace(/[?.!]+$/, "");
+    if (!normalized || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, limit);
 }
 
 function resetMarketOddsSeed() {
@@ -4693,9 +4770,19 @@ function render() {
   } else if (state.view === "challenges") {
     renderChallengesHub();
   } else if (state.view === "bracket") {
-    renderBracketChallenge();
+    if (BRACKET_CHALLENGE) {
+      renderBracketChallenge();
+    } else {
+      renderRouteLoading("Loading bracket");
+      void loadBracketRuntime().then(() => render()).catch(() => renderRouteLoading("Could not load bracket"));
+    }
   } else if (state.view === "plPredictor") {
-    renderPremierLeaguePredictor();
+    if (hasActivePredictorRuntime()) {
+      renderPremierLeaguePredictor();
+    } else {
+      renderRouteLoading("Loading predictor");
+      void loadLeaguePredictorRuntime().then(() => render()).catch(() => renderRouteLoading("Could not load predictor"));
+    }
   } else {
     renderDashboard();
   }
@@ -4705,6 +4792,17 @@ function render() {
     hydrateWelcomeVideos();
     if (state.demoMode) tutorialOnRender();
   });
+}
+
+function renderRouteLoading(message) {
+  dom.mainContent.innerHTML = `
+    <section class="invite-preview-page">
+      <div class="invite-preview-card motion-item market-link-card">
+        <p class="eyebrow">Challenge</p>
+        <h1>${esc(message)}</h1>
+        <p class="muted">Preparing the latest challenge data.</p>
+      </div>
+    </section>`;
 }
 
 function renderNav() {
@@ -5112,6 +5210,7 @@ function leaguePredictorEntryGroup() {
 }
 
 async function loadLeaguePredictorGroupEntries({ refresh = false, renderNow = true } = {}) {
+  await loadLeaguePredictorRuntime();
   const group = leaguePredictorEntryGroup();
   const challengeId = leaguePredictorAddonId();
   // Signed-in predictor routes load memberships in parallel. Do not fall back to
@@ -5498,6 +5597,7 @@ function renderSharedLeaguePrediction() {
 }
 
 async function loadRemotePremierLeagueEntry({ refresh = false } = {}) {
+  await loadLeaguePredictorRuntime();
   if (state.plSharedEntryId) {
     if (state.plSharedEntryLoading && !refresh) return;
     if (state.plSharedEntry?.id === state.plSharedEntryId && !refresh) return;
@@ -5574,6 +5674,7 @@ function openOwnLeaguePrediction() {
 }
 
 async function submitPremierLeagueEntry() {
+  await loadLeaguePredictorRuntime();
   if (premierLeaguePredictorLocked()) {
     toast("Predictor is locked.");
     return;
@@ -5798,21 +5899,23 @@ function challengeHubPredictorState(predictor) {
   let submitted = false;
   try {
     const saved = JSON.parse(localStorage.getItem(leaguePredictorDraftKey(predictor.id)) || "{}");
-    const validIds = new Set(predictor.clubs.map(club => club.id));
     ranking = (Array.isArray(saved.ranking) ? saved.ranking : [])
-      .filter((id, index, rows) => validIds.has(id) && rows.indexOf(id) === index);
+      .filter((id, index, rows) => typeof id === "string" && rows.indexOf(id) === index)
+      .slice(0, predictor.clubCount);
     submitted = Boolean(saved.submitted);
   } catch {
     ranking = [];
   }
   if (predictor.id === state.activePredictorId && state.plRanking.length) {
-    ranking = normalizePremierLeagueRanking(state.plRanking);
+    ranking = activeLeaguePredictor()
+      ? normalizePremierLeagueRanking(state.plRanking)
+      : state.plRanking.slice(0, predictor.clubCount);
     submitted = state.plSubmitted;
   }
   const locked = Date.now() >= Date.parse(predictor.lockAt);
   return {
     ranking,
-    status: locked ? "Locked" : submitted ? "Submitted" : ranking.length ? `${ranking.length}/${predictor.clubs.length} picked` : "Open",
+    status: locked ? "Locked" : submitted ? "Submitted" : ranking.length ? `${ranking.length}/${predictor.clubCount} picked` : "Open",
   };
 }
 
@@ -6065,7 +6168,7 @@ function renderChallengesHub() {
           <h1>Call the season before it happens.</h1>
           <p>Build your tables once, then compare every pick with your groups.</p>
         </div>
-        ${getCurrentGroup() ? `<button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back to ${esc(getCurrentGroup().name)}</button>` : ""}
+        ${getCurrentGroup() ? `<button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Open ${esc(getCurrentGroup().name)}</button>` : ""}
       </header>
 
       <div class="challenge-section-head motion-item">
@@ -6078,7 +6181,8 @@ function renderChallengesHub() {
 
       <div class="challenge-league-grid">
         ${predictors.map(({ predictor, ranking, status }) => {
-          const leader = predictor.clubs.find(club => club.id === ranking[0]);
+          const config = leaguePredictorConfigs?.[predictor.id];
+          const leader = config?.clubs.find(club => club.id === ranking[0]);
           return `<button class="challenge-league-card motion-item" type="button" data-go-league-predictor="${esc(predictor.id)}">
             <span class="challenge-league-logo">${predictor.logoUrl ? `<img src="${esc(predictor.logoUrl)}" alt="" loading="lazy" />` : esc(predictor.leagueMark)}</span>
             <span class="challenge-league-copy">
@@ -6088,7 +6192,7 @@ function renderChallengesHub() {
             </span>
             <span class="challenge-league-progress">
               <b>${esc(status)}</b>
-              <small>${leader ? `${esc(leader.name)} 1st` : "Start table"}</small>
+              <small>${leader ? `${esc(leader.name)} 1st` : ranking.length ? `${ranking.length} picks saved` : "Start table"}</small>
             </span>
           </button>`;
         }).join("")}
@@ -6559,10 +6663,11 @@ function getGroupForEvent(event) {
 function renderEmptyDashboard() {
   const welcomeActions = `
     <div class="welcome-button-row">
+      <button class="btn btn-primary btn-lg" type="button" data-try-demo>Open practice market</button>
       <button class="btn btn-primary btn-lg" type="button" data-create-market-welcome>Create market</button>
       <button class="btn btn-ghost btn-lg" type="button" data-join-group>Join group</button>
     </div>
-    <button class="welcome-demo-link" type="button" data-try-demo>New here? Try the 2-minute demo</button>`;
+    <button class="welcome-demo-link" type="button" data-try-demo>Replay demo with clean trades</button>`;
   const welcomeCreateForm = `
     <form class="welcome-inline-form" id="dashboardCreateForm">
       <div class="form-topline">
@@ -6612,14 +6717,18 @@ function renderEmptyDashboard() {
 
       <div class="welcome-content">
         <div class="welcome-copy motion-item">
-          <p class="eyebrow">Your own prediction markets.</p>
-          <h1 class="welcome-headline">Measure who has the best <span class="gooey-word" data-gooey-texts="ball knowledge|hot takes|match reads|game calls"><span class="sr-only gooey-word-current">ball knowledge</span><span class="gooey-word-1" aria-hidden="true">ball knowledge</span><span class="gooey-word-2" aria-hidden="true">hot takes</span></span></h1>
-          <p>Create markets, invite your friends to put their money where their hot take is, and track the leaderboard.</p>
+          <p class="eyebrow">Live app mode</p>
+          <h1 class="welcome-headline">Open the product flow first. Then create your own market.</h1>
+          <p>
+            This starts with an active demo market so you can see trades, price movement, and settlement behavior without guessing what to click.
+          </p>
           <div class="welcome-signal-row" aria-label="Product highlights">
-            <span>we settle it</span>
-            <span>charts</span>
-            <span>leaderboard</span>
-            <span>points only</span>
+            <span>private groups</span>
+            <span>LMSR liquidity</span>
+            <span>auditable trades</span>
+            <span>leaderboards</span>
+            <span>100+ markets shipped</span>
+            <span>1,000+ contracts traded</span>
           </div>
         </div>
 
@@ -8434,6 +8543,7 @@ function applyRemoteBracketEntry(entry) {
 }
 
 async function loadRemoteBracketEntry({ refresh = false } = {}) {
+  await loadBracketRuntime();
   const sharedEntry = state.sharedBracketEntryId || "";
   if (!isLoggedIn() && !sharedEntry) return null;
   const participant = bracketParticipantName();
@@ -8456,6 +8566,7 @@ async function loadRemoteBracketEntry({ refresh = false } = {}) {
 }
 
 async function saveBracketEntry({ submitted = state.bracketSubmitted, silent = true } = {}) {
+  await loadBracketRuntime();
   if (state.bracketSubmitted && !submitted) {
     return loadBracketEntry();
   }
@@ -9397,27 +9508,38 @@ function renderBracketChallenge() {
 }
 
 function renderAdminVerification() {
-  const queue = adminVerificationQueue();
-  const total = queue.reduce((sum, item) => sum + item.events.length, 0);
+  const queue = adminVerificationQueue(state.adminQueueMode);
+  const readyCount = adminVerificationQueue("ready").reduce((sum, item) => sum + item.events.length, 0);
+  const liveCount = adminVerificationQueue("live").reduce((sum, item) => sum + item.events.length, 0);
+  const total = state.adminQueueMode === "live" ? liveCount : readyCount;
   const resolved = adminResolvedQueue();
+  const isLiveQueue = state.adminQueueMode === "live";
   dom.mainContent.innerHTML = `
     <section class="admin-page">
       <div class="admin-head motion-item">
         <div>
           <p class="eyebrow">Manual verification</p>
           <h1>Resolve markets</h1>
-          <p>Settle a market as soon as the outcome is known. Live overrides close trading immediately, lock the winner, and pay out in one step.</p>
+          <p>${isLiveQueue ? "Only resolve a live market when its outcome is already definitive. This closes trading and pays out immediately." : "Trading has closed. Pick the verified outcome, add an optional note, and pay out in one step."}</p>
         </div>
         <div class="admin-actions">
-          <span class="admin-count">${total} pending</span>
-          <button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back</button>
+          <span class="admin-count">${total} ${isLiveQueue ? "live" : "ready"}</span>
+          <button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back to markets</button>
         </div>
+      </div>
+      <div class="admin-queue-tabs motion-item" role="tablist" aria-label="Verification queue">
+        <button class="admin-queue-tab ${!isLiveQueue ? "active" : ""}" type="button" role="tab" aria-selected="${!isLiveQueue}" data-admin-queue-filter="ready">
+          Ready to settle <span>${readyCount}</span>
+        </button>
+        <button class="admin-queue-tab ${isLiveQueue ? "active" : ""}" type="button" role="tab" aria-selected="${isLiveQueue}" data-admin-queue-filter="live">
+          Live overrides <span>${liveCount}</span>
+        </button>
       </div>
       ${queue.length ? `
         <div class="admin-groups">
           ${queue.map(adminGroupHtml).join("")}
         </div>
-      ` : adminEmptyHtml()}
+      ` : adminEmptyHtml(state.adminQueueMode)}
       ${resolved.length ? `
         <section class="admin-recent motion-item">
           <div class="admin-group-head">
@@ -9434,11 +9556,16 @@ function renderAdminVerification() {
     </section>`;
 }
 
-function adminVerificationQueue() {
+function adminVerificationQueue(mode = "ready") {
   return state.groups
     .map(group => {
       const events = marketEvents(group.markets ?? [])
-        .filter(event => eventStatus(event) !== "resolved")
+        .filter(event => currentUserCanAdminEvent(group, event))
+        .filter(event => {
+          const status = eventStatus(event);
+          if (status === "resolved") return false;
+          return mode === "live" ? status === "open" : status === "closed";
+        })
         .sort((a, b) => {
           const aStatus = eventStatus(a);
           const bStatus = eventStatus(b);
@@ -9453,9 +9580,24 @@ function adminVerificationQueue() {
 function adminResolvedQueue() {
   return state.groups.flatMap(group => {
     return marketEvents(group.markets ?? [])
+      .filter(event => currentUserCanAdminEvent(group, event))
       .filter(event => eventStatus(event) === "resolved")
       .map(event => ({ group, event }));
   }).sort((a, b) => eventTime(b.event.resolvedAt) - eventTime(a.event.resolvedAt)).slice(0, 8);
+}
+
+function currentUserCanAdminEvent(group, event) {
+  const userId = state.authUser?.id;
+  if (userId && group?.createdByUserId === userId) return true;
+  if (userId && (event?.markets ?? []).some(market => market.creatorUserId === userId)) return true;
+  // Keep pre-migration founder/creator rows manageable after the membership is
+  // bound; the API performs the authoritative UUID check and backfill.
+  const member = memberAliasForGroup(group);
+  if (!member) return false;
+  const legacyAdmins = [group?.createdBy, ...(event?.markets ?? []).map(market => market.creator)]
+    .filter(Boolean)
+    .map(value => String(value).trim().toLowerCase());
+  return legacyAdmins.includes(member.trim().toLowerCase());
 }
 
 function adminGroupHtml({ group, events }) {
@@ -9548,12 +9690,13 @@ function adminApprovalNoticeHtml(market) {
     </div>`;
 }
 
-function adminEmptyHtml() {
+function adminEmptyHtml(mode = "ready") {
+  const live = mode === "live";
   return `
     <div class="admin-empty motion-item">
       <p class="eyebrow">All clear</p>
-      <h2>No markets need verification.</h2>
-      <p>Open and closed markets appear here until you pick the winning outcome.</p>
+      <h2>${live ? "No live overrides." : "Nothing ready to settle."}</h2>
+      <p>${live ? "Open markets appear here when you need to resolve a definitive outcome before maturity." : "Closed, unresolved markets will appear here automatically."}</p>
       <button class="btn btn-primary btn-sm" type="button" data-go-dashboard>Back to markets</button>
     </div>`;
 }
@@ -9592,7 +9735,7 @@ function renderPositions() {
         </div>
         <div class="portfolio-topbar-actions">
           ${portfolioGroupSwitcherHtml(snapshot)}
-          <button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back</button>
+          <button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back to ${esc(snapshot.scopeName)}</button>
         </div>
       </div>
 
@@ -9643,14 +9786,16 @@ function portfolioLeaguePredictorCard(predictor) {
   let ranking = [];
   let submitted = false;
   if (predictor.id === state.activePredictorId) {
-    ranking = normalizePremierLeagueRanking(state.plRanking);
+    ranking = leaguePredictorConfigs?.[predictor.id]
+      ? normalizePremierLeagueRanking(state.plRanking)
+      : state.plRanking.slice(0, predictor.clubCount);
     submitted = state.plSubmitted;
   } else {
     try {
       const saved = JSON.parse(localStorage.getItem(leaguePredictorDraftKey(predictor.id)) || "{}");
-      const validIds = new Set(predictor.clubs.map(club => club.id));
       ranking = (Array.isArray(saved.ranking) ? saved.ranking : [])
-        .filter((id, index, rows) => validIds.has(id) && rows.indexOf(id) === index);
+        .filter((id, index, rows) => typeof id === "string" && rows.indexOf(id) === index)
+        .slice(0, predictor.clubCount);
       submitted = Boolean(saved.submitted);
     } catch {
       ranking = [];
@@ -9658,7 +9803,8 @@ function portfolioLeaguePredictorCard(predictor) {
   }
   const locked = Date.now() >= Date.parse(predictor.lockAt);
   const status = locked ? "Locked" : submitted ? "Submitted" : ranking.length ? "Draft" : "Open";
-  const leader = predictor.clubs.find(club => club.id === ranking[0])?.name || "Start your table";
+  const leader = leaguePredictorConfigs?.[predictor.id]?.clubs.find(club => club.id === ranking[0])?.name
+    || (ranking.length ? `${ranking.length} picks saved` : "Start your table");
   return `
     <button class="portfolio-challenge-card" type="button" data-go-league-predictor="${esc(predictor.id)}">
       <span class="portfolio-challenge-icon league-mark">
@@ -11687,6 +11833,25 @@ function restoreBootCacheForRoute(route) {
   return state.shell === "app" && Boolean(getCurrentGroup());
 }
 
+function restoreBootCacheState() {
+  const cache = readBootCache();
+  if (!cache || !Array.isArray(cache.groups) || !cache.groups.length) return false;
+  setGroups(cache.groups, { persist: false });
+  if (cache.currentGroupId && state.groups.some(group => group.id === cache.currentGroupId)) {
+    state.currentGroupId = cache.currentGroupId;
+  }
+  if (!state.currentGroupId) {
+    const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
+    const saved = state.groups.find(group => group.id === savedGroup) || state.groups[0];
+    state.currentGroupId = saved?.id ?? null;
+  }
+  if (!state.activeMember && cache.activeMember) {
+    state.activeMember = cache.activeMember;
+  }
+  normalizeSelection();
+  return true;
+}
+
 function isPbMyMarketsGroup(group) {
   const name = String(group?.name || "").toLowerCase();
   const emoji = String(group?.emoji || "").toLowerCase();
@@ -11807,6 +11972,12 @@ function memberHistoryScore(group, memberName) {
 }
 
 function memberAliasForGroup(group) {
+  if (group?.currentMemberName) return group.currentMemberName;
+  const stableMember = (group?.memberRecords ?? []).find(member => (
+    member?.userId && member.userId === state.authUser?.id
+  ));
+  if (stableMember?.name) return stableMember.name;
+  if (isLoggedIn()) return null;
   const members = new Set((group?.members ?? []).map(member => String(member || "").trim()));
   const matches = currentMemberAliases().filter(alias => members.has(alias));
   if (!matches.length) return null;
@@ -11836,7 +12007,7 @@ function renderMarketLinkLoading({ error = "" } = {}) {
     </section>`;
 }
 
-function enterDemo() {
+function enterDemo({ skipTutorial = false } = {}) {
   if (state.demoMode) return;
   const memberName = isLoggedIn() ? (authDisplayName() || "You") : "You";
   const group = buildDemoGroup(memberName);
@@ -11847,18 +12018,44 @@ function enterDemo() {
   state.view = "dashboard";
   state.currentGroupId = DEMO_GROUP_ID;
   state.activeMember = memberName;
-  state.trade = emptyTrade();
+  const tradeSeedMarket = group.markets[0];
+  seedDemoTradeFlow(group, memberName);
+  state.trade = { ...emptyTrade(), marketId: tradeSeedMarket?.id || null, side: "yes", mode: "buy" };
+  state.mobileTradeOpen = false;
   render();
-  startTutorial({
-    getGroup: () => state.groups.find(g => g.id === DEMO_GROUP_ID),
-    getMember: () => memberName,
-    resolveDemo: outcomeId => {
-      const demoGroup = state.groups.find(g => g.id === DEMO_GROUP_ID);
-      if (demoGroup) resolveDemoMarket(demoGroup, outcomeId);
-      render();
-    },
-    exitDemo: handoff => exitDemo(handoff),
-  });
+  if (!skipTutorial) {
+    startTutorial({
+      getGroup: () => state.groups.find(g => g.id === DEMO_GROUP_ID),
+      getMember: () => memberName,
+      resolveDemo: outcomeId => {
+        const demoGroup = state.groups.find(g => g.id === DEMO_GROUP_ID);
+        if (demoGroup) resolveDemoMarket(demoGroup, outcomeId);
+        render();
+      },
+      exitDemo: handoff => exitDemo(handoff),
+    });
+  }
+}
+
+function seedDemoTradeFlow(group, memberName) {
+  if (!group?.markets?.length) return;
+  const participants = Object.keys(group.balances || {});
+  const maker = participants.find(name => name === memberName) || participants[0];
+  const challenger = participants.find(name => name !== maker) || participants[1] || maker;
+  const outsider = participants.find(name => name !== maker && name !== challenger) || participants[2] || maker;
+  const plan = [
+    { participant: maker, side: "yes", outcomeId: DEMO_YES_ID, amount: 140, action: "buy" },
+    { participant: maker, side: "yes", outcomeId: DEMO_YES_ID, amount: 25, action: "buy" },
+    { participant: outsider, side: "no", outcomeId: DEMO_NO_ID, amount: 40, action: "buy" },
+    { participant: challenger, side: "yes", outcomeId: DEMO_YES_ID, amount: 65, action: "buy" },
+  ];
+  plan.forEach(step => applyDemoTrade(group, {
+    participant: step.participant,
+    side: step.side,
+    outcomeId: step.outcomeId,
+    amount: step.amount,
+    action: step.action,
+  }));
 }
 
 function exitDemo(handoff = false) {
@@ -11968,6 +12165,7 @@ function closeModal(type) {
 
 function applyAuthSession(session, { renderNow = true } = {}) {
   state.authUser = session?.user ?? null;
+  state.authAccessToken = session?.access_token ?? null;
   if (state.authUser) {
     state.activeMember = authDisplayName();
   } else {
@@ -12157,10 +12355,17 @@ async function api(path, opts = {}) {
     throw new Error(API_CONFIG_ERROR);
   }
   const { timeoutMs = API_TIMEOUT_MS, ...fetchOpts } = opts;
+  const identityHeaders = {};
+  if (state.authAccessToken) {
+    identityHeaders.Authorization = `Bearer ${state.authAccessToken}`;
+  } else if (import.meta.env.DEV && state.authUser?.id === "dev-user") {
+    identityHeaders["X-Probable-Dev-User"] = state.authUser.id;
+    identityHeaders["X-Probable-Dev-Name"] = encodeURIComponent(authDisplayName() || "Dev");
+  }
   const res = await fetchWithTimeout(`${API}${path}`, {
     ...fetchOpts,
     timeoutMs,
-    headers: { "Content-Type": "application/json", ...(opts.headers ?? {}) },
+    headers: { "Content-Type": "application/json", ...identityHeaders, ...(opts.headers ?? {}) },
   });
   if (!res.ok) {
     let msg = "Request failed";

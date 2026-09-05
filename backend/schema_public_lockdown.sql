@@ -16,6 +16,7 @@ REVOKE ALL ON event_trades FROM anon, authenticated;
 
 REVOKE EXECUTE ON FUNCTION probable_reprice_event(text) FROM anon, authenticated;
 REVOKE EXECUTE ON FUNCTION place_event_trade(text, text, text, text, numeric) FROM anon, authenticated;
+REVOKE EXECUTE ON FUNCTION place_event_trade_for_user(text, text, text, text, numeric, uuid) FROM anon, authenticated;
 REVOKE EXECUTE ON FUNCTION resolve_event_market(text, text, text, text, jsonb) FROM anon, authenticated;
 
 ALTER TABLE groups ENABLE ROW LEVEL SECURITY;
