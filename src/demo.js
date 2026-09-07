@@ -5,11 +5,21 @@ export const DEMO_GROUP_ID = "demo";
 export const DEMO_EVENT_ID = "demo-event";
 export const DEMO_YES_ID = "demo-yes";
 export const DEMO_NO_ID = "demo-no";
+export const PRESENTATION_PRIMARY_ID = "demo-married-dave";
 
 const DEMO_B = 150; // small liquidity so a modest bet visibly moves the price
 const PRESENTATION_B = 4000;
 const DEMO_FEE_RATE = 0.015;
 const DEMO_QUESTION = "Will Jordan show up late to five-a-side again?";
+const PRESENTATION_HAALAND_ID = "demo-haaland";
+const PRESENTATION_LOVE_EVENT_ID = "demo-love-island";
+const PRESENTATION_LOVE_YES_ID = "demo-love-yes";
+const PRESENTATION_LOVE_NO_ID = "demo-love-no";
+const PRESENTATION_PERSONAL_EVENT_ID = "demo-first-married";
+const PRESENTATION_JULIAN_ID = "demo-married-julian";
+const PRESENTATION_KOREDE_ID = "demo-married-korede";
+const PRESENTATION_JOEL_ID = "demo-married-joel";
+const PRESENTATION_JAY_JAY_ID = "demo-married-jay-jay";
 
 function nowIso(offsetMs = 0) {
   return new Date(Date.now() + offsetMs).toISOString();
@@ -85,54 +95,59 @@ export function buildDemoGroup(memberName) {
 
 export function buildPresentationDemoGroup(memberName = "Dave Jaga") {
   const created = nowIso(-4 * 86400000);
-  const closes = nowIso(240 * 86400000);
   const members = [memberName, "Maya Chen", "Sam Okafor", "Riley Singh", "Alex Morgan"];
-  const outcomes = [
-    { id: DEMO_YES_ID, title: "Yes", price: 0.5, quantity: 0, sortOrder: 0 },
-    { id: DEMO_NO_ID, title: "No", price: 0.5, quantity: 0, sortOrder: 1 },
-  ];
-  const positions = {};
-  const question = "Will Arsenal win the 2026/27 Premier League?";
-  const markets = outcomes.map(outcome => ({
-    id: outcome.id,
+  const worldCupMarkets = buildPresentationEvent({
     eventId: DEMO_EVENT_ID,
-    outcomeId: outcome.id,
-    question: outcome.title,
-    category: question,
-    description: "Resolves Yes if Arsenal are officially declared 2026/27 Premier League champions. Source: the Premier League final table. If the season is abandoned without a declared champion, the market is void.",
-    imageUrl: "/market-images/market-024-4bfd0d2754.jpg",
+    title: "Who scores the most goals today?",
+    outcomes: [
+      [DEMO_YES_ID, "Kylian Mbappé"],
+      [DEMO_NO_ID, "Lionel Messi"],
+      [PRESENTATION_HAALAND_ID, "Erling Haaland"],
+    ],
+    description: "Resolves to the player who scores the most goals across today's World Cup matches. Extra-time goals count; penalty-shootout goals do not. A tie resolves to the tied player with fewer minutes played.",
+    imageUrl: "/market-images/market-007-ec1164b216.jpg",
     creator: "Maya Chen",
-    status: "open",
-    mode: "fake",
-    oracleType: "manual",
-    resolutionSource: "Premier League final table",
-    edgeCases: "Void if the season ends without an officially declared champion.",
-    verificationStatus: "not_started",
-    verificationAttempts: [],
-    resolvedBy: null,
-    resolutionNotes: null,
-    probability: outcome.price,
-    pool_yes: null,
-    pool_no: null,
-    k: null,
-    initialLiquidity: PRESENTATION_B,
-    totalBet: 0,
-    yesSharesOutstanding: outcome.quantity,
-    noSharesOutstanding: 0,
-    closesAt: closes,
+    resolutionSource: "Official FIFA match reports",
+    edgeCases: "If tied on goals and minutes, the market is void and stakes are returned.",
     createdAt: created,
-    outcome: null,
-    resolvedAt: null,
-    oracleProposal: null,
-    trades: [],
-    eventTrades: [],
-    outcomes,
-    positions,
-    probabilityHistory: [{ createdAt: created, probability: outcome.price }],
-    volumeHistory: [{ createdAt: created, volume: 0 }],
-    volume: 0,
+    closesAt: nowIso(10 * 60 * 60 * 1000),
+    liquidity: 9000,
+  });
+  const loveIslandMarkets = buildPresentationEvent({
+    eventId: PRESENTATION_LOVE_EVENT_ID,
+    title: "Will Aniya crash out at the Love Island reunion?",
+    outcomes: [
+      [PRESENTATION_LOVE_YES_ID, "Yes"],
+      [PRESENTATION_LOVE_NO_ID, "No"],
+    ],
+    description: "Resolves Yes if Aniya visibly loses her composure, leaves the set, or needs production to pause the reunion. Otherwise resolves No.",
+    imageUrl: "https://probable-fun.onrender.com/api/markets/92888e49/image",
+    creator: "Riley Singh",
+    resolutionSource: "The aired Love Island reunion episode",
+    edgeCases: "Edited previews do not count. Only footage included in the full reunion broadcast settles the market.",
+    createdAt: nowIso(-3 * 86400000),
+    closesAt: nowIso(36 * 60 * 60 * 1000),
     liquidity: PRESENTATION_B,
-  }));
+  });
+  const personalMarkets = buildPresentationEvent({
+    eventId: PRESENTATION_PERSONAL_EVENT_ID,
+    title: "Who will be the first to get married?",
+    outcomes: [
+      [PRESENTATION_PRIMARY_ID, "Dave Jaga"],
+      [PRESENTATION_JULIAN_ID, "Julian Asogwa"],
+      [PRESENTATION_KOREDE_ID, "Korede Adeniyi"],
+      [PRESENTATION_JOEL_ID, "Joel Adejola"],
+      [PRESENTATION_JAY_JAY_ID, "Jay Jay Ezugo"],
+    ],
+    description: "Resolves to the first person in the group to complete a legally recognized marriage ceremony. An engagement alone does not count.",
+    imageUrl: null,
+    creator: "Alex Morgan",
+    resolutionSource: "Marriage announcement confirmed by the person and the group",
+    edgeCases: "If two ceremonies occur on the same date, the earlier local ceremony time wins. If timing cannot be verified, the market is void.",
+    createdAt: nowIso(-6 * 86400000),
+    closesAt: nowIso(540 * 86400000),
+    liquidity: 7000,
+  });
   const group = {
     id: DEMO_GROUP_ID,
     name: "Sporty Boys",
@@ -141,35 +156,183 @@ export function buildPresentationDemoGroup(memberName = "Dave Jaga") {
     createdAt: created,
     members,
     balances: Object.fromEntries(members.map(name => [name, 100000])),
-    markets,
+    markets: [...personalMarkets, ...worldCupMarkets, ...loveIslandMarkets],
   };
 
-  const plan = [
-    ["Maya Chen", DEMO_YES_ID, "yes", 400],
-    ["Sam Okafor", DEMO_NO_ID, "no", 550],
-    ["Riley Singh", DEMO_YES_ID, "yes", 700],
-    ["Alex Morgan", DEMO_NO_ID, "no", 300],
-    ["Maya Chen", DEMO_YES_ID, "yes", 350],
-    ["Sam Okafor", DEMO_NO_ID, "no", 800],
-    ["Alex Morgan", DEMO_YES_ID, "yes", 600],
-    ["Riley Singh", DEMO_NO_ID, "no", 450],
-    ["Sam Okafor", DEMO_YES_ID, "yes", 500],
-    ["Maya Chen", DEMO_NO_ID, "no", 650],
-    ["Riley Singh", DEMO_YES_ID, "yes", 750],
-    ["Alex Morgan", DEMO_NO_ID, "no", 350],
-    ["Maya Chen", DEMO_YES_ID, "yes", 550],
-    ["Sam Okafor", DEMO_NO_ID, "no", 1050],
-    ["Maya Chen", DEMO_YES_ID, "yes", 315],
+  const worldCupPlan = [
+    ["Maya Chen", DEMO_YES_ID, 720], ["Sam Okafor", DEMO_NO_ID, 480],
+    ["Riley Singh", PRESENTATION_HAALAND_ID, 560], ["Alex Morgan", DEMO_YES_ID, 640],
+    ["Maya Chen", DEMO_NO_ID, 380], ["Sam Okafor", PRESENTATION_HAALAND_ID, 420],
+    ["Riley Singh", DEMO_YES_ID, 850], ["Alex Morgan", DEMO_NO_ID, 510],
+    ["Sam Okafor", DEMO_YES_ID, 620], ["Maya Chen", PRESENTATION_HAALAND_ID, 360],
+    ["Alex Morgan", DEMO_YES_ID, 940], ["Riley Singh", DEMO_NO_ID, 630],
+    ["Maya Chen", DEMO_YES_ID, 740], ["Sam Okafor", DEMO_NO_ID, 460],
+    ["Alex Morgan", PRESENTATION_HAALAND_ID, 520], ["Riley Singh", DEMO_YES_ID, 1050],
+    ["Sam Okafor", PRESENTATION_HAALAND_ID, 390], ["Maya Chen", DEMO_NO_ID, 570],
+    ["Alex Morgan", DEMO_YES_ID, 680], ["Riley Singh", PRESENTATION_HAALAND_ID, 440],
+    ["Maya Chen", DEMO_YES_ID, 890], ["Sam Okafor", DEMO_NO_ID, 520],
+    ["Riley Singh", DEMO_YES_ID, 760], ["Alex Morgan", PRESENTATION_HAALAND_ID, 610],
+    ["Sam Okafor", DEMO_YES_ID, 580], ["Maya Chen", DEMO_NO_ID, 430],
+    ["Alex Morgan", DEMO_YES_ID, 1120], ["Riley Singh", DEMO_NO_ID, 650],
+    ["Maya Chen", PRESENTATION_HAALAND_ID, 470], ["Sam Okafor", DEMO_YES_ID, 795],
   ];
-  plan.forEach(([participant, outcomeId, side, amount], index) => applyDemoTrade(group, {
+  const loveIslandPlan = [
+    ["Riley Singh", PRESENTATION_LOVE_NO_ID, 690], ["Maya Chen", PRESENTATION_LOVE_YES_ID, 410],
+    ["Alex Morgan", PRESENTATION_LOVE_NO_ID, 840], ["Sam Okafor", PRESENTATION_LOVE_YES_ID, 350],
+    ["Maya Chen", PRESENTATION_LOVE_NO_ID, 720], ["Riley Singh", PRESENTATION_LOVE_YES_ID, 520],
+    ["Sam Okafor", PRESENTATION_LOVE_NO_ID, 910], ["Alex Morgan", PRESENTATION_LOVE_YES_ID, 380],
+    ["Riley Singh", PRESENTATION_LOVE_NO_ID, 760], ["Maya Chen", PRESENTATION_LOVE_YES_ID, 440],
+    ["Alex Morgan", PRESENTATION_LOVE_NO_ID, 1080], ["Sam Okafor", PRESENTATION_LOVE_YES_ID, 560],
+    ["Maya Chen", PRESENTATION_LOVE_NO_ID, 670], ["Riley Singh", PRESENTATION_LOVE_YES_ID, 490],
+    ["Sam Okafor", PRESENTATION_LOVE_NO_ID, 990], ["Alex Morgan", PRESENTATION_LOVE_YES_ID, 420],
+    ["Riley Singh", PRESENTATION_LOVE_NO_ID, 810], ["Maya Chen", PRESENTATION_LOVE_YES_ID, 370],
+    ["Alex Morgan", PRESENTATION_LOVE_NO_ID, 930], ["Sam Okafor", PRESENTATION_LOVE_YES_ID, 460],
+    ["Maya Chen", PRESENTATION_LOVE_NO_ID, 880], ["Riley Singh", PRESENTATION_LOVE_YES_ID, 510],
+    ["Sam Okafor", PRESENTATION_LOVE_NO_ID, 1040], ["Alex Morgan", PRESENTATION_LOVE_YES_ID, 450],
+    ["Riley Singh", PRESENTATION_LOVE_NO_ID, 790], ["Maya Chen", PRESENTATION_LOVE_YES_ID, 405],
+  ];
+  [...worldCupPlan, ...loveIslandPlan].forEach(([participant, outcomeId, amount], index) => applyDemoTrade(group, {
     participant,
     outcomeId,
-    side,
+    side: "yes",
     amount,
     action: "buy",
-    createdAt: nowIso((-3.5 * 86400000) + index * 5.5 * 60 * 60 * 1000),
+    createdAt: nowIso((-3.5 * 86400000) + index * 90 * 60 * 1000),
   }));
+  seedPersonalPresentationMarket(group);
   return group;
+}
+
+function seedPersonalPresentationMarket(group) {
+  let tradeIndex = 0;
+  const startOffset = -5.5 * 86400000;
+  const place = ({ participant, outcomeId, amount = 0, action = "buy", shares = 0 }) => {
+    const irregularMinutes = tradeIndex * 173 + ((tradeIndex * 47) % 89);
+    tradeIndex += 1;
+    return applyDemoTrade(group, {
+      participant,
+      outcomeId,
+      amount,
+      action,
+      shares,
+      side: "yes",
+      createdAt: nowIso(startOffset + irregularMinutes * 60000),
+    });
+  };
+  const price = outcomeId => Number(group.markets.find(market => market.outcomeId === outcomeId)?.probability || 0);
+  const catalyst = (outcomeId, title, detail, from) => {
+    const eventMarkets = demoEventMarkets(group, outcomeId);
+    const entries = eventMarkets[0]?.demoCatalysts;
+    if (!entries) return;
+    entries.push({
+      title,
+      detail,
+      from,
+      to: price(outcomeId),
+      createdAt: eventMarkets[0].probabilityHistory.at(-1)?.createdAt,
+    });
+  };
+
+  [
+    ["Maya Chen", PRESENTATION_KOREDE_ID, 920], ["Sam Okafor", PRESENTATION_PRIMARY_ID, 540],
+    ["Riley Singh", PRESENTATION_JULIAN_ID, 680], ["Alex Morgan", PRESENTATION_KOREDE_ID, 760],
+    ["Maya Chen", PRESENTATION_JOEL_ID, 430], ["Sam Okafor", PRESENTATION_JAY_JAY_ID, 390],
+    ["Riley Singh", PRESENTATION_KOREDE_ID, 870], ["Alex Morgan", PRESENTATION_PRIMARY_ID, 620],
+    ["Maya Chen", PRESENTATION_JULIAN_ID, 510], ["Sam Okafor", PRESENTATION_KOREDE_ID, 790],
+    ["Riley Singh", PRESENTATION_JAY_JAY_ID, 460], ["Alex Morgan", PRESENTATION_JOEL_ID, 570],
+    ["Maya Chen", PRESENTATION_KOREDE_ID, 640], ["Sam Okafor", PRESENTATION_PRIMARY_ID, 470],
+  ].forEach(([participant, outcomeId, amount]) => place({ participant, outcomeId, amount }));
+
+  const koredeBefore = price(PRESENTATION_KOREDE_ID);
+  [
+    ["Maya Chen", 850], ["Sam Okafor", 720], ["Riley Singh", 780], ["Alex Morgan", 690],
+  ].forEach(([participant, shares]) => place({ participant, outcomeId: PRESENTATION_KOREDE_ID, action: "sell", shares }));
+  place({ participant: "Maya Chen", outcomeId: PRESENTATION_JULIAN_ID, amount: 880 });
+  place({ participant: "Sam Okafor", outcomeId: PRESENTATION_PRIMARY_ID, amount: 760 });
+  catalyst(
+    PRESENTATION_KOREDE_ID,
+    "Korede’s breakup changes the room",
+    "Four traders sell Korede contracts, then rotate into Dave and Julian.",
+    koredeBefore,
+  );
+
+  const daveBefore = price(PRESENTATION_PRIMARY_ID);
+  [
+    ["Alex Morgan", 1180], ["Riley Singh", 930], ["Maya Chen", 1040], ["Sam Okafor", 860],
+  ].forEach(([participant, amount]) => place({ participant, outcomeId: PRESENTATION_PRIMARY_ID, amount }));
+  catalyst(
+    PRESENTATION_PRIMARY_ID,
+    "Dave meets his girlfriend’s parents",
+    "The group treats the relationship milestone as new information and buys Dave.",
+    daveBefore,
+  );
+
+  const julianBefore = price(PRESENTATION_JULIAN_ID);
+  [
+    ["Riley Singh", PRESENTATION_JULIAN_ID, 920], ["Alex Morgan", PRESENTATION_JOEL_ID, 510],
+    ["Maya Chen", PRESENTATION_JULIAN_ID, 740], ["Sam Okafor", PRESENTATION_JAY_JAY_ID, 580],
+    ["Alex Morgan", PRESENTATION_PRIMARY_ID, 450], ["Riley Singh", PRESENTATION_JOEL_ID, 390],
+  ].forEach(([participant, outcomeId, amount]) => place({ participant, outcomeId, amount }));
+  catalyst(
+    PRESENTATION_JULIAN_ID,
+    "Julian is spotted ring shopping",
+    "A smaller late wave moves Julian up without erasing Dave’s lead.",
+    julianBefore,
+  );
+}
+
+function buildPresentationEvent({ eventId, title, outcomes: outcomeSeeds, description, imageUrl, creator, resolutionSource, edgeCases, createdAt, closesAt, liquidity }) {
+  const initialPrice = 1 / outcomeSeeds.length;
+  const outcomes = outcomeSeeds.map(([id, outcomeTitle], sortOrder) => ({
+    id,
+    title: outcomeTitle,
+    price: initialPrice,
+    quantity: 0,
+    sortOrder,
+  }));
+  const positions = {};
+  const demoCatalysts = [];
+  return outcomes.map(outcome => ({
+    id: outcome.id,
+    eventId,
+    outcomeId: outcome.id,
+    question: outcome.title,
+    category: title,
+    description,
+    imageUrl,
+    creator,
+    status: "open",
+    mode: "fake",
+    oracleType: "manual",
+    resolutionSource,
+    edgeCases,
+    verificationStatus: "not_started",
+    verificationAttempts: [],
+    resolvedBy: null,
+    resolutionNotes: null,
+    probability: outcome.price,
+    pool_yes: null,
+    pool_no: null,
+    k: null,
+    initialLiquidity: liquidity,
+    totalBet: 0,
+    yesSharesOutstanding: outcome.quantity,
+    noSharesOutstanding: 0,
+    closesAt,
+    createdAt,
+    outcome: null,
+    resolvedAt: null,
+    oracleProposal: null,
+    trades: [],
+    eventTrades: [],
+    outcomes,
+    positions,
+    demoCatalysts,
+    probabilityHistory: [{ createdAt, probability: outcome.price }],
+    volumeHistory: [{ createdAt, volume: 0 }],
+    volume: 0,
+    liquidity,
+  }));
 }
 
 function demoNetCash(amount) {
@@ -177,9 +340,11 @@ function demoNetCash(amount) {
 }
 
 export function demoBuyShares(group, outcomeId, amount) {
-  const outcomes = group.markets[0].outcomes;
-  const liquidity = Number(group.markets[0].initialLiquidity || DEMO_B);
+  const eventMarkets = demoEventMarkets(group, outcomeId);
+  const outcomes = eventMarkets[0]?.outcomes || [];
+  const liquidity = Number(eventMarkets[0]?.initialLiquidity || DEMO_B);
   const target = outcomes.find(o => o.id === outcomeId) || outcomes[0];
+  if (!target) return 0;
   const sumExp = outcomes.reduce((s, o) => s + Math.exp(o.quantity / liquidity), 0);
   const targetExp = Math.exp(target.quantity / liquidity);
   const net = demoNetCash(amount);
@@ -187,69 +352,96 @@ export function demoBuyShares(group, outcomeId, amount) {
   return liquidity * Math.log(1 + (sumExp / targetExp) * (Math.exp(net / liquidity) - 1));
 }
 
-function recomputeDemoPrices(group) {
-  const outcomes = group.markets[0].outcomes;
-  const liquidity = Number(group.markets[0].initialLiquidity || DEMO_B);
+function demoEventMarkets(group, outcomeId) {
+  const selected = group.markets.find(market => (
+    market.id === outcomeId ||
+    market.outcomeId === outcomeId ||
+    (market.outcomes || []).some(outcome => outcome.id === outcomeId)
+  ));
+  if (!selected) return [];
+  return group.markets.filter(market => market.eventId === selected.eventId);
+}
+
+function recomputeDemoPrices(eventMarkets) {
+  const outcomes = eventMarkets[0]?.outcomes || [];
+  const liquidity = Number(eventMarkets[0]?.initialLiquidity || DEMO_B);
   const sumExp = outcomes.reduce((s, o) => s + Math.exp(o.quantity / liquidity), 0);
   outcomes.forEach(o => { o.price = Math.exp(o.quantity / liquidity) / sumExp; });
-  group.markets.forEach(m => {
+  eventMarkets.forEach(m => {
     const own = outcomes.find(o => o.id === m.outcomeId);
     if (own) m.probability = own.price;
   });
 }
 
-export function applyDemoTrade(group, { participant, amount, outcomeId, side, action, createdAt: requestedCreatedAt }) {
-  if (action === "sell") return 0; // tutorial only guides buys; ignore sells safely
-  const cash = Math.max(0, Number(amount) || 0);
-  const outcomes = group.markets[0].outcomes;
+export function applyDemoTrade(group, { participant, amount, outcomeId, side, action = "buy", shares: requestedShares, createdAt: requestedCreatedAt }) {
+  const eventMarkets = demoEventMarkets(group, outcomeId);
+  const outcomes = eventMarkets[0]?.outcomes || [];
   const target = outcomes.find(o => o.id === outcomeId) || outcomes[0];
-  const pricesBefore = new Map(group.markets.map(market => [market.outcomeId, Number(market.probability || 0)]));
-  const shares = demoBuyShares(group, target.id, cash);
-  if (shares <= 0) return 0;
-  target.quantity += shares;
-  recomputeDemoPrices(group);
-  group.balances[participant] = Math.max(0, (group.balances[participant] ?? 0) - cash);
-  const positions = group.markets[0].positions;
+  if (!target) return 0;
+  const positions = eventMarkets[0].positions;
   positions[participant] = positions[participant] || {};
-  positions[participant][target.id] = (positions[participant][target.id] || 0) + shares;
+  const pricesBefore = new Map(eventMarkets.map(market => [market.outcomeId, Number(market.probability || 0)]));
+  let cash = Math.max(0, Number(amount) || 0);
+  let shares = 0;
+  if (action === "sell") {
+    const held = Math.max(0, Number(positions[participant][target.id] || 0));
+    shares = Math.min(held, Math.max(0, Number(requestedShares) || 0));
+    if (shares <= 0) return 0;
+    const liquidity = Number(eventMarkets[0]?.initialLiquidity || DEMO_B);
+    const sumExp = outcomes.reduce((sum, outcome) => sum + Math.exp(outcome.quantity / liquidity), 0);
+    const targetExp = Math.exp(target.quantity / liquidity);
+    const newSumExp = sumExp - targetExp + Math.exp((target.quantity - shares) / liquidity);
+    cash = Math.max(0, liquidity * Math.log(sumExp / newSumExp) * (1 - DEMO_FEE_RATE));
+    target.quantity -= shares;
+    positions[participant][target.id] = Math.max(0, held - shares);
+    group.balances[participant] = (group.balances[participant] ?? 0) + cash;
+  } else {
+    shares = demoBuyShares(group, target.id, cash);
+    if (shares <= 0) return 0;
+    target.quantity += shares;
+    positions[participant][target.id] = (positions[participant][target.id] || 0) + shares;
+    group.balances[participant] = Math.max(0, (group.balances[participant] ?? 0) - cash);
+  }
+  recomputeDemoPrices(eventMarkets);
   const createdAt = requestedCreatedAt || new Date().toISOString();
   const baseTrade = {
     participant,
     side: side || "yes",
-    action: "buy",
+    action,
     cashAmount: cash,
     cash_amount: cash,
     amount: cash,
-    shares,
+    shares: action === "sell" ? -shares : shares,
     outcomeId: target.id,
     createdAt,
   };
-  group.markets.forEach(m => {
-    const probBefore = Number(pricesBefore.get(m.outcomeId) || 0);
-    const probAfter = Number(m.probability || 0);
-    const trade = {
-      ...baseTrade,
-      id: `demo-${String(createdAt).replace(/\D/g, "").slice(-10)}-${String(participant).replace(/\W/g, "").slice(0, 6)}`,
-      probBefore,
-      probAfter,
-      avgPrice: Number(m.probability || 0),
-    };
-    m.eventTrades = [...(m.eventTrades || []), trade];
-    if (m.outcomeId === target.id) m.trades = [...(m.trades || []), trade];
+  const targetProbabilityBefore = Number(pricesBefore.get(target.id) || 0);
+  const targetProbabilityAfter = Number(eventMarkets.find(market => market.outcomeId === target.id)?.probability || 0);
+  const sharedTrade = {
+    ...baseTrade,
+    id: `demo-${String(createdAt).replace(/\D/g, "").slice(-10)}-${String(participant).replace(/\W/g, "").slice(0, 6)}`,
+    probBefore: targetProbabilityBefore,
+    probAfter: targetProbabilityAfter,
+    avgPrice: shares ? cash / shares : targetProbabilityAfter,
+  };
+  eventMarkets.forEach(m => {
+    m.eventTrades = [...(m.eventTrades || []), sharedTrade];
+    if (m.outcomeId === target.id) m.trades = [...(m.trades || []), sharedTrade];
     m.volume = (m.volume || 0) + cash;
     m.totalBet = m.volume;
     m.positions = positions;
-    m.probabilityHistory = [...(m.probabilityHistory || []), { createdAt: trade.createdAt, probability: m.probability }];
-    m.volumeHistory = [...(m.volumeHistory || []), { createdAt: trade.createdAt, volume: m.volume }];
+    m.probabilityHistory = [...(m.probabilityHistory || []), { createdAt: sharedTrade.createdAt, probability: m.probability }];
+    m.volumeHistory = [...(m.volumeHistory || []), { createdAt: sharedTrade.createdAt, volume: m.volume }];
   });
-  return shares;
+  return action === "sell" ? -shares : shares;
 }
 
 export function simulateDemoApi(path, opts, group, allGroups) {
   const body = opts?.body ? JSON.parse(opts.body) : {};
   if (path.endsWith("/quote")) {
-    const outcomes = group.markets[0].outcomes;
+    const outcomes = demoEventMarkets(group, body.outcomeId)[0]?.outcomes || [];
     const target = outcomes.find(o => o.id === body.outcomeId) || outcomes[0];
+    if (!target) throw new Error("Demo outcome not found.");
     const shares = demoBuyShares(group, target.id, body.amount);
     return {
       quote: {
@@ -285,14 +477,15 @@ export function simulateDemoApi(path, opts, group, allGroups) {
 
 export function resolveDemoMarket(group, winningOutcomeId) {
   const now = new Date().toISOString();
-  const outcomes = group.markets[0].outcomes;
-  const positions = group.markets[0].positions;
+  const eventMarkets = demoEventMarkets(group, winningOutcomeId);
+  const outcomes = eventMarkets[0]?.outcomes || [];
+  const positions = eventMarkets[0]?.positions || {};
   outcomes.forEach(o => { o.price = o.id === winningOutcomeId ? 1 : 0; });
   Object.entries(positions).forEach(([member, held]) => {
     const winShares = Number(held?.[winningOutcomeId] || 0);
     if (winShares > 0) group.balances[member] = (group.balances[member] ?? 0) + winShares;
   });
-  group.markets.forEach(m => {
+  eventMarkets.forEach(m => {
     m.status = "resolved";
     m.outcome = winningOutcomeId;
     m.resolvedAt = now;

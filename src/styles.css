@@ -13377,6 +13377,57 @@ body.app-active:not(.focused-market-active) {
 .presentation-receipt-grid em { margin-left:5px; color:#58dc8a; font-style:normal; }
 .presentation-trade-receipt footer { display:flex; align-items:center; justify-content:center; gap:9px; padding:9px 14px; color:var(--text-3); font-size:10px; font-weight:700; }
 .presentation-trade-receipt footer i { width:20px; height:1px; background:rgba(88,220,138,.42); }
+.presentation-market-story {
+  margin:18px 0;
+  overflow:hidden;
+  border:1px solid rgba(157,171,181,.16);
+  border-radius:14px;
+  background:rgba(14,20,25,.72);
+}
+.presentation-market-story > header {
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:16px;
+  padding:15px 17px 13px;
+  border-bottom:1px solid rgba(157,171,181,.12);
+}
+.presentation-market-story header span {
+  display:block;
+  margin-bottom:4px;
+  color:#baf783;
+  font-size:9px;
+  font-weight:800;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+}
+.presentation-market-story h3 { margin:0; color:var(--text-1); font-size:16px; }
+.presentation-market-story header small { color:var(--text-3); font-size:10px; }
+.presentation-market-story-list { display:grid; }
+.presentation-market-story-list article {
+  display:grid;
+  grid-template-columns:58px 8px minmax(0,1fr) auto;
+  align-items:center;
+  gap:11px;
+  padding:13px 17px;
+  border-bottom:1px solid rgba(157,171,181,.1);
+}
+.presentation-market-story-list article:last-child { border-bottom:0; }
+.presentation-market-story-list time { color:var(--text-3); font-size:10px; }
+.presentation-market-story-list i { width:7px; height:7px; border-radius:50%; box-shadow:0 0 0 4px rgba(157,171,181,.07); }
+.presentation-market-story-list i.up { background:#58dc8a; }
+.presentation-market-story-list i.down { background:#ff7e89; }
+.presentation-market-story-list div { min-width:0; }
+.presentation-market-story-list strong { color:var(--text-1); font-size:12px; }
+.presentation-market-story-list p { margin:3px 0 0; color:var(--text-3); font-size:10px; line-height:1.45; }
+.presentation-market-story-list article > span {
+  min-width:max-content;
+  font-family:"IBM Plex Mono",monospace;
+  font-size:11px;
+  font-weight:750;
+}
+.presentation-market-story-list article > span.up { color:#58dc8a; }
+.presentation-market-story-list article > span.down { color:#ff7e89; }
 .presentation-demo-active .group-home-actions,
 .presentation-demo-active .activation-progress,
 .presentation-demo-active .home-explore-link,
@@ -13403,4 +13454,9 @@ body.app-active:not(.focused-market-active) {
   .presentation-receipt-grid div { border-right:0; border-bottom:1px solid rgba(157,171,181,.12); }
   .presentation-receipt-grid div:last-child { border-bottom:0; }
   .presentation-trade-receipt footer { flex-wrap:wrap; }
+  .presentation-market-story > header { align-items:flex-start; }
+  .presentation-market-story header small { display:none; }
+  .presentation-market-story-list article { grid-template-columns:7px minmax(0,1fr) auto; padding:12px; }
+  .presentation-market-story-list time { display:none; }
+  .presentation-market-story-list p { font-size:9px; }
 }

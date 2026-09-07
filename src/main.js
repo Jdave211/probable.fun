@@ -1,5 +1,5 @@
 import "./styles.css";
-import { DEMO_GROUP_ID, DEMO_NO_ID, DEMO_YES_ID, applyDemoTrade, buildDemoGroup, buildPresentationDemoGroup, resolveDemoMarket, simulateDemoApi } from "./demo.js";
+import { DEMO_GROUP_ID, DEMO_NO_ID, DEMO_YES_ID, PRESENTATION_PRIMARY_ID, applyDemoTrade, buildDemoGroup, buildPresentationDemoGroup, resolveDemoMarket, simulateDemoApi } from "./demo.js";
 import { startTutorial, stopTutorial, tutorialOnRender } from "./tutorial.js";
 import { DEFAULT_PREDICTOR_ID, LEAGUE_PREDICTOR_LIST, LEAGUE_PREDICTOR_ROUTES as LEAGUE_PREDICTORS } from "./challenge-routes.js";
 
@@ -1719,7 +1719,7 @@ async function onGlobalClick(e) {
     state.sharedMarketId = null;
     state.mobileTradeOpen = false;
     if (screen === "market") {
-      const market = getCurrentGroup()?.markets?.find(item => item.outcomeId === DEMO_YES_ID) || getCurrentGroup()?.markets?.[0];
+      const market = getCurrentGroup()?.markets?.find(item => item.outcomeId === PRESENTATION_PRIMARY_ID) || getCurrentGroup()?.markets?.[0];
       state.view = "dashboard";
       state.trade = { marketId: market?.id || null, side: "yes", mode: "buy" };
     } else {
@@ -5102,10 +5102,10 @@ function renderPresentationDemoControls() {
 }
 
 function primePresentationTrade() {
-  if (!state.presentationMode || !state.trade.marketId || state.presentationReceipt) return;
+  if (!state.presentationMode || !state.trade.marketId) return;
   const input = document.querySelector(".trade-form-el .trade-input");
   const market = findMarket(state.trade.marketId);
-  if (!input || !market) return;
+  if (!input || !market || state.presentationReceipt?.outcomeId === market.outcomeId) return;
   input.value = "1000";
   renderTradePreview(market, 1000);
 }
@@ -6980,6 +6980,7 @@ function renderFocusedTradeView(group, market, event) {
             </div>
           ` : `
             ${presentationTradeReceiptHtml(tradeMarket)}
+            ${presentationMarketStoryHtml(tradeMarket, event)}
             ${marketHistoryPanel(tradeMarket, event)}
             ${focusedRulesPanel(tradeMarket, event)}
             ${settlementAuditPanel(tradeMarket, event)}
@@ -7004,6 +7005,34 @@ function renderFocusedTradeView(group, market, event) {
       </div>
     </section>
   `;
+}
+
+function presentationMarketStoryHtml(market, event) {
+  if (!state.presentationMode) return "";
+  const source = (event?.markets || [market]).find(item => item.demoCatalysts?.length);
+  const catalysts = source?.demoCatalysts || [];
+  if (!catalysts.length) return "";
+  return `
+    <section class="presentation-market-story motion-item" aria-label="What moved this market">
+      <header>
+        <div><span>Social signal</span><h3>What moved this market</h3></div>
+        <small>Every inflection comes from a trade</small>
+      </header>
+      <div class="presentation-market-story-list">
+        ${catalysts.map(item => {
+          const from = Math.round(Number(item.from || 0) * 100);
+          const to = Math.round(Number(item.to || 0) * 100);
+          const direction = to >= from ? "up" : "down";
+          return `
+            <article>
+              <time>${esc(fmtShortDate(item.createdAt))}</time>
+              <i class="${direction}" aria-hidden="true"></i>
+              <div><strong>${esc(item.title)}</strong><p>${esc(item.detail)}</p></div>
+              <span class="${direction}">${from}% → ${to}%</span>
+            </article>`;
+        }).join("")}
+      </div>
+    </section>`;
 }
 
 function presentationTradeReceiptHtml(market) {

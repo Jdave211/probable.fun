@@ -6,7 +6,7 @@ Maximum: 90 seconds. Target: 80–85 seconds.
 
 ## Final script
 
-I became interested in prediction markets and wanted to understand how they worked. Most platforms focus on public events, so I built Probable for private markets between friends.
+I became interested in prediction markets and wanted to understand how they worked. Most platforms focus on public events, so I built Probable for private markets between friends—questions like who gets married first, reality TV moments, or sports.
 
 I owned the project end to end: the user flow, data model, pricing engine, and deployment. I built the interface in JavaScript with Vite, and the trading path in Python and PostgreSQL, with Supabase for authentication and persistence.
 
@@ -30,10 +30,12 @@ I'm proud because I turned curiosity into a working transactional system—and b
 
 ## Product recording sequence
 
-- Open `/demo/wealthsimple` and show the Sporty Boys group.
-- Open the prepared Arsenal market.
+- Open `/demo/wealthsimple` and show the personal, Love Island, and World Cup markets inside Sporty Boys.
+- Open “Who will be the first to get married?” and explain why a private social market is different from a sportsbook.
+- Point to the breakup selloff and meeting-the-parents rally in **What moved this market**.
 - Pause on the $1,000 order preview and visible price impact.
-- Execute the order and hold on the transaction receipt.
+- Execute the Dave Jaga order and hold on the transaction receipt.
+- Return to the group briefly to show Love Island and World Cup as two more use cases.
 - Open Portfolio, then Leaderboard.
 - Use **Reset demo** before recording another take.
 
