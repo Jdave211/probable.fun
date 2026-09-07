@@ -231,6 +231,13 @@ export function buildPresentationDemoGroups(memberName = "Dave Jaga") {
     createdAt: nowIso((-3.5 * 86400000) + index * 90 * 60 * 1000),
   }));
   smoothBinaryPresentationHistory(loveIslandGroup, PRESENTATION_LOVE_EVENT_ID);
+  const loveIslandSettledAt = nowIso(-30 * 60 * 1000);
+  loveIslandGroup.markets.forEach(market => { market.closesAt = loveIslandSettledAt; });
+  resolveDemoMarket(loveIslandGroup, PRESENTATION_LOVE_NO_ID, {
+    resolvedAt: loveIslandSettledAt,
+    resolvedBy: "Joel Adejola",
+    resolutionNotes: "The reunion aired without Aniya leaving the set or production stopping the show.",
+  });
   seedPersonalPresentationMarket(lazyBoys);
   seedAmbientPresentationMarkets(lazyBoys);
   return [group, loveIslandGroup, lazyBoys];
@@ -647,8 +654,8 @@ export function simulateDemoApi(path, opts, group, allGroups) {
   throw new Error("Not available in the practice market.");
 }
 
-export function resolveDemoMarket(group, winningOutcomeId) {
-  const now = new Date().toISOString();
+export function resolveDemoMarket(group, winningOutcomeId, resolution = {}) {
+  const now = resolution.resolvedAt || new Date().toISOString();
   const eventMarkets = demoEventMarkets(group, winningOutcomeId);
   const outcomes = eventMarkets[0]?.outcomes || [];
   const positions = eventMarkets[0]?.positions || {};
@@ -661,8 +668,9 @@ export function resolveDemoMarket(group, winningOutcomeId) {
     m.status = "resolved";
     m.outcome = winningOutcomeId;
     m.resolvedAt = now;
-    m.resolvedBy = "Demo";
-    m.resolutionNotes = "Practice market — resolved instantly for the tutorial.";
+    m.resolvedBy = resolution.resolvedBy || "Demo";
+    m.resolutionNotes = resolution.resolutionNotes || "Practice market — resolved instantly for the tutorial.";
     m.probability = m.outcomeId === winningOutcomeId ? 1 : 0;
+    m.probabilityHistory = [...(m.probabilityHistory || []), { createdAt: now, probability: m.probability }];
   });
 }
