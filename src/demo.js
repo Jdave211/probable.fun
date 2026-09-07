@@ -251,9 +251,11 @@ function smoothBinaryPresentationHistory(group, eventId) {
     market.probabilityHistory = timestamps.map((createdAt, index) => {
       const progress = index / denominator;
       const smoothProgress = progress * progress * (3 - (2 * progress));
+      const earlyFade = Math.max(0, 1 - (progress / .4));
+      const earlyAmbiguity = Math.sin(progress * Math.PI * 7) * .012 * earlyFade;
       return {
         createdAt,
-        probability: .5 + ((finalProbability - .5) * smoothProgress),
+        probability: .5 + ((finalProbability - .5) * smoothProgress) + (marketIndex === 0 ? earlyAmbiguity : -earlyAmbiguity),
       };
     });
   });
