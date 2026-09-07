@@ -1,5 +1,5 @@
 import "./styles.css";
-import { DEMO_GROUP_ID, DEMO_NO_ID, DEMO_YES_ID, PRESENTATION_PRIMARY_ID, applyDemoTrade, buildDemoGroup, buildPresentationDemoGroup, resolveDemoMarket, simulateDemoApi } from "./demo.js";
+import { DEMO_GROUP_ID, DEMO_NO_ID, DEMO_YES_ID, PRESENTATION_GROUP_ID, PRESENTATION_PRIMARY_ID, applyDemoTrade, buildDemoGroup, buildPresentationDemoGroups, resolveDemoMarket, simulateDemoApi } from "./demo.js";
 import { startTutorial, stopTutorial, tutorialOnRender } from "./tutorial.js";
 import { DEFAULT_PREDICTOR_ID, LEAGUE_PREDICTOR_LIST, LEAGUE_PREDICTOR_ROUTES as LEAGUE_PREDICTORS } from "./challenge-routes.js";
 
@@ -2205,7 +2205,7 @@ async function onGlobalClick(e) {
 
   const groupBtn = e.target.closest("[data-group-id]");
   if (groupBtn) {
-    if (state.demoMode) {
+    if (state.demoMode && !state.presentationMode) {
       toast("Finish or skip the demo first.");
       return;
     }
@@ -2230,7 +2230,7 @@ async function onGlobalClick(e) {
     routeToApp();
     normalizeSelection();
     render();
-    loadQuestionSuggestions(gid);
+    if (!state.presentationMode) loadQuestionSuggestions(gid);
     return;
   }
 
@@ -5071,7 +5071,6 @@ function render() {
   } else {
     renderDashboard();
   }
-  if (state.presentationMode) renderPresentationDemoControls();
   requestAnimationFrame(() => {
     renderCharts(renderEpoch);
     animateIn();
@@ -5277,7 +5276,6 @@ function renderNav() {
   const balance = group?.balances?.[state.activeMember] ?? 0;
 
   dom.navRight.innerHTML = state.presentationMode ? `
-    <span class="presentation-nav-badge">Presentation demo</span>
     <div class="member-pill" title="Dave Jaga">
       <span class="member-name">Dave Jaga</span>
       <span class="member-balance">${topbarMoney(balance)}</span>
@@ -5356,7 +5354,7 @@ function hydrateWelcomeVideos() {
 }
 
 function visibleNavGroups() {
-  if (state.presentationMode) return state.groups.filter(group => group.id === DEMO_GROUP_ID);
+  if (state.presentationMode) return state.groups.filter(group => [DEMO_GROUP_ID, PRESENTATION_GROUP_ID].includes(group.id));
   if (state.shell !== "app" || !isLoggedIn()) return [];
   return selectableNavGroups();
 }
@@ -6980,7 +6978,6 @@ function renderFocusedTradeView(group, market, event) {
             </div>
           ` : `
             ${presentationTradeReceiptHtml(tradeMarket)}
-            ${presentationMarketStoryHtml(tradeMarket, event)}
             ${marketHistoryPanel(tradeMarket, event)}
             ${focusedRulesPanel(tradeMarket, event)}
             ${settlementAuditPanel(tradeMarket, event)}
@@ -12734,16 +12731,17 @@ function enterDemo({ skipTutorial = false, presentation = false } = {}) {
   if (state.demoMode && !presentation) return;
   stopTutorial();
   const memberName = presentation ? "Dave Jaga" : isLoggedIn() ? (authDisplayName() || "You") : "You";
-  const group = presentation ? buildPresentationDemoGroup(memberName) : buildDemoGroup(memberName);
+  const demoGroups = presentation ? buildPresentationDemoGroups(memberName) : [buildDemoGroup(memberName)];
+  const group = presentation ? demoGroups.find(item => item.id === PRESENTATION_GROUP_ID) : demoGroups[0];
   state.demoPrevGroupId = state.currentGroupId;
-  state.groups = state.groups.filter(g => g.id !== DEMO_GROUP_ID).concat([group]);
+  state.groups = state.groups.filter(g => ![DEMO_GROUP_ID, PRESENTATION_GROUP_ID].includes(g.id)).concat(demoGroups);
   state.demoMode = true;
   state.presentationMode = presentation;
   state.presentationReceipt = null;
   if (presentation) state.liveStatus = "live";
   state.shell = "app";
   state.view = "dashboard";
-  state.currentGroupId = DEMO_GROUP_ID;
+  state.currentGroupId = group.id;
   state.activeMember = memberName;
   const tradeSeedMarket = group.markets[0];
   if (!presentation) seedDemoTradeFlow(group, memberName);
@@ -12794,7 +12792,7 @@ function exitDemo(handoff = false) {
   state.demoMode = false;
   state.presentationMode = false;
   state.presentationReceipt = null;
-  state.groups = state.groups.filter(g => g.id !== DEMO_GROUP_ID);
+  state.groups = state.groups.filter(g => ![DEMO_GROUP_ID, PRESENTATION_GROUP_ID].includes(g.id));
   localStorage.setItem("probable_demo_done", "1");
   state.trade = emptyTrade();
   state.mobileTradeOpen = false;
@@ -13078,8 +13076,8 @@ function toastSettlement(settlement, fallback = "Market resolved.") {
 }
 
 async function api(path, opts = {}) {
-  if (state.demoMode && (path.includes("/markets/demo-") || path.includes(`/groups/${DEMO_GROUP_ID}/`))) {
-    const demoGroup = state.groups.find(g => g.id === DEMO_GROUP_ID);
+  if (state.demoMode && (path.includes("/markets/demo-") || [DEMO_GROUP_ID, PRESENTATION_GROUP_ID].some(id => path.includes(`/groups/${id}/`)))) {
+    const demoGroup = state.groups.find(group => (group.markets || []).some(market => path.includes(`/markets/${market.id}`))) || getCurrentGroup();
     return simulateDemoApi(path, opts, demoGroup, state.groups);
   }
   if (!API && import.meta.env.PROD && !isLocalHost()) {

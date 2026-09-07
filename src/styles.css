@@ -11293,8 +11293,8 @@ body.app-active:not(.focused-market-active) {
 .sidebar-group-copy { min-width: 0; display: block; }
 .sidebar-group-copy strong,
 .sidebar-group-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-group-copy strong { font-size: 13px; font-weight: 650; }
-.sidebar-group-copy small { margin-top: 2px; color: var(--text-3); font-size: 10px; }
+.sidebar-group-copy strong { font-size: 14px; font-weight: 650; }
+.sidebar-group-copy small { margin-top: 3px; color: var(--text-3); font-size: 12px; }
 .sidebar-group.active .sidebar-group-copy strong { color: var(--brand-acid); }
 
 .sidebar-empty {
@@ -11325,7 +11325,7 @@ body.app-active:not(.focused-market-active) {
   color: var(--text-2);
   cursor: pointer;
   text-align: left;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 .sidebar-actions button:hover { background: rgba(255,255,255,.04); color: var(--text); }
@@ -11366,7 +11366,7 @@ body.app-active:not(.focused-market-active) {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.topnav.is-market-nav .primary-nav { display: none; }
+.topnav.is-market-nav .primary-nav { display: flex; }
 .topnav.is-market-nav .group-tabs { flex: 1; }
 
 .mobile-app-nav { display: none; }
@@ -11639,7 +11639,7 @@ body.app-active:not(.focused-market-active) {
     background:rgba(10,14,17,.96);
     backdrop-filter:blur(18px);
   }
-  .mobile-app-nav button { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; border:0; background:transparent; color:#687680; font-size:9px; font-weight:650; }
+  .mobile-app-nav button { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; border:0; background:transparent; color:#76848d; font-size:11px; font-weight:650; }
   .mobile-app-nav button.active { color:var(--brand-acid); }
   .mobile-app-nav svg { width:19px; height:19px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
   .mobile-app-nav .mobile-create svg { width:30px; height:30px; padding:6px; border-radius:10px; background:var(--brand-acid); color:var(--brand-ink); stroke-width:2; }
@@ -12982,15 +12982,16 @@ body.app-active:not(.focused-market-active) {
 .group-home-layout.home-market-only .market-list-head { margin:0 0 14px; padding:0; border:0; }
 .group-home-layout.home-market-only .market-list-head > div:first-child { display:grid; gap:3px; }
 .group-home-layout.home-market-only .market-list-head h2 { margin:0; font-size:22px; letter-spacing:-.035em; }
-.group-home-layout.home-market-only .market-list-head p { margin:0; color:#74818b; font-size:11px; }
+.group-home-layout.home-market-only .market-list-head p { margin:0; color:#8b98a1; font-size:13px; }
 .group-home-layout.home-market-only .market-list-tools { gap:8px; }
 .group-home-layout.home-market-only .market-status-tabs,
 .group-home-layout.home-market-only .market-sort-control { min-height:34px; border-color:rgba(157,171,181,.1); border-radius:8px; background:rgba(255,255,255,.025); }
 
-.home-market-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.home-market-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
 .home-market-card {
   min-width:0;
-  padding:14px;
+  min-height:190px;
+  padding:18px;
   display:flex;
   flex-direction:column;
   border:1px solid rgba(157,171,181,.1);
@@ -12999,29 +13000,29 @@ body.app-active:not(.focused-market-active) {
   transition:border-color .18s ease,background .18s ease,transform .18s ease;
 }
 .home-market-card:hover { border-color:rgba(157,171,181,.2); background:#151d22; transform:translateY(-1px); }
-.home-market-card > header { min-height:42px; display:grid; grid-template-columns:34px minmax(0,1fr) 22px; gap:9px; align-items:start; }
-.home-market-thumb { width:34px; height:34px; display:grid; place-items:center; overflow:hidden; border-radius:8px; background:#20282e; font-size:18px; }
+.home-market-card > header { min-height:50px; display:grid; grid-template-columns:40px minmax(0,1fr) 26px; gap:11px; align-items:start; }
+.home-market-thumb { width:40px; height:40px; display:grid; place-items:center; overflow:hidden; border-radius:9px; background:#20282e; font-size:20px; }
 .home-market-thumb img { width:100%; height:100%; object-fit:cover; }
-.home-market-card > header > button:nth-child(2) { min-width:0; padding:1px 0 0; color:#e8edef; text-align:left; border:0; background:transparent; font-size:13px; font-weight:600; line-height:1.35; cursor:pointer; }
+.home-market-card > header > button:nth-child(2) { min-width:0; padding:1px 0 0; color:#e8edef; text-align:left; border:0; background:transparent; font-size:15px; font-weight:650; line-height:1.35; cursor:pointer; }
 .home-market-card > header > button:nth-child(2):hover { color:#fff; }
 .home-market-share { width:22px; height:22px; display:grid; place-items:center; color:#65737d; border:0; border-radius:6px; background:transparent; cursor:pointer; }
 .home-market-share:hover { color:#dce3e7; background:rgba(255,255,255,.05); }
 .home-market-share svg { width:13px; height:13px; }
-.home-market-quotes { margin-top:13px; display:grid; gap:7px; }
+.home-market-quotes { margin-top:15px; display:grid; gap:9px; }
 .home-market-quote { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; }
 .home-market-outcome { min-width:0; padding:0; display:flex; align-items:center; justify-content:space-between; gap:8px; color:#b9c2c8; border:0; background:transparent; cursor:pointer; }
-.home-market-outcome span { overflow:hidden; font-size:11px; white-space:nowrap; text-overflow:ellipsis; }
-.home-market-outcome strong { color:#eef2f4; font:600 12px/1 "IBM Plex Mono",monospace; }
+.home-market-outcome span { overflow:hidden; font-size:13px; white-space:nowrap; text-overflow:ellipsis; }
+.home-market-outcome strong { color:#eef2f4; font:650 14px/1 "IBM Plex Mono",monospace; }
 .home-market-actions { display:flex; gap:4px; }
-.home-market-actions button { min-width:34px; height:26px; padding:0 7px; border:0; border-radius:6px; font-size:9px; font-weight:700; cursor:pointer; }
+.home-market-actions button { min-width:40px; height:32px; padding:0 9px; border:0; border-radius:7px; font-size:11px; font-weight:750; cursor:pointer; }
 .home-market-actions button:first-child { color:#54c58a; background:rgba(52,168,104,.13); }
 .home-market-actions button:last-child { color:#ef7474; background:rgba(221,70,70,.13); }
 .home-market-actions button:hover:first-child { background:rgba(52,168,104,.22); }
 .home-market-actions button:hover:last-child { background:rgba(221,70,70,.22); }
-.home-market-final { color:#74818b; font:600 9px/1 "IBM Plex Mono",monospace; text-transform:uppercase; }
-.home-market-more { margin:8px 0 0; padding:7px 0 0; color:#7f8c95; text-align:left; border:0; border-top:1px solid rgba(157,171,181,.08); background:transparent; font-size:10px; cursor:pointer; }
+.home-market-final { color:#84919a; font:600 11px/1 "IBM Plex Mono",monospace; text-transform:uppercase; }
+.home-market-more { margin:9px 0 0; padding:9px 0 0; color:#919da5; text-align:left; border:0; border-top:1px solid rgba(157,171,181,.08); background:transparent; font-size:12px; cursor:pointer; }
 .home-market-more:hover { color:#c8ff62; }
-.home-market-card > footer { margin-top:auto; padding-top:14px; display:flex; gap:9px; color:#64727c; font:500 9px/1.3 "IBM Plex Mono",monospace; }
+.home-market-card > footer { margin-top:auto; padding-top:16px; display:flex; gap:9px; color:#7e8b94; font:500 11px/1.3 "IBM Plex Mono",monospace; }
 .home-market-card > footer time { margin-left:auto; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .home-market-empty { min-height:120px; padding:22px; display:flex; align-items:center; justify-content:space-between; gap:20px; border:1px dashed rgba(157,171,181,.13); border-radius:12px; }
 .home-market-empty > div { display:grid; gap:4px; }
@@ -13071,7 +13072,7 @@ body.app-active:not(.focused-market-active) {
   .group-home-layout.home-market-only .market-list-head { align-items:flex-start; flex-direction:column; gap:12px; }
   .group-home-layout.home-market-only .market-list-tools { width:100%; justify-content:space-between; }
   .home-market-grid { grid-template-columns:1fr; gap:8px; }
-  .home-market-card { padding:13px; }
+  .home-market-card { min-height:0; padding:16px; }
   .home-market-empty { min-height:110px; align-items:flex-start; flex-direction:column; }
   .group-home .activation-progress { grid-template-columns:1fr; }
   .group-home .activation-steps { justify-content:flex-start; overflow-x:auto; }
@@ -13282,9 +13283,9 @@ body.app-active:not(.focused-market-active) {
   .group-home .group-home-mark { width:38px; height:38px; font-size:20px; }
   .group-home .group-home-identity { gap:9px; }
   .group-home .group-home-identity h1 { font-size:27px; }
-  .home-market-card { padding:12px; }
+  .home-market-card { padding:15px; }
   .home-market-actions button { min-width:32px; padding-inline:6px; }
-  .mobile-app-nav button { font-size:8px; }
+  .mobile-app-nav button { font-size:10px; }
   .portfolio-value-strip { grid-template-columns:1fr; }
   .portfolio-value-strip > div,
   .portfolio-value-strip > :nth-child(2),

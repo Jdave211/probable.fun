@@ -2,6 +2,7 @@
 // Everything here is synthetic: no API calls, no persistence.
 
 export const DEMO_GROUP_ID = "demo";
+export const PRESENTATION_GROUP_ID = "demo-lazy-boys";
 export const DEMO_EVENT_ID = "demo-event";
 export const DEMO_YES_ID = "demo-yes";
 export const DEMO_NO_ID = "demo-no";
@@ -93,9 +94,9 @@ export function buildDemoGroup(memberName) {
   };
 }
 
-export function buildPresentationDemoGroup(memberName = "Dave Jaga") {
-  const created = nowIso(-4 * 86400000);
-  const members = [memberName, "Maya Chen", "Sam Okafor", "Riley Singh", "Alex Morgan"];
+export function buildPresentationDemoGroups(memberName = "Dave Jaga") {
+  const created = new Date(new Date().getFullYear(), 0, 3, 18).toISOString();
+  const members = [...new Set([memberName, "Julian Asogwa", "Korede Adeniyi", "Joel Adejola", "Jay Jay Ezugo"])];
   const worldCupMarkets = buildPresentationEvent({
     eventId: DEMO_EVENT_ID,
     title: "Who scores the most goals today?",
@@ -106,7 +107,7 @@ export function buildPresentationDemoGroup(memberName = "Dave Jaga") {
     ],
     description: "Resolves to the player who scores the most goals across today's World Cup matches. Extra-time goals count; penalty-shootout goals do not. A tie resolves to the tied player with fewer minutes played.",
     imageUrl: "/market-images/market-007-ec1164b216.jpg",
-    creator: "Maya Chen",
+    creator: "Julian Asogwa",
     resolutionSource: "Official FIFA match reports",
     edgeCases: "If tied on goals and minutes, the market is void and stakes are returned.",
     createdAt: created,
@@ -122,7 +123,7 @@ export function buildPresentationDemoGroup(memberName = "Dave Jaga") {
     ],
     description: "Resolves Yes if Aniya visibly loses her composure, leaves the set, or needs production to pause the reunion. Otherwise resolves No.",
     imageUrl: "https://probable-fun.onrender.com/api/markets/92888e49/image",
-    creator: "Riley Singh",
+    creator: "Jay Jay Ezugo",
     resolutionSource: "The aired Love Island reunion episode",
     edgeCases: "Edited previews do not count. Only footage included in the full reunion broadcast settles the market.",
     createdAt: nowIso(-3 * 86400000),
@@ -140,14 +141,15 @@ export function buildPresentationDemoGroup(memberName = "Dave Jaga") {
       [PRESENTATION_JAY_JAY_ID, "Jay Jay Ezugo"],
     ],
     description: "Resolves to the first person in the group to complete a legally recognized marriage ceremony. An engagement alone does not count.",
-    imageUrl: null,
-    creator: "Alex Morgan",
+    imageUrl: "/marriage-market.svg",
+    creator: "Joel Adejola",
     resolutionSource: "Marriage announcement confirmed by the person and the group",
     edgeCases: "If two ceremonies occur on the same date, the earlier local ceremony time wins. If timing cannot be verified, the market is void.",
-    createdAt: nowIso(-6 * 86400000),
+    createdAt: created,
     closesAt: nowIso(540 * 86400000),
     liquidity: 7000,
   });
+  const ambientMarkets = presentationAmbientMarketSpecs(created).flatMap(spec => buildPresentationEvent(spec));
   const group = {
     id: DEMO_GROUP_ID,
     name: "Sporty Boys",
@@ -156,40 +158,50 @@ export function buildPresentationDemoGroup(memberName = "Dave Jaga") {
     createdAt: created,
     members,
     balances: Object.fromEntries(members.map(name => [name, 100000])),
-    markets: [...personalMarkets, ...worldCupMarkets, ...loveIslandMarkets],
+    markets: [...worldCupMarkets, ...loveIslandMarkets],
+  };
+  const lazyBoys = {
+    id: PRESENTATION_GROUP_ID,
+    name: "Lazy Boys",
+    emoji: "🛋️",
+    mode: "fake",
+    createdAt: created,
+    members,
+    balances: Object.fromEntries(members.map(name => [name, 100000])),
+    markets: [...personalMarkets, ...ambientMarkets],
   };
 
   const worldCupPlan = [
-    ["Maya Chen", DEMO_YES_ID, 720], ["Sam Okafor", DEMO_NO_ID, 480],
-    ["Riley Singh", PRESENTATION_HAALAND_ID, 560], ["Alex Morgan", DEMO_YES_ID, 640],
-    ["Maya Chen", DEMO_NO_ID, 380], ["Sam Okafor", PRESENTATION_HAALAND_ID, 420],
-    ["Riley Singh", DEMO_YES_ID, 850], ["Alex Morgan", DEMO_NO_ID, 510],
-    ["Sam Okafor", DEMO_YES_ID, 620], ["Maya Chen", PRESENTATION_HAALAND_ID, 360],
-    ["Alex Morgan", DEMO_YES_ID, 940], ["Riley Singh", DEMO_NO_ID, 630],
-    ["Maya Chen", DEMO_YES_ID, 740], ["Sam Okafor", DEMO_NO_ID, 460],
-    ["Alex Morgan", PRESENTATION_HAALAND_ID, 520], ["Riley Singh", DEMO_YES_ID, 1050],
-    ["Sam Okafor", PRESENTATION_HAALAND_ID, 390], ["Maya Chen", DEMO_NO_ID, 570],
-    ["Alex Morgan", DEMO_YES_ID, 680], ["Riley Singh", PRESENTATION_HAALAND_ID, 440],
-    ["Maya Chen", DEMO_YES_ID, 890], ["Sam Okafor", DEMO_NO_ID, 520],
-    ["Riley Singh", DEMO_YES_ID, 760], ["Alex Morgan", PRESENTATION_HAALAND_ID, 610],
-    ["Sam Okafor", DEMO_YES_ID, 580], ["Maya Chen", DEMO_NO_ID, 430],
-    ["Alex Morgan", DEMO_YES_ID, 1120], ["Riley Singh", DEMO_NO_ID, 650],
-    ["Maya Chen", PRESENTATION_HAALAND_ID, 470], ["Sam Okafor", DEMO_YES_ID, 795],
+    ["Dave Jaga", DEMO_YES_ID, 720], ["Julian Asogwa", DEMO_NO_ID, 480],
+    ["Korede Adeniyi", PRESENTATION_HAALAND_ID, 560], ["Joel Adejola", DEMO_YES_ID, 640],
+    ["Jay Jay Ezugo", DEMO_NO_ID, 380], ["Julian Asogwa", PRESENTATION_HAALAND_ID, 420],
+    ["Korede Adeniyi", DEMO_YES_ID, 850], ["Joel Adejola", DEMO_NO_ID, 510],
+    ["Jay Jay Ezugo", DEMO_YES_ID, 620], ["Dave Jaga", PRESENTATION_HAALAND_ID, 360],
+    ["Joel Adejola", DEMO_YES_ID, 940], ["Korede Adeniyi", DEMO_NO_ID, 630],
+    ["Dave Jaga", DEMO_YES_ID, 740], ["Julian Asogwa", DEMO_NO_ID, 460],
+    ["Joel Adejola", PRESENTATION_HAALAND_ID, 520], ["Korede Adeniyi", DEMO_YES_ID, 1050],
+    ["Jay Jay Ezugo", PRESENTATION_HAALAND_ID, 390], ["Dave Jaga", DEMO_NO_ID, 570],
+    ["Joel Adejola", DEMO_YES_ID, 680], ["Korede Adeniyi", PRESENTATION_HAALAND_ID, 440],
+    ["Dave Jaga", DEMO_YES_ID, 890], ["Julian Asogwa", DEMO_NO_ID, 520],
+    ["Korede Adeniyi", DEMO_YES_ID, 760], ["Joel Adejola", PRESENTATION_HAALAND_ID, 610],
+    ["Jay Jay Ezugo", DEMO_YES_ID, 580], ["Dave Jaga", DEMO_NO_ID, 430],
+    ["Joel Adejola", DEMO_YES_ID, 1120], ["Korede Adeniyi", DEMO_NO_ID, 650],
+    ["Dave Jaga", PRESENTATION_HAALAND_ID, 470], ["Julian Asogwa", DEMO_YES_ID, 795],
   ];
   const loveIslandPlan = [
-    ["Riley Singh", PRESENTATION_LOVE_NO_ID, 690], ["Maya Chen", PRESENTATION_LOVE_YES_ID, 410],
-    ["Alex Morgan", PRESENTATION_LOVE_NO_ID, 840], ["Sam Okafor", PRESENTATION_LOVE_YES_ID, 350],
-    ["Maya Chen", PRESENTATION_LOVE_NO_ID, 720], ["Riley Singh", PRESENTATION_LOVE_YES_ID, 520],
-    ["Sam Okafor", PRESENTATION_LOVE_NO_ID, 910], ["Alex Morgan", PRESENTATION_LOVE_YES_ID, 380],
-    ["Riley Singh", PRESENTATION_LOVE_NO_ID, 760], ["Maya Chen", PRESENTATION_LOVE_YES_ID, 440],
-    ["Alex Morgan", PRESENTATION_LOVE_NO_ID, 1080], ["Sam Okafor", PRESENTATION_LOVE_YES_ID, 560],
-    ["Maya Chen", PRESENTATION_LOVE_NO_ID, 670], ["Riley Singh", PRESENTATION_LOVE_YES_ID, 490],
-    ["Sam Okafor", PRESENTATION_LOVE_NO_ID, 990], ["Alex Morgan", PRESENTATION_LOVE_YES_ID, 420],
-    ["Riley Singh", PRESENTATION_LOVE_NO_ID, 810], ["Maya Chen", PRESENTATION_LOVE_YES_ID, 370],
-    ["Alex Morgan", PRESENTATION_LOVE_NO_ID, 930], ["Sam Okafor", PRESENTATION_LOVE_YES_ID, 460],
-    ["Maya Chen", PRESENTATION_LOVE_NO_ID, 880], ["Riley Singh", PRESENTATION_LOVE_YES_ID, 510],
-    ["Sam Okafor", PRESENTATION_LOVE_NO_ID, 1040], ["Alex Morgan", PRESENTATION_LOVE_YES_ID, 450],
-    ["Riley Singh", PRESENTATION_LOVE_NO_ID, 790], ["Maya Chen", PRESENTATION_LOVE_YES_ID, 405],
+    ["Korede Adeniyi", PRESENTATION_LOVE_NO_ID, 690], ["Dave Jaga", PRESENTATION_LOVE_YES_ID, 410],
+    ["Joel Adejola", PRESENTATION_LOVE_NO_ID, 840], ["Julian Asogwa", PRESENTATION_LOVE_YES_ID, 350],
+    ["Dave Jaga", PRESENTATION_LOVE_NO_ID, 720], ["Korede Adeniyi", PRESENTATION_LOVE_YES_ID, 520],
+    ["Julian Asogwa", PRESENTATION_LOVE_NO_ID, 910], ["Jay Jay Ezugo", PRESENTATION_LOVE_YES_ID, 380],
+    ["Korede Adeniyi", PRESENTATION_LOVE_NO_ID, 760], ["Dave Jaga", PRESENTATION_LOVE_YES_ID, 440],
+    ["Joel Adejola", PRESENTATION_LOVE_NO_ID, 1080], ["Julian Asogwa", PRESENTATION_LOVE_YES_ID, 560],
+    ["Dave Jaga", PRESENTATION_LOVE_NO_ID, 670], ["Korede Adeniyi", PRESENTATION_LOVE_YES_ID, 490],
+    ["Julian Asogwa", PRESENTATION_LOVE_NO_ID, 990], ["Joel Adejola", PRESENTATION_LOVE_YES_ID, 420],
+    ["Korede Adeniyi", PRESENTATION_LOVE_NO_ID, 810], ["Dave Jaga", PRESENTATION_LOVE_YES_ID, 370],
+    ["Joel Adejola", PRESENTATION_LOVE_NO_ID, 930], ["Julian Asogwa", PRESENTATION_LOVE_YES_ID, 460],
+    ["Dave Jaga", PRESENTATION_LOVE_NO_ID, 880], ["Korede Adeniyi", PRESENTATION_LOVE_YES_ID, 510],
+    ["Julian Asogwa", PRESENTATION_LOVE_NO_ID, 1040], ["Joel Adejola", PRESENTATION_LOVE_YES_ID, 450],
+    ["Korede Adeniyi", PRESENTATION_LOVE_NO_ID, 790], ["Dave Jaga", PRESENTATION_LOVE_YES_ID, 405],
   ];
   [...worldCupPlan, ...loveIslandPlan].forEach(([participant, outcomeId, amount], index) => applyDemoTrade(group, {
     participant,
@@ -199,24 +211,143 @@ export function buildPresentationDemoGroup(memberName = "Dave Jaga") {
     action: "buy",
     createdAt: nowIso((-3.5 * 86400000) + index * 90 * 60 * 1000),
   }));
-  seedPersonalPresentationMarket(group);
-  return group;
+  seedPersonalPresentationMarket(lazyBoys);
+  seedAmbientPresentationMarkets(lazyBoys);
+  return [group, lazyBoys];
+}
+
+export function buildPresentationDemoGroup(memberName = "Dave Jaga") {
+  return buildPresentationDemoGroups(memberName)[0];
+}
+
+function presentationAmbientMarketSpecs(createdAt) {
+  return [
+    {
+      eventId: "demo-ambient-late-dinner",
+      title: "Who arrives last to the next group dinner?",
+      outcomes: [["demo-late-dave", "Dave Jaga"], ["demo-late-joel", "Joel Adejola"], ["demo-late-jay", "Jay Jay Ezugo"]],
+      description: "Resolves to the last listed person to arrive at the next full group dinner.",
+      imageUrl: null,
+      creator: "Julian Asogwa",
+      resolutionSource: "Group arrival time",
+      edgeCases: "Someone who cancels before the reservation is excluded.",
+      createdAt,
+      closesAt: nowIso(18 * 86400000),
+      liquidity: 3200,
+    },
+    {
+      eventId: "demo-ambient-new-city",
+      title: "Who moves to a new city first?",
+      outcomes: [["demo-city-julian", "Julian Asogwa"], ["demo-city-korede", "Korede Adeniyi"], ["demo-city-joel", "Joel Adejola"]],
+      description: "Resolves to the first listed person who changes their primary residence to another city.",
+      imageUrl: "/market-images/market-006-1f1254052d.jpg",
+      creator: "Dave Jaga",
+      resolutionSource: "Confirmed move announcement",
+      edgeCases: "Trips and temporary stays under three months do not count.",
+      createdAt,
+      closesAt: nowIso(300 * 86400000),
+      liquidity: 3600,
+    },
+    {
+      eventId: "demo-ambient-trip",
+      title: "Where will the next group trip be?",
+      outcomes: [["demo-trip-lagos", "Lagos"], ["demo-trip-london", "London"], ["demo-trip-toronto", "Toronto"], ["demo-trip-barcelona", "Barcelona"]],
+      description: "Resolves to the destination booked for the next trip with at least four group members.",
+      imageUrl: "/market-images/market-010-b1ca940411.jpg",
+      creator: "Jay Jay Ezugo",
+      resolutionSource: "Confirmed group booking",
+      edgeCases: "A destination not listed voids the market.",
+      createdAt,
+      closesAt: nowIso(120 * 86400000),
+      liquidity: 3600,
+    },
+    {
+      eventId: "demo-ambient-fifa-night",
+      title: "Who wins the next FIFA night?",
+      outcomes: [["demo-fifa-joel", "Joel Adejola"], ["demo-fifa-jay", "Jay Jay Ezugo"], ["demo-fifa-korede", "Korede Adeniyi"]],
+      description: "Resolves to the winner of the next completed group FIFA tournament.",
+      imageUrl: "/ball.png",
+      creator: "Joel Adejola",
+      resolutionSource: "Final tournament bracket",
+      edgeCases: "The tournament must include all three listed players.",
+      createdAt,
+      closesAt: nowIso(12 * 86400000),
+      liquidity: 3000,
+    },
+    {
+      eventId: "demo-ambient-founder",
+      title: "Who starts a company next?",
+      outcomes: [["demo-founder-julian", "Julian Asogwa"], ["demo-founder-joel", "Joel Adejola"], ["demo-founder-jay", "Jay Jay Ezugo"], ["demo-founder-korede", "Korede Adeniyi"]],
+      description: "Resolves to the first listed person to publicly launch a company with a working product or paying customer.",
+      imageUrl: null,
+      creator: "Korede Adeniyi",
+      resolutionSource: "Public launch confirmed by the founder",
+      edgeCases: "Unlaunched side projects do not count.",
+      createdAt,
+      closesAt: nowIso(420 * 86400000),
+      liquidity: 3800,
+    },
+    {
+      eventId: "demo-ambient-trip-attendance",
+      title: "Will everyone make the annual group trip?",
+      outcomes: [["demo-trip-all-yes", "Yes"], ["demo-trip-all-no", "No"]],
+      description: "Resolves Yes if every confirmed member arrives for at least one full day of the annual trip.",
+      imageUrl: "/market-images/market-013-5190a064a8.jpg",
+      creator: "Julian Asogwa",
+      resolutionSource: "Group attendance on the trip",
+      edgeCases: "A cancellation before bookings are finalized does not count as a miss.",
+      createdAt,
+      closesAt: nowIso(80 * 86400000),
+      liquidity: 3200,
+    },
+  ];
+}
+
+function seedAmbientPresentationMarkets(group) {
+  const participants = ["Dave Jaga", "Julian Asogwa", "Korede Adeniyi", "Joel Adejola", "Jay Jay Ezugo"];
+  const eventIds = [...new Set(group.markets.map(market => market.eventId))]
+    .filter(eventId => String(eventId).startsWith("demo-ambient-"));
+  eventIds.forEach((eventId, eventIndex) => {
+    const market = group.markets.find(item => item.eventId === eventId);
+    const outcomes = market?.outcomes || [];
+    const count = 5 + (eventIndex % 4);
+    for (let index = 0; index < count; index += 1) {
+      const outcome = outcomes[(index * 2 + eventIndex) % outcomes.length];
+      const amount = 160 + ((index * 137 + eventIndex * 83) % 390);
+      applyDemoTrade(group, {
+        participant: participants[(index + eventIndex) % participants.length],
+        outcomeId: outcome.id,
+        side: "yes",
+        amount,
+        action: "buy",
+        createdAt: nowIso((-46 * 60 + eventIndex * 190 + index * 71) * 60000),
+      });
+    }
+  });
 }
 
 function seedPersonalPresentationMarket(group) {
   let tradeIndex = 0;
-  const startOffset = -5.5 * 86400000;
+  const participantMap = {
+    "Maya Chen": "Dave Jaga",
+    "Sam Okafor": "Julian Asogwa",
+    "Riley Singh": "Korede Adeniyi",
+    "Alex Morgan": "Joel Adejola",
+  };
+  const timelineStart = new Date(new Date().getFullYear(), 0, 8, 12).getTime();
+  const timelineEnd = Date.now() - (6 * 60 * 60 * 1000);
   const place = ({ participant, outcomeId, amount = 0, action = "buy", shares = 0 }) => {
-    const irregularMinutes = tradeIndex * 173 + ((tradeIndex * 47) % 89);
+    const progress = Math.min(.995, (tradeIndex + ((tradeIndex * 7) % 5) / 8) / 29.5);
+    const createdAt = new Date(timelineStart + ((timelineEnd - timelineStart) * progress)).toISOString();
     tradeIndex += 1;
     return applyDemoTrade(group, {
-      participant,
+      participant: participantMap[participant] || participant,
       outcomeId,
       amount,
       action,
       shares,
       side: "yes",
-      createdAt: nowIso(startOffset + irregularMinutes * 60000),
+      createdAt,
     });
   };
   const price = outcomeId => Number(group.markets.find(market => market.outcomeId === outcomeId)?.probability || 0);
