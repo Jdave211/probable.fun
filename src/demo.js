@@ -230,6 +230,7 @@ export function buildPresentationDemoGroups(memberName = "Dave Jaga") {
     action: "buy",
     createdAt: nowIso((-3.5 * 86400000) + index * 90 * 60 * 1000),
   }));
+  smoothBinaryPresentationHistory(loveIslandGroup, PRESENTATION_LOVE_EVENT_ID);
   seedPersonalPresentationMarket(lazyBoys);
   seedAmbientPresentationMarkets(lazyBoys);
   return [group, loveIslandGroup, lazyBoys];
@@ -237,6 +238,25 @@ export function buildPresentationDemoGroups(memberName = "Dave Jaga") {
 
 export function buildPresentationDemoGroup(memberName = "Dave Jaga") {
   return buildPresentationDemoGroups(memberName)[0];
+}
+
+function smoothBinaryPresentationHistory(group, eventId) {
+  const eventMarkets = group.markets.filter(market => market.eventId === eventId);
+  if (eventMarkets.length !== 2) return;
+  const timestamps = eventMarkets[0].probabilityHistory.map(point => point.createdAt);
+  const finalYes = Number(eventMarkets[0].probability || .5);
+  const denominator = Math.max(1, timestamps.length - 1);
+  eventMarkets.forEach((market, marketIndex) => {
+    const finalProbability = marketIndex === 0 ? finalYes : 1 - finalYes;
+    market.probabilityHistory = timestamps.map((createdAt, index) => {
+      const progress = index / denominator;
+      const smoothProgress = progress * progress * (3 - (2 * progress));
+      return {
+        createdAt,
+        probability: .5 + ((finalProbability - .5) * smoothProgress),
+      };
+    });
+  });
 }
 
 function presentationAmbientMarketSpecs(createdAt) {
