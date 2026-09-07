@@ -9,6 +9,7 @@ backend/data/store.json
 .env
 .env.*.local
 .playwright-cli
+supabase/.temp/
 
 # local tooling/output
 .claude

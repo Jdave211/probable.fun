@@ -1372,6 +1372,11 @@ def assemble_event_markets(event: dict) -> list[dict]:
     status = event["status"]
     markets: list[dict] = []
     for outcome in outcomes:
+        # Event trades are shared by every outcome. Keep them on the event's
+        # anchor market only; the frontend already discovers that shared source
+        # through the event's market collection. Serializing the same history
+        # onto every outcome made large group payloads exceed browser storage.
+        event_trades = trades if not markets else []
         outcome_trades = [trade for trade in trades if trade["outcomeId"] == outcome["id"]]
         probability = round(float(outcome.get("price") or 0), 6)
         markets.append({
@@ -1412,7 +1417,7 @@ def assemble_event_markets(event: dict) -> list[dict]:
             "resolvedAt": event.get("resolved_at"),
             "oracleProposal": event.get("oracle_proposal"),
             "trades": outcome_trades,
-            "eventTrades": trades,
+            "eventTrades": event_trades,
             "outcomes": [
                 {
                     "id": item["id"],
@@ -3015,9 +3020,22 @@ def list_groups(
 
 
 @app.get("/api/markets/{market_id}/context")
-def get_market_context(market_id: str) -> dict:
+def get_market_context(market_id: str, request: Request) -> dict:
     group = load_market_context_group(market_id)
-    groups = groups_response(compact=True, limit=20, include=group["id"]).get("groups", [])
+    identity = request_identity(request)
+    if identity:
+        claim_legacy_identity_memberships(get_db(), identity)
+        groups = groups_response(
+            compact=True,
+            limit=50,
+            include=group["id"],
+            user_id=identity.user_id,
+        ).get("groups", [])
+    else:
+        # A public market link only needs its own group context. Returning a
+        # random page of unrelated groups also lets that partial result replace
+        # a signed-in user's membership list during auth hydration.
+        groups = [group]
     return {"group": group, "groups": groups}
 
 
@@ -3633,6 +3651,7 @@ def get_group_challenge_leaderboard(group_id: str, challenge_id: str) -> dict:
     entries_by_user_id = {str(row.get("user_id")): row for row in entries if row.get("user_id")}
     entries_by_member = {str(row.get("participant") or "").casefold(): row for row in entries}
     clubs = {str(club.get("id")): club for club in LEAGUE_PREDICTORS[predictor_id].get("clubs") or []}
+    picks_visible = predictor_locked(LEAGUE_PREDICTORS[predictor_id])
     rows = []
     for member_record in members:
         member = clean_person(member_record.get("name"))
@@ -3649,6 +3668,11 @@ def get_group_challenge_leaderboard(group_id: str, challenge_id: str) -> dict:
             "submittedAt": assembled.get("submittedAt") if assembled else None,
             "champion": champion.get("name") if champion else None,
             "championLogoUrl": champion.get("logoUrl") if champion else None,
+            "topPicks": [
+                clubs.get(str(club_id), {}).get("name")
+                for club_id in (ranking or [])[:3]
+                if clubs.get(str(club_id), {}).get("name")
+            ] if picks_visible else [],
             "score": None,
         })
     rows.sort(key=lambda row: (not row["submitted"], -(row["picked"] or 0), row["participant"].casefold()))
@@ -3693,6 +3717,11 @@ def get_season_prediction_entries(challenge_id: str) -> dict:
             "submittedAt": assembled.get("submittedAt"),
             "champion": champion.get("name") if champion else None,
             "championLogoUrl": champion.get("logoUrl") if champion else None,
+            "topPicks": [
+                clubs.get(str(club_id), {}).get("name")
+                for club_id in (ranking or [])[:3]
+                if clubs.get(str(club_id), {}).get("name")
+            ] if is_locked else [],
             "ranking": ranking,
             "score": None,
         })

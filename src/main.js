@@ -1,5 +1,5 @@
 import "./styles.css";
-import { DEMO_GROUP_ID, DEMO_NO_ID, DEMO_YES_ID, applyDemoTrade, buildDemoGroup, resolveDemoMarket, simulateDemoApi } from "./demo.js";
+import { DEMO_GROUP_ID, DEMO_NO_ID, DEMO_YES_ID, applyDemoTrade, buildDemoGroup, buildPresentationDemoGroup, resolveDemoMarket, simulateDemoApi } from "./demo.js";
 import { startTutorial, stopTutorial, tutorialOnRender } from "./tutorial.js";
 import { DEFAULT_PREDICTOR_ID, LEAGUE_PREDICTOR_LIST, LEAGUE_PREDICTOR_ROUTES as LEAGUE_PREDICTORS } from "./challenge-routes.js";
 
@@ -344,8 +344,15 @@ const MAX_MARKET_IMAGE_BYTES = 650000;
 const EVENT_CHART_COLORS = ["#2d9cff", "#f23645", "#f2c414", "#ff861c", "#8bd450", "#b87cff", "#18c3b6", "#78b7ff"];
 const BINARY_CHART_COLORS = { yes: "#2d9cff", no: "#f23645" };
 const charts = new Map();
+let chartRenderEpoch = 0;
 let gooeyCleanup = null;
 let bootRetryTimer = null;
+let realtimeChannel = null;
+let realtimeChannelKey = "";
+let realtimeConnecting = false;
+let realtimeRefreshTimer = null;
+let realtimePollTimer = null;
+let realtimeRefreshInFlight = false;
 const STORAGE_KEYS = {
   shell: "probable_shell",
   view: "probable_view",
@@ -382,6 +389,9 @@ const state = {
   authUser: null,
   authAccessToken: null,
   accountMenuOpen: false,
+  notificationsOpen: false,
+  liveStatus: "connecting",
+  liveUpdatedAt: null,
   leaderboardMode: "chart",
   leaderboardMetric: "nominal",
   portfolioChartMetric: "mark",
@@ -437,6 +447,8 @@ const state = {
   pendingUi: { marketCreate: false, welcomeCreate: false, rulesDraft: false, oddsSeed: false, suggestions: false, suggestionPreview: null, tradeMarketId: null, resolveMarketId: null },
   demoMode: false,
   demoPrevGroupId: null,
+  presentationMode: false,
+  presentationReceipt: null,
   questionSuggestions: [],
   questionSuggestionsGroupId: null,
   loaded: false,
@@ -532,15 +544,22 @@ const GENERAL_MARKET_POOL = [
 
 document.querySelector("#app").innerHTML = `
   <nav class="topnav" id="topnav">
-    <button class="logo" type="button" data-go-welcome>probable<span class="logo-dot">.</span></button>
+    <button class="logo" id="brandButton" type="button" data-go-welcome aria-label="Probable home">probable<span class="logo-dot">.</span></button>
     <div class="nav-sep" id="navSep"></div>
     <div class="group-tabs" id="groupTabs"></div>
     <div class="nav-right" id="navRight"></div>
   </nav>
 
-  <main class="main">
-    <div id="mainContent"></div>
-  </main>
+  <nav class="responsive-group-nav" id="responsiveGroupNav" aria-label="Switch group" hidden></nav>
+
+  <div class="app-frame" id="appFrame">
+    <aside class="app-sidebar" id="appSidebar" aria-label="Your groups"></aside>
+    <main class="main">
+      <div id="mainContent"></div>
+    </main>
+  </div>
+
+  <nav class="mobile-app-nav" id="mobileAppNav" aria-label="App navigation"></nav>
 
   <div class="modal-overlay hidden" id="groupModalOverlay">
     <div class="modal">
@@ -803,9 +822,14 @@ document.querySelector("#app").innerHTML = `
 `;
 
 const dom = {
+  brandButton: document.querySelector("#brandButton"),
   navSep: document.querySelector("#navSep"),
   groupTabs: document.querySelector("#groupTabs"),
   navRight: document.querySelector("#navRight"),
+  responsiveGroupNav: document.querySelector("#responsiveGroupNav"),
+  appFrame: document.querySelector("#appFrame"),
+  appSidebar: document.querySelector("#appSidebar"),
+  mobileAppNav: document.querySelector("#mobileAppNav"),
   mainContent: document.querySelector("#mainContent"),
   groupModalOverlay: document.querySelector("#groupModalOverlay"),
   joinModalOverlay: document.querySelector("#joinModalOverlay"),
@@ -902,7 +926,7 @@ document.addEventListener("input", onGlobalInput);
 document.addEventListener("submit", onGlobalSubmit);
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
-    if (state.demoMode) {
+    if (state.demoMode && !state.presentationMode) {
       exitDemo();
       return;
     }
@@ -920,6 +944,10 @@ document.addEventListener("keydown", e => {
 });
 window.addEventListener("popstate", () => {
   const route = routeFromLocation();
+  if (route.name === "wealthsimpleDemo") {
+    enterDemo({ skipTutorial: true, presentation: true });
+    return;
+  }
   applyRouteToState(route);
   if (route.name === "market" && state.loaded) openSharedMarket(route.marketId);
   if (route.name === "invite" && state.loaded) loadInvitePreview(route.token);
@@ -929,6 +957,11 @@ window.addEventListener("popstate", () => {
 
 async function init() {
   const initialRoute = routeFromLocation();
+  if (initialRoute.name === "wealthsimpleDemo") {
+    state.loaded = true;
+    enterDemo({ skipTutorial: true, presentation: true });
+    return;
+  }
   applyRouteToState(initialRoute, { replaceLegacy: true });
   render();
 
@@ -954,9 +987,12 @@ async function init() {
     console.warn("Auth session unavailable", err);
   }
 
-  supabase.auth.onAuthStateChange((_event, session) => {
+  supabase.auth.onAuthStateChange((event, session) => {
     const nextSession = session || restoreDevAuthSession();
-    applyAuthSession(nextSession);
+    const currentUserId = state.authUser?.id || null;
+    const nextUserId = nextSession?.user?.id || null;
+    const identityChanged = currentUserId !== nextUserId;
+    applyAuthSession(nextSession, { renderNow: identityChanged || event === "USER_UPDATED" });
     runStoredPendingAuthAction();
   });
 
@@ -1077,8 +1113,6 @@ async function loadInitialAppData() {
     }
     if (data.group) {
       mergeFocusedGroupContext(data.group);
-    } else if (!Array.isArray(data.groups)) {
-      setGroups(data.groups);
     }
     openSharedMarket(state.sharedMarketId);
     if (isLoggedIn()) {
@@ -1173,6 +1207,151 @@ async function refreshFocusedMarketContext(marketId) {
   return Boolean(data.group || data.groups);
 }
 
+function setLiveStatus(status) {
+  state.liveStatus = status;
+  document.querySelectorAll("[data-live-status]").forEach(host => {
+    host.innerHTML = `<i class="${esc(status)}"></i>${status === "live" ? "Live" : status === "offline" ? "Reconnecting" : "Syncing"}`;
+  });
+  document.querySelectorAll(".home-activity-panel .live-status").forEach(host => {
+    host.innerHTML = `<i class="${esc(status)}"></i>${status === "live" ? "Live" : "Syncing"}`;
+  });
+  if (state.notificationsOpen) renderNotificationsOnly();
+}
+
+function stopLiveSync() {
+  if (realtimeRefreshTimer) window.clearTimeout(realtimeRefreshTimer);
+  if (realtimePollTimer) window.clearInterval(realtimePollTimer);
+  realtimeRefreshTimer = null;
+  realtimePollTimer = null;
+  const channel = realtimeChannel;
+  realtimeChannel = null;
+  realtimeChannelKey = "";
+  realtimeConnecting = false;
+  if (channel) void loadSupabaseRuntime().then(supabase => supabase.removeChannel(channel)).catch(() => {});
+}
+
+function scheduleLiveRefresh(delay = 350) {
+  if (realtimeRefreshTimer) window.clearTimeout(realtimeRefreshTimer);
+  realtimeRefreshTimer = window.setTimeout(() => {
+    realtimeRefreshTimer = null;
+    void refreshLiveData();
+  }, delay);
+}
+
+async function ensureLiveSync() {
+  const key = state.shell === "app" && isLoggedIn() && !state.demoMode ? state.authUser?.id || "signed-in" : "";
+  if (!key) {
+    if (realtimeChannel || realtimePollTimer) stopLiveSync();
+    return;
+  }
+  if (realtimeChannelKey === key && (realtimeChannel || realtimeConnecting)) return;
+  stopLiveSync();
+  realtimeChannelKey = key;
+  realtimeConnecting = true;
+  setLiveStatus("connecting");
+  try {
+    const supabase = await loadSupabaseRuntime();
+    if (realtimeChannelKey !== key) return;
+    const tables = ["market_events", "market_outcomes", "event_trades", "event_positions", "group_members", "season_predictions", "market_resolution_approvals"];
+    let channel = supabase.channel(`probable-live-${key}`);
+    tables.forEach(table => {
+      channel = channel.on("postgres_changes", { event: "*", schema: "public", table }, () => scheduleLiveRefresh());
+    });
+    realtimeChannel = channel.subscribe(status => {
+      if (realtimeChannelKey !== key) return;
+      if (status === "SUBSCRIBED") {
+        realtimeConnecting = false;
+        setLiveStatus("live");
+      }
+      if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) setLiveStatus("offline");
+    });
+  } catch (err) {
+    realtimeConnecting = false;
+    console.warn("Realtime connection deferred", err);
+    setLiveStatus("offline");
+  }
+  realtimePollTimer = window.setInterval(() => scheduleLiveRefresh(0), 30000);
+}
+
+async function refreshLiveData() {
+  if (realtimeRefreshInFlight || state.shell !== "app" || !isLoggedIn() || state.demoMode) return;
+  realtimeRefreshInFlight = true;
+  const focusedId = state.trade.marketId || state.sharedMarketId;
+  try {
+    if (focusedId) {
+      await refreshFocusedMarketContext(focusedId);
+    } else {
+      const data = await loadGroupsForBoot();
+      if (Array.isArray(data.groups)) setGroups(data.groups);
+    }
+    normalizeSelection();
+    state.liveUpdatedAt = Date.now();
+    setLiveStatus("live");
+    refreshLiveSurfaces();
+  } catch (err) {
+    console.warn("Silent live refresh deferred", err);
+    setLiveStatus("offline");
+  } finally {
+    realtimeRefreshInFlight = false;
+  }
+}
+
+function refreshLiveSurfaces() {
+  const group = getCurrentGroup();
+  if (!group) return;
+  if (state.view === "dashboard" && !state.trade.marketId && !state.sharedMarketId) {
+    const activation = document.querySelector("[data-activation-progress]");
+    if (activation) activation.outerHTML = activationProgressHtml(group);
+    const pulse = document.querySelector("[data-group-pulse]");
+    if (pulse) pulse.outerHTML = groupPulseHtml(group);
+    const board = document.querySelector("[data-home-market-board]");
+    if (board) board.outerHTML = homeMarketBoardHtml(group);
+    const summary = document.querySelector("[data-group-home-summary]");
+    if (summary) summary.textContent = groupHomeSummary(group);
+    const activity = document.querySelector("[data-home-activity]");
+    if (activity) activity.outerHTML = homeActivityPanel(group);
+    const leaderboard = document.querySelector("[data-home-leaderboard]");
+    if (leaderboard) leaderboard.innerHTML = leaderboardPanel(group, { limit: 5, compact: true });
+    const balance = document.querySelector(".member-balance");
+    if (balance) balance.textContent = topbarMoney(group.balances?.[state.activeMember] ?? 0);
+    renderNotificationsOnly();
+    return;
+  }
+  if (state.view !== "dashboard") return;
+  const market = findMarket(state.trade.marketId || state.sharedMarketId);
+  if (!market) return;
+  const event = findEventForMarket(group, market);
+  const sortedMarkets = focusedOutcomeMarkets(event.markets || [market], event);
+  const key = event.key || market.eventId || market.id;
+  const expanded = state.expandedOutcomeEvents.has(key);
+  const visible = focusedVisibleOutcomeMarkets(sortedMarkets, market.id, expanded);
+  const legend = document.querySelector("[data-live-event-legend]");
+  if (legend) legend.innerHTML = chartMarketsForEvent(event).map((item, index) => focusedLegendItem(item, index, event)).join("");
+  const volume = document.querySelector("[data-live-event-volume]");
+  if (volume) volume.textContent = `${compactMoney(event.volume)} Vol.`;
+  const outcomes = document.querySelector("[data-live-outcome-table]");
+  if (outcomes) outcomes.innerHTML = `${visible.map(item => focusedOutcomeRow(item, market.id, sortedMarkets.indexOf(item), event)).join("")}${focusedOutcomeToggle(sortedMarkets, visible, key, expanded)}`;
+  const history = document.querySelector(".market-history-panel");
+  if (history) history.outerHTML = marketHistoryPanel(market, event);
+  const participants = document.querySelector(".market-participants");
+  const participantHtml = marketParticipants(market, event);
+  if (participants && participantHtml) participants.outerHTML = participantHtml;
+  const audit = document.querySelector("[data-settlement-audit]");
+  const auditHtml = settlementAuditPanel(market, event);
+  if (audit && auditHtml) audit.outerHTML = auditHtml;
+  const chart = charts.get(`event-${event.key}`);
+  if (chart) {
+    const config = eventChartConfig(event);
+    chart.data.labels = config.labels;
+    chart.data.datasets = config.datasets;
+    chart.options.scales.y.min = config.minY;
+    chart.options.scales.y.max = config.maxY;
+    chart.options.scales.y.ticks.stepSize = config.tickStep;
+    chart.update("none");
+  }
+  renderNotificationsOnly();
+}
+
 function isWakeTimeoutError(err) {
   return /timed out|still waking|connection timed out|waking the server/i.test(err?.message || "");
 }
@@ -1239,12 +1418,13 @@ function routeFromLocation() {
   if (parts[0] === "embed" && parts[1] === "market" && parts[2]) return { name: "embedMarket", marketId: parts[2], options: embedOptionsFromSearch(url.searchParams) };
   if (parts[0] === "embed" && parts[1] === "event" && parts[2]) return { name: "embedEvent", eventId: parts[2], options: embedOptionsFromSearch(url.searchParams) };
   if (parts[0] === "market" && parts[1]) return { name: "market", marketId: sanitizeRouteMarketId(parts.slice(1).join("/")) };
+  if (parts[0] === "demo" && parts[1] === "wealthsimple") return { name: "wealthsimpleDemo" };
   if (parts[0] === "leaderboard") return { name: "leaderboard" };
   if (parts[0] === "admin") return { name: "admin" };
   if (parts[0] === "portfolio") return { name: "positions" };
   if (parts[0] === "positions") return { name: "positions", legacyPath: "/portfolio" };
   if (parts[0] === "challenges") return { name: "challenges" };
-  if (parts[0] === "markets") return { name: "challenges", legacyPath: "/challenges" };
+  if (parts[0] === "markets" || parts[0] === "explore") return { name: "markets" };
   if (parts[0] === "p" && parts[1]) return { name: "predictorShare", code: parts[1] };
   const leaguePredictor = LEAGUE_PREDICTOR_LIST.find(predictor => predictor.route === path);
   if (leaguePredictor) return {
@@ -1312,6 +1492,7 @@ function shouldHoldAppShell() {
     route.name === "market" ||
     route.name === "embedMarket" ||
     route.name === "embedEvent" ||
+    route.name === "wealthsimpleDemo" ||
     localStorage.getItem(STORAGE_KEYS.shell) === "app" ||
     Boolean(localStorage.getItem(STORAGE_KEYS.groupId))
   );
@@ -1370,6 +1551,10 @@ function applyRouteToState(route, { replaceLegacy = false } = {}) {
     state.shell = "app";
     state.view = "challenges";
     state.trade = emptyTrade();
+  } else if (route.name === "markets") {
+    state.shell = "app";
+    state.view = "markets";
+    state.trade = emptyTrade();
   } else if (route.name === "bracket") {
     state.shell = "app";
     state.view = "bracket";
@@ -1425,10 +1610,12 @@ function routeToWelcome({ replace = false } = {}) {
 }
 
 function routeToApp({ replace = false } = {}) {
+  if (state.presentationMode) return;
   navigateTo("/app", { replace });
 }
 
 function routeToLeaderboard({ replace = false } = {}) {
+  if (state.presentationMode) return;
   navigateTo("/leaderboard", { replace });
 }
 
@@ -1437,6 +1624,7 @@ function routeToAdmin({ replace = false } = {}) {
 }
 
 function routeToPositions({ replace = false } = {}) {
+  if (state.presentationMode) return;
   navigateTo("/portfolio", { replace });
 }
 
@@ -1445,7 +1633,7 @@ function routeToChallenges({ replace = false } = {}) {
 }
 
 function routeToMarkets({ replace = false } = {}) {
-  routeToChallenges({ replace });
+  navigateTo("/markets", { replace });
 }
 
 function routeToBracket({ replace = false } = {}) {
@@ -1461,6 +1649,7 @@ function routeToPremierLeaguePredictor({ replace = false, entry = "" } = {}) {
 }
 
 function routeToMarket(marketId, { replace = false } = {}) {
+  if (state.presentationMode) return;
   if (state.demoMode) {
     // The demo market only exists in client-side state, so it can never be
     // resolved as a shared-market link. Keep the URL at /app instead of
@@ -1476,6 +1665,7 @@ function appViewFromRouteOrSaved(route, savedView = "dashboard") {
   if (route.name === "admin") return "admin";
   if (route.name === "positions") return "positions";
   if (route.name === "challenges") return "challenges";
+  if (route.name === "markets") return "markets";
   if (route.name === "bracket") return "bracket";
   if (route.name === "plPredictor") return "plPredictor";
   if (route.name === "predictorShare") return "plPredictor";
@@ -1493,7 +1683,7 @@ function routeToCurrentAppView({ replace = false } = {}) {
   if (state.view === "leaderboard") return routeToLeaderboard({ replace });
   if (state.view === "admin") return routeToAdmin({ replace });
   if (state.view === "positions") return routeToPositions({ replace });
-  if (state.view === "markets") return routeToChallenges({ replace });
+  if (state.view === "markets") return routeToMarkets({ replace });
   if (state.view === "challenges") return routeToChallenges({ replace });
   if (state.view === "bracket") return routeToBracket({ replace });
   if (state.view === "plPredictor") return routeToPremierLeaguePredictor({ replace });
@@ -1522,6 +1712,76 @@ function onKeyDown(e) {
 }
 
 async function onGlobalClick(e) {
+  const presentationScreen = e.target.closest("[data-presentation-screen]");
+  if (presentationScreen && state.presentationMode) {
+    const screen = presentationScreen.dataset.presentationScreen;
+    state.shell = "app";
+    state.sharedMarketId = null;
+    state.mobileTradeOpen = false;
+    if (screen === "market") {
+      const market = getCurrentGroup()?.markets?.find(item => item.outcomeId === DEMO_YES_ID) || getCurrentGroup()?.markets?.[0];
+      state.view = "dashboard";
+      state.trade = { marketId: market?.id || null, side: "yes", mode: "buy" };
+    } else {
+      state.trade = emptyTrade();
+      state.view = screen === "portfolio" ? "positions" : screen === "leaderboard" ? "leaderboard" : "dashboard";
+    }
+    render();
+    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+    return;
+  }
+
+  if (e.target.closest("[data-presentation-reset]") && state.presentationMode) {
+    enterDemo({ skipTutorial: true, presentation: true });
+    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+    return;
+  }
+
+  const notificationsToggle = e.target.closest("[data-notifications-toggle]");
+  if (notificationsToggle) {
+    e.preventDefault();
+    state.notificationsOpen = !state.notificationsOpen;
+    renderNotificationsOnly();
+    return;
+  }
+
+  const activityMarket = e.target.closest("[data-open-activity-market]");
+  if (activityMarket) {
+    e.preventDefault();
+    const market = findMarket(activityMarket.dataset.openActivityMarket);
+    if (market) {
+      state.notificationsOpen = false;
+      state.shell = "app";
+      state.view = "dashboard";
+      state.trade = { marketId: market.id, side: "yes", mode: "buy" };
+      state.sharedMarketId = null;
+      routeToMarket(market.id);
+      render();
+    }
+    return;
+  }
+
+  if (state.notificationsOpen && !e.target.closest("[data-notifications-menu]")) {
+    state.notificationsOpen = false;
+    renderNotificationsOnly();
+  }
+
+  if (e.target.closest("[data-activation-trade]")) {
+    const group = getCurrentGroup();
+    const event = homeMarketEvents(group, "open")[0];
+    const market = event?.markets?.find(item => item.status === "open") || event?.markets?.[0];
+    if (market) {
+      state.trade = { marketId: market.id, side: "yes", mode: "buy" };
+      routeToMarket(market.id);
+      render();
+    } else {
+      state.view = "markets";
+      routeToMarkets();
+      render();
+    }
+    return;
+  }
+
   const adminQueueFilter = e.target.closest("[data-admin-queue-filter]");
   if (adminQueueFilter) {
     state.adminQueueMode = adminQueueFilter.dataset.adminQueueFilter === "live" ? "live" : "ready";
@@ -1532,7 +1792,7 @@ async function onGlobalClick(e) {
   const openPositionsBtn = e.target.closest("[data-open-positions]");
   if (openPositionsBtn) {
     e.preventDefault();
-    if (state.demoMode) {
+    if (state.demoMode && !state.presentationMode) {
       toast("Finish or skip the demo first.");
       return;
     }
@@ -2714,7 +2974,7 @@ function onGlobalChange(e) {
   const grid = document.querySelector("[data-market-grid]");
   const group = getCurrentGroup();
   if (grid && group) {
-    grid.innerHTML = sortedMarketEvents(dashboardVisibleMarkets(group.markets)).map(event => eventCard(event)).join("");
+    grid.innerHTML = homeMarketEvents(group).slice(0, state.marketStatus === "closed" ? 6 : 9).map(event => homeEventCard(event)).join("");
     animateIn();
     return;
   }
@@ -2803,10 +3063,20 @@ async function onGlobalSubmit(e) {
     state.pendingUi.tradeMarketId = null;
     setButtonPending(submit, false);
     setGroups(data.groups);
-    try {
-      await refreshFocusedMarketContext(market.id);
-    } catch (contextErr) {
-      console.warn("Could not refresh market context after trade", contextErr);
+    if (state.presentationMode && data.trade) {
+      state.presentationReceipt = {
+        ...data.trade,
+        participant: state.activeMember,
+        side,
+        action,
+      };
+    }
+    if (!state.demoMode) {
+      try {
+        await refreshFocusedMarketContext(market.id);
+      } catch (contextErr) {
+        console.warn("Could not refresh market context after trade", contextErr);
+      }
     }
     state.trade = { marketId: market.id, side, mode: action };
     state.mobileTradeOpen = false;
@@ -3396,7 +3666,7 @@ async function loadQuestionSuggestions(groupId) {
   if (state.questionSuggestionsGroupId === groupId && state.questionSuggestions.length) return;
   state.pendingUi.suggestions = true;
   state.questionSuggestions = [];
-  render();
+  refreshSuggestedQuestionsComponent();
   try {
     const data = await api(`/api/groups/${groupId}/questions/suggest`, { method: "POST", timeoutMs: 35000 });
     if (state.currentGroupId === groupId) {
@@ -3407,11 +3677,17 @@ async function loadQuestionSuggestions(groupId) {
     state.questionSuggestions = [];
   } finally {
     state.pendingUi.suggestions = false;
-    render();
+    refreshSuggestedQuestionsComponent();
     if (state.currentGroupId && state.currentGroupId !== groupId) {
       loadQuestionSuggestions(state.currentGroupId);
     }
   }
+}
+
+function refreshSuggestedQuestionsComponent() {
+  const host = document.querySelector("[data-suggested-questions-host]");
+  if (host) host.innerHTML = suggestedQuestionsHtml();
+  updateFormSuggestChips();
 }
 
 function uniqueQuestionSuggestions(questions = [], limit = 5) {
@@ -4742,8 +5018,15 @@ async function onOracleVote(market, outcome) {
 }
 
 function render() {
+  const renderEpoch = ++chartRenderEpoch;
   destroyCharts();
   updateSuggestPreviewModal();
+  const focusedMarket = Boolean(state.trade.marketId || state.sharedMarketId);
+  document.body.classList.toggle("app-active", state.shell === "app");
+  document.body.classList.toggle("presentation-demo-active", state.presentationMode);
+  document.body.classList.toggle("welcome-active", state.shell !== "app" && state.shell !== "embed");
+  document.body.classList.toggle("focused-market-active", focusedMarket);
+  document.body.dataset.appView = state.view || "dashboard";
   const waitingForInitialAppData = state.shell === "app" && !state.loaded && (state.currentGroupId || isLoggedIn() || state.sharedMarketId || shouldHoldAppShell());
   const unresolvedMarketLink = Boolean(state.sharedMarketId && !findMarketForRoute(state.sharedMarketId));
   if (state.shell === "app" && state.view !== "markets" && state.view !== "challenges" && state.view !== "bracket" && state.view !== "plPredictor" && !getCurrentGroup() && !waitingForInitialAppData && !unresolvedMarketLink && !state.bootError) {
@@ -4767,6 +5050,8 @@ function render() {
     renderAdminVerification();
   } else if (state.view === "positions") {
     renderPositions();
+  } else if (state.view === "markets") {
+    renderMarketsHub();
   } else if (state.view === "challenges") {
     renderChallengesHub();
   } else if (state.view === "bracket") {
@@ -4786,12 +5071,43 @@ function render() {
   } else {
     renderDashboard();
   }
+  if (state.presentationMode) renderPresentationDemoControls();
   requestAnimationFrame(() => {
-    renderCharts();
+    renderCharts(renderEpoch);
     animateIn();
     hydrateWelcomeVideos();
+    if (state.presentationMode) primePresentationTrade();
     if (state.demoMode) tutorialOnRender();
   });
+}
+
+function renderPresentationDemoControls() {
+  const current = state.trade.marketId
+    ? "market"
+    : state.view === "positions"
+      ? "portfolio"
+      : state.view === "leaderboard"
+        ? "leaderboard"
+        : "group";
+  dom.mainContent.insertAdjacentHTML("afterbegin", `
+    <div class="presentation-demo-bar motion-item" aria-label="Presentation demo controls">
+      <div class="presentation-demo-label"><span>Demo</span><strong>Synthetic data · nothing is saved</strong></div>
+      <div class="presentation-demo-steps">
+        ${[["group", "1. Group"], ["market", "2. Market"], ["portfolio", "3. Portfolio"], ["leaderboard", "4. Leaderboard"]]
+          .map(([screen, label]) => `<button class="${current === screen ? "active" : ""}" type="button" data-presentation-screen="${screen}">${label}</button>`)
+          .join("")}
+      </div>
+      <button class="presentation-demo-reset" type="button" data-presentation-reset>Reset demo</button>
+    </div>`);
+}
+
+function primePresentationTrade() {
+  if (!state.presentationMode || !state.trade.marketId || state.presentationReceipt) return;
+  const input = document.querySelector(".trade-form-el .trade-input");
+  const market = findMarket(state.trade.marketId);
+  if (!input || !market) return;
+  input.value = "1000";
+  renderTradePreview(market, 1000);
 }
 
 function renderRouteLoading(message) {
@@ -4805,22 +5121,169 @@ function renderRouteLoading(message) {
     </section>`;
 }
 
+function appNavIcon(name) {
+  const icons = {
+    home: '<path d="M3 10.5 12 3l9 7.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 19.5z"/><path d="M9 21v-7h6v7"/>',
+    explore: '<circle cx="11" cy="11" r="7"/><path d="m16.2 16.2 4.3 4.3"/>',
+    challenge: '<path d="M8 4h8v3a4 4 0 0 1-8 0z"/><path d="M8 6H4v1a4 4 0 0 0 4 4m8-5h4v1a4 4 0 0 1-4 4M12 11v5m-4 4h8m-7-4h6"/>',
+    portfolio: '<path d="M4 19V9m5 10V5m5 14v-7m5 7V3"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    people: '<circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2m1-14a3 3 0 0 1 0 6m2 3a5 5 0 0 1 3 4.5V20"/>',
+    bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/>',
+  };
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.home}</svg>`;
+}
+
+function relativeActivityTime(value) {
+  const time = new Date(value || 0).getTime();
+  if (!Number.isFinite(time) || !time) return "now";
+  const minutes = Math.max(0, Math.round((Date.now() - time) / 60000));
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  return days < 14 ? `${days}d` : fmtDate(value);
+}
+
+function groupRecentActivity(group, limit = 8) {
+  const rows = [];
+  const seenEvents = new Set();
+  for (const market of group?.markets || []) {
+    if (market.eventId) {
+      if (seenEvents.has(market.eventId)) continue;
+      seenEvents.add(market.eventId);
+      for (const trade of market.eventTrades || []) {
+        const target = (group.markets || []).find(item => item.eventId === market.eventId && item.outcomeId === trade.outcomeId) || market;
+        rows.push({
+          id: trade.id,
+          marketId: target.id,
+          title: sampleEventTitle(target),
+          outcome: tradeDisplayOutcomeTitle(trade, target),
+          participant: trade.participant || "Trader",
+          action: String(trade.action || "buy").toLowerCase(),
+          amount: tradeCashAmount(trade),
+          createdAt: trade.createdAt || trade.timestamp || "",
+        });
+      }
+      continue;
+    }
+    for (const trade of market.trades || []) {
+      rows.push({
+        id: trade.id,
+        marketId: market.id,
+        title: sampleEventTitle(market),
+        outcome: String(trade.side || "yes").toUpperCase(),
+        participant: trade.participant || "Trader",
+        action: String(trade.action || "buy").toLowerCase(),
+        amount: tradeCashAmount(trade),
+        createdAt: trade.createdAt || trade.timestamp || "",
+      });
+    }
+  }
+  return rows
+    .sort((a, b) => eventTime(b.createdAt) - eventTime(a.createdAt))
+    .slice(0, limit);
+}
+
+function groupNotificationItems(group) {
+  if (!group) return [];
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+  const events = marketEvents(group.markets || []);
+  const rows = [];
+  groupRecentActivity(group, 5)
+    .filter(item => item.participant !== state.activeMember)
+    .forEach(item => rows.push({
+      kind: "trade",
+      marketId: item.marketId,
+      title: `${item.participant} ${item.action === "sell" ? "sold" : "bought"} ${item.outcome}`,
+      detail: `${item.title} · ${money(item.amount)}`,
+      createdAt: item.createdAt,
+    }));
+  (group.memberRecords || [])
+    .filter(member => member.name !== state.activeMember && eventTime(member.joinedAt) > now - 7 * day)
+    .forEach(member => rows.push({ kind: "invite", title: `${member.name} joined ${group.name}`, detail: "New group member", createdAt: member.joinedAt }));
+  events.forEach(event => {
+    const market = event.markets.find(item => item.status === "open") || event.markets[0];
+    const closeTime = eventTime(event.closesAt);
+    if (eventStatus(event) === "open" && closeTime > now && closeTime - now <= day) {
+      rows.push({ kind: "closing", marketId: market?.id, title: "Closing soon", detail: event.title, createdAt: event.closesAt });
+    } else if (eventStatus(event) === "closed") {
+      rows.push({ kind: "settle", marketId: market?.id, title: "Ready to settle", detail: event.title, createdAt: event.closesAt });
+    } else if (eventStatus(event) === "resolved" && eventTime(event.resolvedAt) > now - 7 * day) {
+      rows.push({ kind: "resolved", marketId: market?.id, title: `Resolved · ${eventResolvedOutcome(event)?.label || "result posted"}`, detail: event.title, createdAt: event.resolvedAt });
+    }
+  });
+  const leader = leaderboardEntries(group)[0];
+  if (leader) rows.push({ kind: "leader", title: `${leader.name} leads ${group.name}`, detail: `${leaderboardGainLabel(leader)} · ${leader.trades} trades`, createdAt: groupRecentActivity(group, 1)[0]?.createdAt || group.createdAt });
+  return rows.sort((a, b) => eventTime(b.createdAt) - eventTime(a.createdAt)).slice(0, 10);
+}
+
+function notificationsMenuHtml(group) {
+  const items = groupNotificationItems(group);
+  return `<div class="notifications-menu" data-notifications-menu>
+    <button class="notifications-toggle" type="button" data-notifications-toggle aria-label="Activity and notifications" aria-expanded="${state.notificationsOpen}">
+      ${appNavIcon("bell")}${items.length ? `<span>${Math.min(items.length, 9)}</span>` : ""}
+    </button>
+    ${state.notificationsOpen ? `<div class="notifications-popover">
+      <header><div><strong>What’s happening</strong><span>${esc(group.name)}</span></div><i class="live-dot ${state.liveStatus}"></i></header>
+      <div class="notifications-list">${items.length ? items.map(item => `<button type="button" ${item.marketId ? `data-open-activity-market="${esc(item.marketId)}"` : ""}>
+        <i class="notification-icon ${esc(item.kind)}"></i><span><strong>${esc(item.title)}</strong><small>${esc(item.detail)}</small></span><time>${esc(relativeActivityTime(item.createdAt))}</time>
+      </button>`).join("") : `<p>You’re all caught up.</p>`}</div>
+      <footer><span class="live-dot ${state.liveStatus}"></span>${state.liveStatus === "live" ? "Updating live" : state.liveStatus === "offline" ? "Reconnecting" : "Connecting"}</footer>
+    </div>` : ""}
+  </div>`;
+}
+
+function renderNotificationsOnly() {
+  const host = document.querySelector("[data-notifications-menu]");
+  const group = getCurrentGroup();
+  if (host && group) host.outerHTML = notificationsMenuHtml(group);
+}
+
 function renderNav() {
-  document.querySelector("#topnav").style.display = state.shell === "embed" ? "none" : "";
+  const topnav = document.querySelector("#topnav");
+  topnav.style.display = state.shell === "embed" ? "none" : "";
   const navGroups = visibleNavGroups();
   const inApp = state.shell === "app";
-  const showAppNavigation = inApp && isLoggedIn();
-  const hasGroups = showAppNavigation && navGroups.length > 0;
+  const showAppNavigation = inApp && (isLoggedIn() || state.presentationMode);
+  const group = showAppNavigation ? getCurrentGroup() : null;
+  const focusedMarket = Boolean(state.trade.marketId || state.sharedMarketId);
+  topnav.classList.toggle("is-app-nav", showAppNavigation);
+  topnav.classList.toggle("is-market-nav", focusedMarket);
+  dom.appFrame?.classList.toggle("has-sidebar", showAppNavigation && !focusedMarket);
+  dom.brandButton.toggleAttribute("data-go-welcome", !showAppNavigation);
+  dom.brandButton.toggleAttribute("data-go-dashboard", showAppNavigation);
+  dom.brandButton.setAttribute("aria-label", showAppNavigation ? "Open group home" : "Probable home");
   dom.navSep.style.display = showAppNavigation ? "" : "none";
   dom.groupTabs.innerHTML = showAppNavigation
-    ? `<button class="group-tab challenge-nav-tab ${state.view === "challenges" ? "active" : ""}" type="button" data-go-challenges>Challenges</button>${hasGroups ? `<button class="group-add-btn" type="button" data-group-id="__new" aria-label="Add group or challenge">+</button>${navGroups.map(g => `<button class="group-tab ${g.id === getCurrentGroup()?.id && state.view === "dashboard" ? "active" : ""}" type="button" data-group-id="${g.id}">${esc(g.emoji)} ${esc(g.name)}</button>`).join("")}` : ""}`
+    ? state.presentationMode
+      ? `<div class="primary-nav presentation-primary-nav" aria-label="Demo navigation">
+        <button class="primary-nav-item ${state.view === "dashboard" && !focusedMarket ? "active" : ""}" type="button" data-presentation-screen="group">${appNavIcon("home")}<span>Group</span></button>
+        <button class="primary-nav-item ${focusedMarket ? "active" : ""}" type="button" data-presentation-screen="market">${appNavIcon("explore")}<span>Market</span></button>
+        <button class="primary-nav-item ${state.view === "positions" ? "active" : ""}" type="button" data-presentation-screen="portfolio">${appNavIcon("portfolio")}<span>Portfolio</span></button>
+        <button class="primary-nav-item ${state.view === "leaderboard" ? "active" : ""}" type="button" data-presentation-screen="leaderboard">${appNavIcon("challenge")}<span>Leaderboard</span></button>
+      </div>`
+      : `<div class="primary-nav" aria-label="Primary navigation">
+        <button class="primary-nav-item ${state.view === "dashboard" ? "active" : ""}" type="button" data-go-dashboard>${appNavIcon("home")}<span>Home</span></button>
+        <button class="primary-nav-item ${state.view === "markets" ? "active" : ""}" type="button" data-go-markets>${appNavIcon("explore")}<span>Explore</span></button>
+        <button class="primary-nav-item ${state.view === "challenges" || state.view === "bracket" || state.view === "plPredictor" ? "active" : ""}" type="button" data-go-challenges>${appNavIcon("challenge")}<span>Challenges</span></button>
+        <button class="primary-nav-item ${state.view === "positions" ? "active" : ""}" type="button" data-open-positions>${appNavIcon("portfolio")}<span>Portfolio</span></button>
+      </div>`
     : "";
 
-  const group = inApp && isLoggedIn() ? getCurrentGroup() : null;
   const displayName = authDisplayName() || state.activeMember || "User";
   const balance = group?.balances?.[state.activeMember] ?? 0;
 
-  dom.navRight.innerHTML = group ? `
+  dom.navRight.innerHTML = state.presentationMode ? `
+    <span class="presentation-nav-badge">Presentation demo</span>
+    <div class="member-pill" title="Dave Jaga">
+      <span class="member-name">Dave Jaga</span>
+      <span class="member-balance">${topbarMoney(balance)}</span>
+    </div>
+  ` : group ? `
+    ${notificationsMenuHtml(group)}
     <div class="member-pill" title="${esc(displayName)}">
       <span class="member-name">${esc(displayName)}</span>
       <span class="member-balance">${topbarMoney(balance)}</span>
@@ -4830,6 +5293,46 @@ function renderNav() {
     <button class="btn btn-primary btn-sm nav-enter" type="button" data-enter-app>Enter app</button>
     ${accountIndicatorHtml()}
 	  `;
+
+  if (dom.responsiveGroupNav) {
+    dom.responsiveGroupNav.hidden = !showAppNavigation || focusedMarket || navGroups.length < 2;
+    dom.responsiveGroupNav.innerHTML = showAppNavigation && !focusedMarket
+      ? navGroups.map(item => `<button class="${item.id === group?.id ? "active" : ""}" type="button" data-group-id="${esc(item.id)}"><span>${esc(item.emoji || "◎")}</span>${esc(item.name)}</button>`).join("")
+      : "";
+  }
+
+  if (dom.appSidebar) {
+    dom.appSidebar.hidden = !showAppNavigation || focusedMarket;
+    dom.appSidebar.innerHTML = showAppNavigation ? `
+      <div class="sidebar-section">
+        <div class="sidebar-label"><span>Your groups</span><button type="button" data-group-id="__new" aria-label="Add group">+</button></div>
+        <div class="sidebar-groups">
+          ${navGroups.map(g => {
+            const openCount = marketEvents(g.markets || []).filter(event => eventStatus(event) === "open").length;
+            return `<button class="sidebar-group ${g.id === group?.id && state.view === "dashboard" ? "active" : ""}" type="button" data-group-id="${esc(g.id)}">
+              <span class="sidebar-group-mark">${esc(g.emoji || "◎")}</span>
+              <span class="sidebar-group-copy"><strong>${esc(g.name)}</strong><small>${openCount} open · ${(g.members || []).length} members</small></span>
+            </button>`;
+          }).join("") || `<div class="sidebar-empty"><strong>No groups yet</strong><span>Create one or join your friends.</span></div>`}
+        </div>
+      </div>
+      <div class="sidebar-actions" ${state.presentationMode ? "hidden" : ""}>
+        <button type="button" data-create-group>${appNavIcon("plus")}<span>Create group</span></button>
+        <button type="button" data-join-group>${appNavIcon("people")}<span>Join group</span></button>
+      </div>` : "";
+  }
+
+  if (dom.mobileAppNav) {
+    dom.mobileAppNav.hidden = !showAppNavigation || focusedMarket;
+    dom.mobileAppNav.innerHTML = showAppNavigation ? `
+      <button class="${state.view === "dashboard" ? "active" : ""}" type="button" data-go-dashboard>${appNavIcon("home")}<span>Home</span></button>
+      <button class="${state.view === "markets" ? "active" : ""}" type="button" data-go-markets>${appNavIcon("explore")}<span>Explore</span></button>
+      <button class="mobile-create" type="button" data-new-market>${appNavIcon("plus")}<span>Create</span></button>
+      <button class="${state.view === "challenges" || state.view === "bracket" || state.view === "plPredictor" ? "active" : ""}" type="button" data-go-challenges>${appNavIcon("challenge")}<span>Challenges</span></button>
+      <button class="${state.view === "positions" ? "active" : ""}" type="button" data-open-positions>${appNavIcon("portfolio")}<span>Portfolio</span></button>` : "";
+  }
+
+  void ensureLiveSync();
 }
 
 function hydrateWelcomeVideos() {
@@ -4853,28 +5356,28 @@ function hydrateWelcomeVideos() {
 }
 
 function visibleNavGroups() {
+  if (state.presentationMode) return state.groups.filter(group => group.id === DEMO_GROUP_ID);
   if (state.shell !== "app" || !isLoggedIn()) return [];
   return selectableNavGroups();
 }
 
 function selectableNavGroups() {
-  const activeId = state.currentGroupId;
   const byLabel = new Map();
   state.groups.filter(group => group.id !== DEMO_GROUP_ID && groupHasCurrentMember(group) && !isPbMyMarketsGroup(group)).forEach(group => {
     const key = `${String(group.emoji || "").trim().toLowerCase()}::${String(group.name || "").trim().toLowerCase()}`;
     const current = byLabel.get(key);
-    if (!current || groupNavSortScore(group, activeId) > groupNavSortScore(current, activeId)) byLabel.set(key, group);
+    if (!current || groupNavSortScore(group) > groupNavSortScore(current)) byLabel.set(key, group);
   });
-  return [...byLabel.values()].sort((a, b) => groupNavSortScore(b, activeId) - groupNavSortScore(a, activeId));
+  return [...byLabel.values()].sort((a, b) => groupNavSortScore(b) - groupNavSortScore(a));
 }
 
-function groupNavSortScore(group, activeId = state.currentGroupId) {
+function groupNavSortScore(group) {
   if (!group) return -1;
   const markets = group.markets ?? [];
   const openMarkets = new Set(markets.filter(market => market.status === "open").map(market => market.eventId || market.id)).size;
   const marketCount = new Set(markets.map(market => market.eventId || market.id)).size;
   const createdAt = Date.parse(group.createdAt || "") || 0;
-  return (group.id === activeId ? 1_000_000_000 : 0) + openMarkets * 10_000 + marketCount * 1_000 + createdAt / 1_000_000_000;
+  return openMarkets * 10_000 + marketCount * 1_000 + createdAt / 1_000_000_000;
 }
 
 function firstSelectableGroup() {
@@ -5209,6 +5712,19 @@ function leaguePredictorEntryGroup() {
   return group || null;
 }
 
+function leaguePredictorComparisonHtml(rows) {
+  const submitted = (rows || []).filter(row => row.submitted && Array.isArray(row.topPicks) && row.topPicks.length);
+  if (submitted.length < 2) return "";
+  return `<div class="pl-entry-comparison">
+    <div class="pl-entry-comparison-head"><div><p class="eyebrow">Side by side</p><h3>Where the group disagrees</h3></div><span>Top three picks</span></div>
+    <div class="pl-entry-comparison-grid">${submitted.slice(0, 5).map(row => `<button type="button" data-view-pl-entry="${esc(row.entryId)}">
+      <strong>${esc(row.participant)}</strong>
+      <ol>${row.topPicks.map((club, index) => `<li><i>${index + 1}</i><span>${esc(club)}</span></li>`).join("")}</ol>
+      <em>Open full table →</em>
+    </button>`).join("")}</div>
+  </div>`;
+}
+
 async function loadLeaguePredictorGroupEntries({ refresh = false, renderNow = true } = {}) {
   await loadLeaguePredictorRuntime();
   const group = leaguePredictorEntryGroup();
@@ -5295,6 +5811,7 @@ function leaguePredictorGroupPanelHtml() {
             </button>`;
           }).join("") : `<p class="pl-group-board-state">${scope === "global" ? "No submitted entries yet." : "No group members yet."}</p>`}
         </div>
+        ${leaguePredictorComparisonHtml(rows)}
         <p class="pl-group-board-note">Open any submitted entry to compare the complete predicted table.</p>
       ` : ""}
     </section>`;
@@ -5915,7 +6432,7 @@ function challengeHubPredictorState(predictor) {
   const locked = Date.now() >= Date.parse(predictor.lockAt);
   return {
     ranking,
-    status: locked ? "Locked" : submitted ? "Submitted" : ranking.length ? `${ranking.length}/${predictor.clubCount} picked` : "Open",
+    status: locked ? "Awaiting results" : submitted ? "Submitted" : ranking.length ? `${ranking.length}/${predictor.clubCount} picked` : "Open",
   };
 }
 
@@ -6135,80 +6652,217 @@ function renderMarketsHub() {
     : state.globalMarkets.filter(item => item.category === state.globalMarketCategory);
   const featured = filtered.find(item => item.id === "pl-2026-27-winner") || filtered.find(item => item.featured) || filtered[0];
   dom.mainContent.innerHTML = `
-    <section class="markets-hub">
-      <header class="markets-discovery-head motion-item">
-        <label class="markets-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path></svg><input type="search" data-market-search placeholder="Search markets" aria-label="Search markets" /></label>
-        <div class="markets-head-meta"><strong>${state.globalMarkets.length}</strong><span>live markets</span></div>
+    <section class="markets-hub markets-rebuild">
+      <header class="explore-hero motion-item">
+        <div><p class="eyebrow">Explore</p><h1>Find a question worth trading.</h1><p>Open any public market, see the current consensus, then add a private copy to your group.</p></div>
+        <div class="explore-count"><strong>${state.globalMarkets.length}</strong><span>live questions</span></div>
       </header>
+      <label class="markets-search explore-search motion-item">${appNavIcon("explore")}<input type="search" data-market-search placeholder="Search teams, leagues, people, or outcomes…" aria-label="Search markets" /><kbd>/</kbd></label>
       <div class="market-category-tabs motion-item" role="tablist" aria-label="Market categories">
         ${categories.map(category => `<button type="button" data-market-category="${esc(category)}" class="${state.globalMarketCategory === category ? "active" : ""}">${esc(category)}</button>`).join("")}
       </div>
       ${state.globalMarketsLoading && !state.globalMarkets.length ? `<div class="catalog-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>Loading markets</strong></div>` : ""}
       ${state.globalMarketsError ? `<div class="catalog-error"><p>${esc(state.globalMarketsError)}</p><button class="btn btn-ghost btn-sm" type="button" data-go-markets>Retry</button></div>` : ""}
-      ${featured ? `<div class="markets-lead-grid"><div>${featuredCatalogMarket(featured)}<div class="catalog-carousel-dots" aria-hidden="true"><b></b><i></i><i></i><i></i></div></div><aside class="markets-side-rail"><section><p class="eyebrow">Run it with friends</p><h3>Your group. Its own market.</h3><span>Import a question, trade with a shared bankroll and settle it together.</span><button class="catalog-side-action" type="button" data-group-id="__new">Create a group</button></section><section class="hot-markets"><header><h3>Hot markets</h3><span>Now</span></header><ol>${catalogHotMarkets(filtered)}</ol></section></aside></div>` : ""}
-      <div class="catalog-section-head motion-item"><div><h2>All markets</h2></div><span>Click any market or price to open it.</span></div>
+      ${featured ? `<section class="explore-feature-section motion-item"><div class="catalog-section-head"><div><p class="eyebrow">Trending now</p><h2>Most traded</h2></div><span>Open it to add and trade in your group.</span></div>${featuredCatalogMarket(featured)}</section>` : ""}
+      <div class="catalog-section-head motion-item"><div><p class="eyebrow">Market library</p><h2>${esc(state.globalMarketCategory === "All" ? "All questions" : state.globalMarketCategory)}</h2></div><span>${filtered.length} available</span></div>
       <div class="catalog-market-grid">${filtered.map(globalMarketCard).join("")}</div>
       ${state.globalMarketsLoaded && !filtered.length ? `<div class="catalog-empty">No markets in this category yet.</div>` : ""}
-      <footer class="markets-hub-foot motion-item"><span>Each group gets independent prices, trades and a leaderboard.</span><button type="button" data-go-challenges>Explore challenges →</button></footer>
+      <footer class="markets-hub-foot motion-item"><span><strong>How it works:</strong> every group gets its own prices, trades, bankrolls, and leaderboard.</span><button type="button" data-new-market>Create your own market →</button></footer>
       ${catalogPreviewPanel(state.globalMarkets.find(item => item.id === state.catalogPreviewId))}
     </section>`;
 }
 
 function renderChallengesHub() {
+  const group = getCurrentGroup();
   const predictors = LEAGUE_PREDICTOR_LIST.map(predictor => ({
     predictor,
     ...challengeHubPredictorState(predictor),
+    attached: Boolean(group && groupAddonIds(group).includes(leaguePredictorAddonId(predictor.id))),
   }));
+  const attached = predictors.filter(item => item.attached);
+  const explore = predictors.filter(item => !item.attached);
+  const challengeCard = ({ predictor, ranking, status, attached: isAttached }) => {
+    const config = leaguePredictorConfigs?.[predictor.id];
+    const leader = config?.clubs.find(club => club.id === ranking[0]);
+    const progress = Math.min(100, Math.round((ranking.length / Math.max(1, predictor.clubCount)) * 100));
+    const actionLabel = status === "Awaiting results" ? "Compare →" : ranking.length ? "Continue →" : "Start →";
+    return `<article class="challenge-card motion-item ${isAttached ? "attached" : ""}">
+      <button class="challenge-card-main" type="button" data-go-league-predictor="${esc(predictor.id)}">
+        <span class="challenge-card-logo">${predictor.logoUrl ? `<img src="${esc(predictor.logoUrl)}" alt="" loading="lazy" />` : esc(predictor.leagueMark)}</span>
+        <span class="challenge-card-copy"><em>${esc(predictor.season)} · ${esc(predictor.leagueName)}</em><strong>${esc(predictor.title)} table</strong><small>${leader ? `${esc(leader.name)} picked 1st` : "Rank every club from champion to relegation."}</small></span>
+        <span class="challenge-card-status"><b>${esc(status)}</b><i>${actionLabel}</i></span>
+      </button>
+      <div class="challenge-progress"><span style="width:${progress}%"></span></div>
+      <footer><span>${ranking.length ? `${ranking.length} of ${predictor.clubCount} picks saved` : "No picks yet"}</span>${group ? `<button type="button" ${isAttached ? `data-remove-general-market="${esc(leaguePredictorAddonId(predictor.id))}"` : `data-add-general-market="${esc(leaguePredictorAddonId(predictor.id))}"`}>${isAttached ? `Remove from ${esc(group.name)}` : `Add to ${esc(group.name)}`}</button>` : ""}</footer>
+    </article>`;
+  };
 
   dom.mainContent.innerHTML = `
-    <section class="challenges-page">
+    <section class="challenges-page challenges-rebuild">
       <header class="challenges-hero motion-item">
-        <div>
-          <p class="eyebrow">Challenge pool</p>
-          <h1>Call the season before it happens.</h1>
-          <p>Build your tables once, then compare every pick with your groups.</p>
-        </div>
-        ${getCurrentGroup() ? `<button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Open ${esc(getCurrentGroup().name)}</button>` : ""}
+        <div><p class="eyebrow">Challenges</p><h1>Make the big calls.<br />Compare every pick.</h1><p>Challenges are complete predictions—tables, brackets, and season-long calls—not individual markets.</p></div>
+        ${group ? `<div class="challenge-context"><span>Playing with</span><strong>${esc(group.emoji || "")}&nbsp; ${esc(group.name)}</strong></div>` : ""}
       </header>
 
-      <div class="challenge-section-head motion-item">
-        <div>
-          <p class="eyebrow">2026/27</p>
-          <h2>League table predictors</h2>
-        </div>
-        <span>Pick every finish from champion to relegation.</span>
-      </div>
+      ${attached.length ? `<section class="challenge-collection"><div class="challenge-section-head"><div><p class="eyebrow">In your group</p><h2>Your challenges</h2></div><span>${attached.length} in this group</span></div><div class="challenge-card-grid">${attached.map(challengeCard).join("")}</div></section>` : `
+        <section class="challenge-empty-banner motion-item"><div><span>🏆</span><div><strong>No challenges in ${esc(group?.name || "your group")} yet</strong><p>Add one below and everyone can submit their own entry.</p></div></div><span>Pick one to get started ↓</span></section>`}
 
-      <div class="challenge-league-grid">
-        ${predictors.map(({ predictor, ranking, status }) => {
-          const config = leaguePredictorConfigs?.[predictor.id];
-          const leader = config?.clubs.find(club => club.id === ranking[0]);
-          return `<button class="challenge-league-card motion-item" type="button" data-go-league-predictor="${esc(predictor.id)}">
-            <span class="challenge-league-logo">${predictor.logoUrl ? `<img src="${esc(predictor.logoUrl)}" alt="" loading="lazy" />` : esc(predictor.leagueMark)}</span>
-            <span class="challenge-league-copy">
-              <em>${esc(predictor.season)}</em>
-              <strong>${esc(predictor.title)}</strong>
-              <small>${esc(challengeGroupLine(leaguePredictorAddonId(predictor.id)))}</small>
-            </span>
-            <span class="challenge-league-progress">
-              <b>${esc(status)}</b>
-              <small>${leader ? `${esc(leader.name)} 1st` : ranking.length ? `${ranking.length} picks saved` : "Start table"}</small>
-            </span>
-          </button>`;
-        }).join("")}
-      </div>
+      ${explore.length ? `<section class="challenge-collection">
+        <div class="challenge-section-head"><div><p class="eyebrow">2026/27 season</p><h2>${attached.length ? "Explore more" : "Choose a challenge"}</h2></div><span>Five leagues · one pick sheet each</span></div>
+        <div class="challenge-card-grid">${explore.map(challengeCard).join("")}</div>
+      </section>` : ""}
 
-      <footer class="challenges-foot motion-item">
-        <span>Challenges stay separate from fake-money market PnL.</span>
-        ${getCurrentGroup() ? `<button type="button" data-show-general-market-pool>Add one to ${esc(getCurrentGroup().name)} →</button>` : ""}
-      </footer>
+      <section class="challenge-format-guide motion-item">
+        <div><span>Markets</span><strong>One question. A live price.</strong><p>Trade Yes or No as your group’s belief changes.</p><button type="button" data-go-markets>Explore markets →</button></div>
+        <div><span>Challenges</span><strong>A complete set of picks.</strong><p>Submit a table or bracket, then compare every answer.</p></div>
+      </section>
     </section>`;
+}
+
+function isImportedMarket(market) {
+  return Boolean(String(market?.catalogMarketId || "").trim());
+}
+
+function eventBelongsOnHome(event) {
+  return event.markets.some(market => !isImportedMarket(market))
+    || Number(event.volume || 0) > 0
+    || Number(event.tradeCount || 0) > 0;
+}
+
+function homeMarketEvents(group, status = state.marketStatus) {
+  if (!group) return [];
+  const wanted = status === "closed" ? "closed" : "open";
+  const visible = dashboardVisibleMarkets(group.markets || []);
+  const events = sortedMarketEvents(visible);
+  return wanted === "closed" ? events : events.filter(eventBelongsOnHome);
+}
+
+function activationProgress(group) {
+  const member = memberAliasForGroup(group) || state.activeMember;
+  const invited = (group.members || []).length > 1;
+  const created = (group.markets || []).some(market => !isImportedMarket(market));
+  const traded = (group.markets || []).some(market => [
+    ...(market.eventTrades || []),
+    ...(market.trades || []),
+  ].some(trade => trade.participant === member));
+  const steps = [
+    { label: "Create your group", done: true, action: "" },
+    { label: "Invite someone", done: invited, action: `data-open-invite="${esc(group.id)}"` },
+    { label: "Create a market", done: created, action: "data-new-market" },
+    { label: "Make your first trade", done: traded, action: "data-activation-trade" },
+  ];
+  return { steps, done: steps.filter(step => step.done).length };
+}
+
+function activationProgressHtml(group) {
+  const progress = activationProgress(group);
+  if (progress.done === progress.steps.length) return `<div data-activation-progress hidden></div>`;
+  const next = progress.steps.find(step => !step.done);
+  return `<section class="activation-progress motion-item" data-activation-progress>
+    <div class="activation-copy"><p class="eyebrow">Get ${esc(group.name)} moving</p><h2>${progress.done} of ${progress.steps.length} done</h2><p>One short loop turns a quiet group into a live market.</p></div>
+    <div class="activation-track" aria-label="${progress.done} of ${progress.steps.length} onboarding steps complete"><span style="width:${Math.round(progress.done / progress.steps.length * 100)}%"></span></div>
+    <div class="activation-steps">${progress.steps.map((step, index) => `<button type="button" class="${step.done ? "done" : step === next ? "next" : ""}" ${step.done ? "disabled" : step.action}>
+      <i>${step.done ? "✓" : index + 1}</i><span>${esc(step.label)}</span>${step === next ? "<em>Do this →</em>" : ""}
+    </button>`).join("")}</div>
+  </section>`;
+}
+
+function groupPulseHtml(group) {
+  const allEvents = marketEvents(group.markets || []);
+  const open = allEvents.filter(event => eventStatus(event) === "open").length;
+  const closed = allEvents.length - open;
+  const totalVolume = allEvents.reduce((sum, event) => sum + Number(event.volume || 0), 0);
+  const balance = Number(group.balances?.[state.activeMember] ?? 0);
+  const challengeCount = groupAddonIds(group).length;
+  return `<div class="group-pulse motion-item" data-group-pulse aria-label="Group overview">
+    <div><span>Live markets</span><strong>${open}</strong><small>${closed} settled</small></div>
+    <div><span>Group volume</span><strong>${compactMoney(totalVolume)}</strong><small>${allEvents.reduce((sum, event) => sum + Number(event.tradeCount || 0), 0)} trades</small></div>
+    <div><span>Your buying power</span><strong>${topbarMoney(balance)}</strong><small>play money</small></div>
+    <button type="button" data-go-challenges><span>Challenges</span><strong>${challengeCount || "Explore"}</strong><small>${challengeCount ? "active in this group" : "Make a season call"} →</small></button>
+  </div>`;
+}
+
+function homeActivityPanel(group) {
+  const activity = groupRecentActivity(group, 6);
+  return `<section class="home-activity-panel" data-home-activity>
+    <header><div><h2>Group activity</h2><p>Trades from your people</p></div><span class="live-status"><i class="${state.liveStatus}"></i>${state.liveStatus === "live" ? "Live" : "Syncing"}</span></header>
+    ${activity.length ? `<div class="home-activity-list">${activity.map(item => `<button type="button" data-open-activity-market="${esc(item.marketId)}">
+      <span class="activity-avatar">${esc(personInitials(item.participant))}</span>
+      <span><strong>${esc(item.participant)}</strong><small>${item.action === "sell" ? "sold" : "bought"} ${esc(item.outcome)} · ${money(item.amount)}</small><em>${esc(item.title)}</em></span>
+      <time>${esc(relativeActivityTime(item.createdAt))}</time>
+    </button>`).join("")}</div>` : `<div class="home-activity-empty"><strong>No trades yet</strong><span>Your group’s moves will show up here without refreshing.</span></div>`}
+  </section>`;
+}
+
+function homeMarketBoardHtml(group) {
+  const allEvents = marketEvents(group.markets || []);
+  const activeStatus = state.marketStatus === "closed" ? "closed" : "open";
+  const open = allEvents.filter(event => eventStatus(event) === "open").length;
+  const closed = allEvents.length - open;
+  const allVisible = sortedMarketEvents(dashboardVisibleMarkets(group.markets || []));
+  const events = activeStatus === "open" ? allVisible.filter(eventBelongsOnHome) : allVisible;
+  const hiddenImported = activeStatus === "open" ? Math.max(0, allVisible.length - events.length) : 0;
+  const recentSettled = activeStatus === "open" && !events.length
+    ? sortedMarketEvents((group.markets || []).filter(market => market.status === "closed" || market.status === "resolved")).slice(0, 3)
+    : [];
+  const shownEvents = events.slice(0, activeStatus === "open" ? 9 : 6);
+  const additional = Math.max(0, events.length - shownEvents.length);
+  return `<div data-home-market-board>
+    <div class="market-list-head motion-item">
+      <div><h2>${activeStatus === "open" ? "Markets" : "Settled"}</h2><p>${activeStatus === "open" ? "Questions created or traded by this group" : "Final calls and completed markets"}</p></div>
+      <div class="market-list-tools">
+        <div class="market-status-tabs" role="tablist" aria-label="Market status">
+          <button class="${activeStatus === "open" ? "active" : ""}" type="button" data-market-status-filter="open">Open <span>${open}</span></button>
+          <button class="${activeStatus === "closed" ? "active" : ""}" type="button" data-market-status-filter="closed">Settled <span>${closed}</span></button>
+        </div>
+        ${marketSortControl()}
+      </div>
+    </div>
+    ${shownEvents.length ? `<div class="home-market-grid" data-market-grid>${shownEvents.map(event => homeEventCard(event)).join("")}</div>` : `<div class="home-market-empty"><div><strong>${activeStatus === "open" ? "No live markets" : "No settled markets"}</strong><span>${activeStatus === "open" ? "Start with one clear question for the group." : "Completed markets will appear here."}</span></div>${activeStatus === "open" ? `<button class="btn btn-primary" type="button" data-new-market>Create market</button>` : ""}</div>`}
+    ${recentSettled.length ? `<div class="recent-settled-head"><strong>Recently settled</strong><button type="button" data-market-status-filter="closed">View all →</button></div><div class="home-market-grid recent">${recentSettled.map(event => homeEventCard(event)).join("")}</div>` : ""}
+    ${(hiddenImported || additional) ? `<button class="home-explore-link" type="button" data-go-markets>${hiddenImported ? `${hiddenImported} more public market${hiddenImported === 1 ? "" : "s"}` : `${additional} more group market${additional === 1 ? "" : "s"}`} <span>Explore all →</span></button>` : ""}
+  </div>`;
+}
+
+function homeEventCard(event) {
+  const status = eventStatus(event);
+  const binary = isBinaryEvent(event);
+  const markets = binary
+    ? [binaryMarketForSide(event, "yes") || event.markets[0]]
+    : event.markets.filter(market => !marketOutcomeEliminated(market)).slice(0, 2);
+  const primary = event.markets.find(market => market.status === "open") || event.markets[0];
+  const extra = binary ? 0 : Math.max(0, event.markets.filter(market => !marketOutcomeEliminated(market)).length - markets.length);
+  return `<article class="home-market-card motion-item">
+    <header>
+      <span class="home-market-thumb ${eventThumbClass(event.title, event.imageUrl)}" aria-hidden="true">${eventThumb(event.title, event.imageUrl)}</span>
+      <button type="button" data-open-activity-market="${esc(primary?.id || "")}">${esc(event.title)}</button>
+      ${primary ? `<button class="home-market-share" type="button" data-share-market="${esc(primary.id)}" aria-label="Share market">${shareArrowIconSvg()}</button>` : ""}
+    </header>
+    <div class="home-market-quotes">${markets.map(market => {
+      const pct = Math.round(displayedEventProbability(market, event));
+      const option = binary ? "Chance" : marketOptionTitle(market);
+      return `<div class="home-market-quote" data-market-id="${esc(market.id)}">
+        <button class="home-market-outcome" type="button" data-open-activity-market="${esc(market.id)}"><span>${outcomeTitleHtml(option)}</span><strong>${pct}%</strong></button>
+        ${status === "open" ? `<div class="home-market-actions"><button type="button" data-buy="yes">Yes</button><button type="button" data-buy="no">No</button></div>` : `<span class="home-market-final">${status === "resolved" ? "Final" : "Closed"}</span>`}
+      </div>`;
+    }).join("")}</div>
+    ${extra ? `<button class="home-market-more" type="button" data-open-activity-market="${esc(primary?.id || "")}">+${extra} more outcomes</button>` : ""}
+    <footer><span>${compactMoney(event.volume)} Vol.</span><span>${event.tradeCount} trade${event.tradeCount === 1 ? "" : "s"}</span><time>${fmtClose({ closesAt: event.closesAt, status })}</time></footer>
+  </article>`;
+}
+
+function groupHomeSummary(group) {
+  const events = marketEvents(group.markets || []);
+  const open = events.filter(event => eventStatus(event) === "open").length;
+  const trades = events.reduce((sum, event) => sum + Number(event.tradeCount || 0), 0);
+  const volume = events.reduce((sum, event) => sum + Number(event.volume || 0), 0);
+  return `${group.members.length} members · ${open} open · ${trades} trades · ${compactMoney(volume)} volume`;
 }
 
 function renderDashboard() {
   const group = getCurrentGroup();
   if (!group) {
-    renderEmptyDashboard();
+    renderGroupOnboarding();
     return;
   }
 
@@ -6219,72 +6873,48 @@ function renderDashboard() {
     return;
   }
 
-  const activeStatus = state.marketStatus === "closed" ? "closed" : "open";
-  const allEvents = marketEvents(markets);
-  const open = allEvents.filter(event => eventStatus(event) === "open").length;
-  const closed = allEvents.filter(event => eventStatus(event) !== "open").length;
-  const visibleMarkets = dashboardVisibleMarkets(markets);
-  const events = sortedMarketEvents(visibleMarkets);
+  const navGroups = visibleNavGroups();
 
   dom.mainContent.innerHTML = `
-    <section class="dashboard-shell">
-      <div class="dashboard-head motion-item">
-        <div>
-          <p class="eyebrow">${esc(group.emoji)} ${group.members.length} members</p>
-          <h1 class="group-title-line">
-            <span>${esc(group.name)}</span>
-            <span class="group-counts">
-              <button class="group-count group-count-open ${activeStatus === "open" ? "active" : ""}" type="button" data-market-status-filter="open">${open} open</button>
-              <button class="group-count group-count-closed ${activeStatus === "closed" ? "active" : ""}" type="button" data-market-status-filter="closed">${closed} closed</button>
-            </span>
-          </h1>
-        </div>
-        <div class="dashboard-head-actions">
-          <button class="btn btn-primary btn-sm" type="button" data-new-market>+ Market</button>
-          <button class="btn btn-ghost btn-sm invite-friends-btn" type="button" data-open-invite="${group.id}">
-            <span class="share-icon" aria-hidden="true">
-              <svg viewBox="0 0 20 20" focusable="false">
-                <path d="M7.2 11.4 12.8 14.6M12.8 5.4 7.2 8.6" />
-                <circle cx="5" cy="10" r="2.4" />
-                <circle cx="15" cy="4.2" r="2.4" />
-                <circle cx="15" cy="15.8" r="2.4" />
-              </svg>
-            </span>
-            Invite friends
-          </button>
-        </div>
-      </div>
+    <section class="dashboard-shell group-home">
+      ${navGroups.length > 1 ? `<div class="mobile-group-switcher" aria-label="Switch group">${navGroups.map(item => `<button class="${item.id === group.id ? "active" : ""}" type="button" data-group-id="${esc(item.id)}"><span>${esc(item.emoji || "◎")}</span>${esc(item.name)}</button>`).join("")}</div>` : ""}
 
-      <button class="dashboard-challenge-strip motion-item" type="button" data-go-challenges>
-        <span>
-          <em>Season challenges</em>
-          <strong>Premier League, La Liga, Serie A, Bundesliga and Ligue 1</strong>
-        </span>
-        <span class="dashboard-challenge-logos" aria-hidden="true">
-          ${LEAGUE_PREDICTOR_LIST.map(predictor => predictor.logoUrl ? `<img src="${esc(predictor.logoUrl)}" alt="" />` : `<b>${esc(predictor.leagueMark)}</b>`).join("")}
-        </span>
-        <span class="dashboard-challenge-cta">View challenges →</span>
-      </button>
+      <header class="group-home-hero motion-item">
+        <div class="group-home-identity">
+          <span class="group-home-mark">${esc(group.emoji || "◎")}</span>
+          <div><h1>${esc(group.name)}</h1><span><span class="group-live-copy" data-live-status><i class="${state.liveStatus}"></i>${state.liveStatus === "live" ? "Live" : "Syncing"}</span><span data-group-home-summary>${esc(groupHomeSummary(group))}</span></span></div>
+        </div>
+        <div class="group-home-actions">
+          <button class="btn btn-ghost" type="button" data-open-invite="${esc(group.id)}">Invite people</button>
+          <button class="btn btn-primary" type="button" data-new-market>${appNavIcon("plus")} New market</button>
+        </div>
+      </header>
 
-      <div class="dashboard-layout">
+      ${activationProgressHtml(group)}
+
+      <div class="group-home-layout home-market-only">
         <section class="market-column">
-          <div class="section-row motion-item">
-            <div>
-              <p class="eyebrow">Markets</p>
-              <h2>Price board</h2>
-            </div>
-            ${marketSortControl()}
-          </div>
-          ${visibleMarkets.length ? `<div class="market-grid" data-market-grid>${events.map(event => eventCard(event)).join("")}</div>` : emptyMarketsHtml(activeStatus)}
+          ${homeMarketBoardHtml(group)}
         </section>
-
-        <aside class="side-panel motion-item">
-          ${leaderboardPanel(group, { limit: compactLeaderboardLimit(), compact: true })}
-          ${suggestedQuestionsHtml()}
-        </aside>
       </div>
     </section>
   `;
+}
+
+function renderGroupOnboarding() {
+  dom.mainContent.innerHTML = `
+    <section class="group-onboarding motion-item">
+      <div class="group-onboarding-copy">
+        <span class="onboarding-mark">◎</span>
+        <p class="eyebrow">One quick step</p>
+        <h1>Start with your people.</h1>
+        <p>Markets, trades, balances, and leaderboards all live inside a group. Create yours or join with an invite.</p>
+      </div>
+      <div class="group-onboarding-actions">
+        <button type="button" data-create-group><span>＋</span><strong>Create a group</strong><small>Name it, invite friends, then launch your first market.</small><em>Start a group →</em></button>
+        <button type="button" data-join-group><span>↗</span><strong>Join with an invite</strong><small>Paste the link or group code someone sent you.</small><em>Join a group →</em></button>
+      </div>
+    </section>`;
 }
 
 function renderFocusedTradeView(group, market, event) {
@@ -6322,7 +6952,7 @@ function renderFocusedTradeView(group, market, event) {
             </div>
           </div>
 
-          <div class="focused-event-legend" aria-label="Top outcomes">
+          <div class="focused-event-legend" data-live-event-legend aria-label="Top outcomes">
             ${leadingMarkets.map((item, index) => focusedLegendItem(item, index, event)).join("")}
           </div>
 
@@ -6333,12 +6963,12 @@ function renderFocusedTradeView(group, market, event) {
           </div>
 
           <div class="focused-chart-meta">
-            <span>${compactMoney(event.volume)} Vol.</span>
+            <span data-live-event-volume>${compactMoney(event.volume)} Vol.</span>
             <span>${fmtClose({ closesAt: event.closesAt, status: eventStatus(event) })}</span>
             <span class="focused-range active">ALL</span>
           </div>
 
-          <div class="focused-outcome-table">
+          <div class="focused-outcome-table" data-live-outcome-table>
             ${visibleOutcomeMarkets.map((item, index) => focusedOutcomeRow(item, tradeMarket.id, sortedMarkets.indexOf(item), event)).join("")}
             ${focusedOutcomeToggle(sortedMarkets, visibleOutcomeMarkets, outcomeToggleKey, outcomesExpanded)}
           </div>
@@ -6349,8 +6979,10 @@ function renderFocusedTradeView(group, market, event) {
               <span>Sign in once, join ${esc(group.name)}, and the trade ticket opens automatically.</span>
             </div>
           ` : `
+            ${presentationTradeReceiptHtml(tradeMarket)}
             ${marketHistoryPanel(tradeMarket, event)}
             ${focusedRulesPanel(tradeMarket, event)}
+            ${settlementAuditPanel(tradeMarket, event)}
             ${marketParticipants(tradeMarket, event)}
           `}
         </section>
@@ -6372,6 +7004,26 @@ function renderFocusedTradeView(group, market, event) {
       </div>
     </section>
   `;
+}
+
+function presentationTradeReceiptHtml(market) {
+  const receipt = state.presentationReceipt;
+  if (!state.presentationMode || !receipt || receipt.outcomeId !== market.outcomeId) return "";
+  const before = Math.round(Number(receipt.probabilityBefore || 0) * 100);
+  const after = Math.round(Number(receipt.probabilityAfter || 0) * 100);
+  const direction = after >= before ? "+" : "";
+  const historyCount = Number(market.eventTrades?.length || market.trades?.length || 0);
+  return `
+    <section class="presentation-trade-receipt motion-item" aria-label="Completed demo transaction">
+      <header><span class="presentation-receipt-check">✓</span><div><strong>Transaction complete</strong><small>One trade updated the full market state</small></div></header>
+      <div class="presentation-receipt-grid">
+        <div><span>Balance</span><strong>${money(receipt.balanceBefore)} → ${money(receipt.balanceAfter)}</strong></div>
+        <div><span>Position</span><strong>+${formatShares(receipt.shares)} contracts</strong></div>
+        <div><span>Probability</span><strong>${before}% → ${after}% <em>${direction}${after - before} pts</em></strong></div>
+        <div><span>History</span><strong>Trade #${historyCount} recorded</strong></div>
+      </div>
+      <footer><span>Balance</span><i></i><span>Position</span><i></i><span>Price</span><i></i><span>History</span></footer>
+    </section>`;
 }
 
 function marketParticipantStats(market, event) {
@@ -6661,13 +7313,17 @@ function getGroupForEvent(event) {
 }
 
 function renderEmptyDashboard() {
+  const currentGroup = getCurrentGroup() || firstSelectableGroup();
+  const enterLabel = currentGroup ? `Open ${currentGroup.name}` : isLoggedIn() ? "Create your first group" : "Get started";
   const welcomeActions = `
     <div class="welcome-button-row">
-      <button class="btn btn-primary btn-lg" type="button" data-try-demo>Open practice market</button>
-      <button class="btn btn-primary btn-lg" type="button" data-create-market-welcome>Create market</button>
-      <button class="btn btn-ghost btn-lg" type="button" data-join-group>Join group</button>
+      <button class="btn btn-primary btn-lg" type="button" data-enter-app>${esc(enterLabel)} <span aria-hidden="true">→</span></button>
+      <button class="btn btn-ghost btn-lg" type="button" data-try-demo>Try a live demo</button>
     </div>
-    <button class="welcome-demo-link" type="button" data-try-demo>Replay demo with clean trades</button>`;
+    <div class="welcome-secondary-actions">
+      <button type="button" data-join-group>Have an invite? Join a group</button>
+      <button type="button" data-create-market-welcome>Create a market first</button>
+    </div>`;
   const welcomeCreateForm = `
     <form class="welcome-inline-form" id="dashboardCreateForm">
       <div class="form-topline">
@@ -6695,50 +7351,45 @@ function renderEmptyDashboard() {
       ? welcomeJoinForm
       : welcomeActions;
   dom.mainContent.innerHTML = `
-    <section class="empty-dashboard welcome-hero">
-      <div class="welcome-video-field" aria-hidden="true">
-        <figure class="welcome-video-tile tile-a">
-          <video data-src="/media/welcome-1.mp4" autoplay muted loop playsinline preload="none"></video>
-        </figure>
-        <figure class="welcome-video-tile tile-b">
-          <video data-src="/media/welcome-2.mp4" autoplay muted loop playsinline preload="none"></video>
-        </figure>
-        <figure class="welcome-video-tile tile-c">
-          <video data-src="/media/welcome-3.mp4" autoplay muted loop playsinline preload="none"></video>
-        </figure>
-        <figure class="welcome-video-tile tile-d">
-          <video data-src="/media/welcome-4.mp4" autoplay muted loop playsinline preload="none"></video>
-        </figure>
-        <figure class="welcome-video-tile tile-e">
-          <video data-src="/media/welcome-5.mp4" autoplay muted loop playsinline preload="none"></video>
-        </figure>
-      </div>
-      <div class="welcome-scrim" aria-hidden="true"></div>
-
+    <section class="empty-dashboard welcome-hero welcome-rebuild">
       <div class="welcome-content">
         <div class="welcome-copy motion-item">
-          <p class="eyebrow">Live app mode</p>
-          <h1 class="welcome-headline">Open the product flow first. Then create your own market.</h1>
-          <p>
-            This starts with an active demo market so you can see trades, price movement, and settlement behavior without guessing what to click.
-          </p>
-          <div class="welcome-signal-row" aria-label="Product highlights">
-            <span>private groups</span>
-            <span>LMSR liquidity</span>
-            <span>auditable trades</span>
-            <span>leaderboards</span>
-            <span>100+ markets shipped</span>
-            <span>1,000+ contracts traded</span>
+          <p class="eyebrow"><span></span> Prediction markets for your group chats</p>
+          <h1 class="welcome-headline">Put your hot takes<br />on the line.</h1>
+          <p>Create a question, trade with play money, and find out who actually knows what they’re talking about.</p>
+          <div class="welcome-action-stack">${welcomeEntry}</div>
+          <div class="welcome-trust-row" aria-label="Product details">
+            <span><strong>$100K</strong> play-money bankroll</span>
+            <span><strong>Live</strong> group prices</span>
+            <span><strong>Clear</strong> settlement history</span>
           </div>
         </div>
 
-        <div class="welcome-access welcome-access-compact motion-item">
-          <div class="welcome-access-head">
-            <p class="eyebrow">Enter market mode</p>
+        <div class="welcome-product-preview motion-item" aria-label="Example Probable market">
+          <div class="preview-window-bar"><span></span><span></span><span></span><em>Sporty Boys</em></div>
+          <div class="preview-market-head">
+            <div class="preview-market-image"><img src="/market-images/market-024-4bfd0d2754.jpg" alt="" /></div>
+            <div><span>SPORTY BOYS · LIVE</span><h2>Will Arsenal win the Premier League?</h2></div>
           </div>
-          <div class="welcome-action-stack">
-            ${welcomeEntry}
-          </div>
+          <div class="preview-price"><span>YES</span><strong>64%</strong><em>+12 today</em></div>
+          <svg class="preview-chart" viewBox="0 0 520 180" role="img" aria-label="Example probability rising from 44 to 64 percent">
+            <defs><linearGradient id="welcomeChartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a7f36b" stop-opacity=".28"/><stop offset="1" stop-color="#a7f36b" stop-opacity="0"/></linearGradient></defs>
+            <path class="preview-grid" d="M0 40H520M0 90H520M0 140H520" />
+            <path class="preview-area" d="M0 150 C45 143 58 104 105 115 S180 138 225 92 S292 111 335 70 S405 86 447 45 S493 53 520 26 V180 H0Z" />
+            <path class="preview-line" d="M0 150 C45 143 58 104 105 115 S180 138 225 92 S292 111 335 70 S405 86 447 45 S493 53 520 26" />
+            <circle cx="520" cy="26" r="6" />
+          </svg>
+          <div class="preview-trade-row" aria-hidden="true"><button type="button" tabindex="-1">Buy Yes <strong>64¢</strong></button><button type="button" tabindex="-1">Buy No <strong>36¢</strong></button></div>
+          <div class="preview-market-meta"><span>73 trades</span><span>$18.4K volume</span><span>12 traders</span></div>
+        </div>
+      </div>
+
+      <div class="welcome-how motion-item">
+        <header><p class="eyebrow">How it works</p><h2>From group chat to live market in minutes.</h2></header>
+        <div class="welcome-step-grid">
+          <article><span>01</span><h3>Bring your people</h3><p>Create a private group and share one invite link.</p></article>
+          <article><span>02</span><h3>Ask the question</h3><p>Turn the debate into a clear market with a deadline.</p></article>
+          <article><span>03</span><h3>Trade the truth</h3><p>Prices move with every trade. The best calls rise to the top.</p></article>
         </div>
       </div>
     </section>
@@ -7225,7 +7876,7 @@ function tradePanel(market, yesPrice, noPrice, event = null) {
           <label class="trade-amount-label"><span data-trade-input-label>${sellMode ? "Shares" : "Amount"}</span> <span data-trade-limit-copy>${sellMode ? sellLimitCopy(sellState) : `${money(balance)} cash`}</span></label>
           <div class="trade-input-row ${sellMode ? "sell" : "buy"}">
             ${sellMode ? "" : `<span class="trade-suffix">$</span>`}
-            <input class="trade-input" type="text" min="${sellMode ? "0.01" : "1"}" ${sellMode ? "" : `max="${max}"`} data-raw-max="${formatShareInput(max)}" step="any" placeholder="0" inputmode="decimal" autocomplete="off" ${inputDisabled} />
+            <input class="trade-input" type="text" min="${sellMode ? "0.01" : "1"}" ${sellMode ? "" : `max="${max}"`} data-raw-max="${formatShareInput(max)}" step="any" placeholder="0" inputmode="decimal" autocomplete="off" value="${state.presentationMode && !sellMode ? "1000" : ""}" ${inputDisabled} />
           </div>
         </div>
         <div class="trade-chip-row ${mode === "sell" ? "sell" : ""}">
@@ -7333,6 +7984,34 @@ function verificationPanel(market, event) {
       ${proposalHtml(market, proposal)}
       ${oracleControls(market, proposal, oracleError)}
     </section>`;
+}
+
+function settlementAuditPanel(market, event) {
+  const status = eventStatus(event || { markets: [market] });
+  const attempts = Array.isArray(market.verificationAttempts) ? market.verificationAttempts : [];
+  const proposal = market.oracleProposal && typeof market.oracleProposal === "object" ? market.oracleProposal : null;
+  if (status === "open" && !attempts.length && !proposal) return "";
+  const source = market.resolutionSource || event?.resolutionSource || "No external source recorded";
+  const winner = status === "resolved" ? resolutionOutcomeLabel(market, market.outcome || event?.outcome) : "";
+  const dispute = attempts.some(item => item?.status === "needs_review") || market.verificationStatus === "needs_review";
+  const timeline = [
+    { title: "Rules locked", detail: source, at: market.createdAt || event?.createdAt },
+    ...attempts.slice(-4).map(item => ({
+      title: item.status === "needs_review" ? "Review requested" : item.type === "manual_approval" ? "Approval recorded" : "Result checked",
+      detail: [item.resolver || item.checkedBy, item.outcomeTitle || item.result, item.notes].filter(Boolean).join(" · ") || "Verification event recorded",
+      at: item.createdAt || item.checkedAt || item.timestamp,
+    })),
+    ...(status === "resolved" ? [{ title: `Settled · ${winner}`, detail: [market.resolvedBy || event?.resolvedBy, market.resolutionNotes || event?.resolutionNotes].filter(Boolean).join(" · ") || "Payout completed", at: market.resolvedAt || event?.resolvedAt }] : []),
+  ];
+  return `<section class="settlement-audit" data-settlement-audit>
+    <header><div><p class="eyebrow">Settlement record</p><h3>${status === "resolved" ? "Result and audit trail" : dispute ? "Under review" : "Awaiting settlement"}</h3></div><span class="audit-state ${dispute ? "disputed" : status}">${dispute ? "Disputed" : status === "resolved" ? "Final" : "Pending"}</span></header>
+    <div class="audit-summary">
+      <span><small>Source of truth</small><strong>${esc(source)}</strong></span>
+      <span><small>Resolver</small><strong>${esc(market.resolvedBy || event?.resolvedBy || (proposal ? "Automated proposal" : "Group admins"))}</strong></span>
+      <span><small>Outcome</small><strong>${esc(winner || proposal?.outcomeTitle || proposal?.result || "Not final")}</strong></span>
+    </div>
+    <ol class="audit-timeline">${timeline.map((item, index) => `<li class="${index === timeline.length - 1 ? "latest" : ""}"><i></i><span><strong>${esc(item.title)}</strong><small>${esc(item.detail)}</small></span><time>${item.at ? esc(fmtDate(item.at)) : "Recorded"}</time></li>`).join("")}</ol>
+  </section>`;
 }
 
 function marketHistoryPanel(market, event) {
@@ -8466,13 +9145,13 @@ function renderLeaderboard() {
     <section class="leaderboard-page leaderboard-expanded-page probable-leaderboard-page">
       <div class="leaderboard-topbar motion-item">
         <div>
-          <p class="eyebrow">${esc(group.name)} leaderboard</p>
-          <h1>Portfolio race</h1>
-          <p>${state.leaderboardMetric === "percent" ? "Ranked by return on money actually put into trades." : "Ranked by nominal gain from each trader's starting bankroll."}</p>
+          <p class="eyebrow">${esc(group.emoji || "")} ${esc(group.name)} · Leaderboard</p>
+          <h1>Who’s making<br />the best calls?</h1>
+          <p>${state.leaderboardMetric === "percent" ? "Ranked by return on the money each person actually put into trades." : "Ranked by profit from the same starting play-money bankroll."}</p>
         </div>
         <div class="leaderboard-controls probable-leaderboard-controls">
           ${leaderboardMetricToggle()}
-          <button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back</button>
+          <button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back to ${esc(group.name)}</button>
         </div>
       </div>
       ${expandedLeaderboard(entries)}
@@ -9515,12 +10194,12 @@ function renderAdminVerification() {
   const resolved = adminResolvedQueue();
   const isLiveQueue = state.adminQueueMode === "live";
   dom.mainContent.innerHTML = `
-    <section class="admin-page">
+    <section class="admin-page admin-rebuild">
       <div class="admin-head motion-item">
         <div>
-          <p class="eyebrow">Manual verification</p>
-          <h1>Resolve markets</h1>
-          <p>${isLiveQueue ? "Only resolve a live market when its outcome is already definitive. This closes trading and pays out immediately." : "Trading has closed. Pick the verified outcome, add an optional note, and pay out in one step."}</p>
+          <p class="eyebrow">Admin · Settlement</p>
+          <h1>Close the loop.</h1>
+          <p>${isLiveQueue ? "Use a live override only when the answer is already definitive. It stops trading and pays everyone immediately." : "These markets have stopped trading. Confirm the real result, leave a source note, and settle every position."}</p>
         </div>
         <div class="admin-actions">
           <span class="admin-count">${total} ${isLiveQueue ? "live" : "ready"}</span>
@@ -9726,17 +10405,24 @@ function renderPositions() {
   const deltaLabel = `${snapshot.pnl >= 0 ? "+" : ""}${money(snapshot.pnl)} (${snapshot.pnlPct >= 0 ? "+" : ""}${snapshot.pnlPct.toFixed(1)}%)`;
 
   dom.mainContent.innerHTML = `
-    <section class="positions-page probable-portfolio-page">
+    <section class="positions-page probable-portfolio-page portfolio-rebuild">
       <div class="portfolio-topbar motion-item">
         <div>
-          <p class="eyebrow">${snapshot.scopeEmoji ? `${esc(snapshot.scopeEmoji)} ` : ""}${esc(snapshot.scopeName)} Portfolio</p>
-          <h1>${money(snapshot.portfolioMark)}</h1>
-          <span class="portfolio-delta ${deltaClass}">${deltaLabel} all time</span>
+          <p class="eyebrow">${snapshot.scopeEmoji ? `${esc(snapshot.scopeEmoji)} ` : ""}${esc(snapshot.scopeName)} · Portfolio</p>
+          <h1>Your positions,<br />at a glance.</h1>
+          <p>See what you own, what it’s worth now, and every move that got you here.</p>
         </div>
         <div class="portfolio-topbar-actions">
           ${portfolioGroupSwitcherHtml(snapshot)}
           <button class="btn btn-ghost btn-sm" type="button" data-go-dashboard>Back to ${esc(snapshot.scopeName)}</button>
         </div>
+      </div>
+
+      <div class="portfolio-value-strip motion-item" aria-label="Portfolio summary">
+        <div class="portfolio-total-value"><span>Portfolio value</span><strong>${money(snapshot.portfolioMark)}</strong><em class="${deltaClass}">${deltaLabel} all time</em></div>
+        <div><span>Available cash</span><strong>${money(snapshot.cash)}</strong><em>ready to trade</em></div>
+        <div><span>Open positions</span><strong>${snapshot.openCount}</strong><em>${money(snapshot.openMarkValue)} marked value</em></div>
+        <div><span>Trading volume</span><strong>${compactMoney(snapshot.volume)}</strong><em>${snapshot.tradeCount} moves</em></div>
       </div>
 
       <div class="portfolio-overview-shell motion-item">
@@ -11164,10 +11850,11 @@ function renderPortfolioCharts() {
   });
 }
 
-async function renderCharts() {
+async function renderCharts(renderEpoch = chartRenderEpoch) {
   const selector = "[data-portfolio-chart], [data-event-chart-canvas], [data-market-chart]";
   if (!document.querySelector(selector)) return;
   await loadChartRuntime();
+  if (renderEpoch !== chartRenderEpoch) return;
   if (!document.querySelector(selector)) return;
   renderPortfolioCharts();
 
@@ -11818,8 +12505,12 @@ function restoreBootCacheForRoute(route) {
   // groups first causes a visible straight-line chart before hydration.
   if (route.name === "market") return false;
   setGroups(cache.groups, { persist: false });
-  if (cache.currentGroupId && state.groups.some(group => group.id === cache.currentGroupId)) {
-    state.currentGroupId = cache.currentGroupId;
+  const savedGroupId = localStorage.getItem(STORAGE_KEYS.groupId);
+  const preferredGroupId = state.groups.some(group => group.id === savedGroupId)
+    ? savedGroupId
+    : cache.currentGroupId;
+  if (preferredGroupId && state.groups.some(group => group.id === preferredGroupId)) {
+    state.currentGroupId = preferredGroupId;
   }
   if (!state.activeMember && cache.activeMember) state.activeMember = cache.activeMember;
   normalizeSelection();
@@ -11837,12 +12528,15 @@ function restoreBootCacheState() {
   const cache = readBootCache();
   if (!cache || !Array.isArray(cache.groups) || !cache.groups.length) return false;
   setGroups(cache.groups, { persist: false });
-  if (cache.currentGroupId && state.groups.some(group => group.id === cache.currentGroupId)) {
-    state.currentGroupId = cache.currentGroupId;
+  const savedGroupId = localStorage.getItem(STORAGE_KEYS.groupId);
+  const preferredGroupId = state.groups.some(group => group.id === savedGroupId)
+    ? savedGroupId
+    : cache.currentGroupId;
+  if (preferredGroupId && state.groups.some(group => group.id === preferredGroupId)) {
+    state.currentGroupId = preferredGroupId;
   }
   if (!state.currentGroupId) {
-    const savedGroup = localStorage.getItem(STORAGE_KEYS.groupId);
-    const saved = state.groups.find(group => group.id === savedGroup) || state.groups[0];
+    const saved = state.groups.find(group => group.id === savedGroupId) || state.groups[0];
     state.currentGroupId = saved?.id ?? null;
   }
   if (!state.activeMember && cache.activeMember) {
@@ -12007,23 +12701,29 @@ function renderMarketLinkLoading({ error = "" } = {}) {
     </section>`;
 }
 
-function enterDemo({ skipTutorial = false } = {}) {
-  if (state.demoMode) return;
-  const memberName = isLoggedIn() ? (authDisplayName() || "You") : "You";
-  const group = buildDemoGroup(memberName);
+function enterDemo({ skipTutorial = false, presentation = false } = {}) {
+  if (state.demoMode && !presentation) return;
+  stopTutorial();
+  const memberName = presentation ? "Dave Jaga" : isLoggedIn() ? (authDisplayName() || "You") : "You";
+  const group = presentation ? buildPresentationDemoGroup(memberName) : buildDemoGroup(memberName);
   state.demoPrevGroupId = state.currentGroupId;
   state.groups = state.groups.filter(g => g.id !== DEMO_GROUP_ID).concat([group]);
   state.demoMode = true;
+  state.presentationMode = presentation;
+  state.presentationReceipt = null;
+  if (presentation) state.liveStatus = "live";
   state.shell = "app";
   state.view = "dashboard";
   state.currentGroupId = DEMO_GROUP_ID;
   state.activeMember = memberName;
   const tradeSeedMarket = group.markets[0];
-  seedDemoTradeFlow(group, memberName);
-  state.trade = { ...emptyTrade(), marketId: tradeSeedMarket?.id || null, side: "yes", mode: "buy" };
+  if (!presentation) seedDemoTradeFlow(group, memberName);
+  state.trade = presentation
+    ? emptyTrade()
+    : { ...emptyTrade(), marketId: tradeSeedMarket?.id || null, side: "yes", mode: "buy" };
   state.mobileTradeOpen = false;
   render();
-  if (!skipTutorial) {
+  if (!skipTutorial && !presentation) {
     startTutorial({
       getGroup: () => state.groups.find(g => g.id === DEMO_GROUP_ID),
       getMember: () => memberName,
@@ -12063,6 +12763,8 @@ function exitDemo(handoff = false) {
   stopTutorial();
   ["group", "join", "invite", "embed", "leaderProfile", "tradeHistory", "login", "market", "suggestPreview"].forEach(closeModal);
   state.demoMode = false;
+  state.presentationMode = false;
+  state.presentationReceipt = null;
   state.groups = state.groups.filter(g => g.id !== DEMO_GROUP_ID);
   localStorage.setItem("probable_demo_done", "1");
   state.trade = emptyTrade();

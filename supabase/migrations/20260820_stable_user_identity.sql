@@ -1,0 +1,6 @@
+-- This migration version was applied from the project's original migration
+-- directory. The authoritative SQL remains at:
+-- backend/migrations/20260820_stable_user_identity.sql
+--
+-- This history marker lets the Supabase CLI safely apply newer migrations
+-- without replaying the already-completed identity migration.
