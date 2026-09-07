@@ -1,5 +1,5 @@
 import "./styles.css";
-import { DEMO_GROUP_ID, DEMO_NO_ID, DEMO_YES_ID, PRESENTATION_GROUP_ID, PRESENTATION_PRIMARY_ID, applyDemoTrade, buildDemoGroup, buildPresentationDemoGroups, resolveDemoMarket, simulateDemoApi } from "./demo.js";
+import { DEMO_GROUP_ID, DEMO_NO_ID, DEMO_YES_ID, PRESENTATION_GROUP_ID, PRESENTATION_LOVE_GROUP_ID, PRESENTATION_PRIMARY_ID, applyDemoTrade, buildDemoGroup, buildPresentationDemoGroups, resolveDemoMarket, simulateDemoApi } from "./demo.js";
 import { startTutorial, stopTutorial, tutorialOnRender } from "./tutorial.js";
 import { DEFAULT_PREDICTOR_ID, LEAGUE_PREDICTOR_LIST, LEAGUE_PREDICTOR_ROUTES as LEAGUE_PREDICTORS } from "./challenge-routes.js";
 
@@ -5354,7 +5354,7 @@ function hydrateWelcomeVideos() {
 }
 
 function visibleNavGroups() {
-  if (state.presentationMode) return state.groups.filter(group => [DEMO_GROUP_ID, PRESENTATION_GROUP_ID].includes(group.id));
+  if (state.presentationMode) return state.groups.filter(group => [DEMO_GROUP_ID, PRESENTATION_LOVE_GROUP_ID, PRESENTATION_GROUP_ID].includes(group.id));
   if (state.shell !== "app" || !isLoggedIn()) return [];
   return selectableNavGroups();
 }
@@ -12734,7 +12734,7 @@ function enterDemo({ skipTutorial = false, presentation = false } = {}) {
   const demoGroups = presentation ? buildPresentationDemoGroups(memberName) : [buildDemoGroup(memberName)];
   const group = presentation ? demoGroups.find(item => item.id === PRESENTATION_GROUP_ID) : demoGroups[0];
   state.demoPrevGroupId = state.currentGroupId;
-  state.groups = state.groups.filter(g => ![DEMO_GROUP_ID, PRESENTATION_GROUP_ID].includes(g.id)).concat(demoGroups);
+  state.groups = state.groups.filter(g => ![DEMO_GROUP_ID, PRESENTATION_LOVE_GROUP_ID, PRESENTATION_GROUP_ID].includes(g.id)).concat(demoGroups);
   state.demoMode = true;
   state.presentationMode = presentation;
   state.presentationReceipt = null;
@@ -12792,7 +12792,7 @@ function exitDemo(handoff = false) {
   state.demoMode = false;
   state.presentationMode = false;
   state.presentationReceipt = null;
-  state.groups = state.groups.filter(g => ![DEMO_GROUP_ID, PRESENTATION_GROUP_ID].includes(g.id));
+  state.groups = state.groups.filter(g => ![DEMO_GROUP_ID, PRESENTATION_LOVE_GROUP_ID, PRESENTATION_GROUP_ID].includes(g.id));
   localStorage.setItem("probable_demo_done", "1");
   state.trade = emptyTrade();
   state.mobileTradeOpen = false;
@@ -13076,7 +13076,7 @@ function toastSettlement(settlement, fallback = "Market resolved.") {
 }
 
 async function api(path, opts = {}) {
-  if (state.demoMode && (path.includes("/markets/demo-") || [DEMO_GROUP_ID, PRESENTATION_GROUP_ID].some(id => path.includes(`/groups/${id}/`)))) {
+  if (state.demoMode && (path.includes("/markets/demo-") || [DEMO_GROUP_ID, PRESENTATION_LOVE_GROUP_ID, PRESENTATION_GROUP_ID].some(id => path.includes(`/groups/${id}/`)))) {
     const demoGroup = state.groups.find(group => (group.markets || []).some(market => path.includes(`/markets/${market.id}`))) || getCurrentGroup();
     return simulateDemoApi(path, opts, demoGroup, state.groups);
   }

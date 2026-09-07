@@ -3,6 +3,7 @@
 
 export const DEMO_GROUP_ID = "demo";
 export const PRESENTATION_GROUP_ID = "demo-lazy-boys";
+export const PRESENTATION_LOVE_GROUP_ID = "demo-love-island-group";
 export const DEMO_EVENT_ID = "demo-event";
 export const DEMO_YES_ID = "demo-yes";
 export const DEMO_NO_ID = "demo-no";
@@ -158,7 +159,17 @@ export function buildPresentationDemoGroups(memberName = "Dave Jaga") {
     createdAt: created,
     members,
     balances: Object.fromEntries(members.map(name => [name, 100000])),
-    markets: [...worldCupMarkets, ...loveIslandMarkets],
+    markets: worldCupMarkets,
+  };
+  const loveIslandGroup = {
+    id: PRESENTATION_LOVE_GROUP_ID,
+    name: "Love Island",
+    emoji: "🏝️",
+    mode: "fake",
+    createdAt: created,
+    members,
+    balances: Object.fromEntries(members.map(name => [name, 100000])),
+    markets: loveIslandMarkets,
   };
   const lazyBoys = {
     id: PRESENTATION_GROUP_ID,
@@ -203,7 +214,15 @@ export function buildPresentationDemoGroups(memberName = "Dave Jaga") {
     ["Julian Asogwa", PRESENTATION_LOVE_NO_ID, 1040], ["Joel Adejola", PRESENTATION_LOVE_YES_ID, 450],
     ["Korede Adeniyi", PRESENTATION_LOVE_NO_ID, 790], ["Dave Jaga", PRESENTATION_LOVE_YES_ID, 405],
   ];
-  [...worldCupPlan, ...loveIslandPlan].forEach(([participant, outcomeId, amount], index) => applyDemoTrade(group, {
+  worldCupPlan.forEach(([participant, outcomeId, amount], index) => applyDemoTrade(group, {
+    participant,
+    outcomeId,
+    side: "yes",
+    amount,
+    action: "buy",
+    createdAt: nowIso((-3.5 * 86400000) + index * 90 * 60 * 1000),
+  }));
+  loveIslandPlan.forEach(([participant, outcomeId, amount], index) => applyDemoTrade(loveIslandGroup, {
     participant,
     outcomeId,
     side: "yes",
@@ -213,7 +232,7 @@ export function buildPresentationDemoGroups(memberName = "Dave Jaga") {
   }));
   seedPersonalPresentationMarket(lazyBoys);
   seedAmbientPresentationMarkets(lazyBoys);
-  return [group, lazyBoys];
+  return [group, loveIslandGroup, lazyBoys];
 }
 
 export function buildPresentationDemoGroup(memberName = "Dave Jaga") {
