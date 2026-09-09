@@ -112,30 +112,28 @@ try {
     assert.equal(await dialog.isVisible(),false);
     assert(await page.getByRole('button',{name:'Sign in',exact:true}).evaluate(el=>el===document.activeElement));
   },{width:390,height:844});
-  await scenario('Email sign-in sends once and keeps confirmation visible',async(page,context)=>{
-    let requests=0;
-    await context.route('**/auth/v1/otp**',async route=>{requests++;await delay(150);await route.fulfill({json:{}});});
+  await scenario('Production sign-in offers Google only without unnecessary fields',async page=>{
     await page.goto(base);
     await page.getByRole('button',{name:'Sign in',exact:true}).click();
-    await page.getByLabel('Display name').fill('QA Owner');
-    await page.getByLabel('Email address').fill('qa@example.test');
-    const submit=page.getByRole('button',{name:/^Continue/});
-    await submit.click();
-    assert.equal(await submit.isEnabled(),false);
-    await page.getByText('Check qa@example.test for your sign-in link.',{exact:false}).waitFor();
-    assert.equal(requests,1);
-    assert.equal(await submit.isEnabled(),true);
+    const dialog=page.getByRole('dialog',{name:'Sign in to Probable'});
+    assert(await dialog.getByRole('button',{name:'Continue with Google',exact:true}).isVisible());
+    assert.equal(await dialog.getByLabel('Email address').count(),0);
+    assert.equal(await dialog.getByLabel('Display name').isVisible(),false);
+    assert.equal((await dialog.innerText()).includes('email link'),false);
   });
-  await scenario('Email sign-in failure preserves input and allows retry',async(page,context)=>{
-    await context.route('**/auth/v1/otp**',route=>route.fulfill({status:429,json:{msg:'Please wait before requesting another link',error_code:'over_email_send_rate_limit'}}));
-    await page.goto(base);
+  await scenario('Google sign-in preserves the return URL and never sends email',async(page,context)=>{
+    let emailRequests=0;
+    await context.route('**/auth/v1/otp**',route=>{emailRequests++;return route.fulfill({json:{}});});
+    await context.route('**/auth/v1/authorize**',route=>route.fulfill({contentType:'text/html',body:'<p>OAuth handoff</p>'}));
+    const returnUrl=base+'/bracket';
+    await page.goto(returnUrl);
     await page.getByRole('button',{name:'Sign in',exact:true}).click();
-    await page.getByLabel('Display name').fill('QA Owner');
-    await page.getByLabel('Email address').fill('qa@example.test');
-    await page.getByRole('button',{name:/^Continue/}).click();
-    await page.locator('#authFeedback.is-error').waitFor();
-    assert.equal(await page.getByLabel('Email address').inputValue(),'qa@example.test');
-    assert.equal(await page.getByRole('button',{name:/^Continue/}).isEnabled(),true);
+    await page.getByRole('button',{name:'Continue with Google',exact:true}).click();
+    await page.waitForURL('https://probable-qa.supabase.co/auth/v1/authorize**');
+    const target=new URL(page.url());
+    assert.equal(target.searchParams.get('provider'),'google');
+    assert.equal(target.searchParams.get('redirect_to'),returnUrl);
+    assert.equal(emailRequests,0);
   });
   await scenario('Practice market is explicit and can be exited',async page=>{
     await page.goto(base);

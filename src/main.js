@@ -685,16 +685,10 @@ document.querySelector("#app").innerHTML = `
           <input id="authNameInput" name="displayName" type="text" autocomplete="name" maxlength="40" placeholder="Enter your name" />
         </div>
         <div class="auth-provider-row" id="authProviderArea">
-          <button type="button" class="auth-provider-btn" id="googleSignInBtn" aria-label="Sign in with Google">
+          <button type="button" class="auth-provider-btn" id="googleSignInBtn" aria-label="Continue with Google">
             <span class="google-logo" aria-hidden="true"></span>
-            <span>Google</span>
+            <span>Continue with Google</span>
           </button>
-        </div>
-        <div class="auth-divider" id="authDivider"><span></span><em>or</em><span></span></div>
-        <div class="auth-email-area" id="authEmailArea">
-          <label for="authEmailInput">Email address</label>
-          <input id="authEmailInput" name="email" type="email" inputmode="email" autocomplete="email" placeholder="Enter your email address" />
-          <button type="submit" class="auth-continue-btn">Continue <span aria-hidden="true">›</span></button>
         </div>
         <div class="auth-session-actions hidden" id="authSessionActions">
           <button type="button" class="auth-continue-btn auth-signout" id="signOutBtn">Sign out</button>
@@ -857,9 +851,6 @@ const dom = {
   authNameArea: document.querySelector("#authNameArea"),
   authNameInput: document.querySelector("#authNameInput"),
   authProviderArea: document.querySelector("#authProviderArea"),
-  authDivider: document.querySelector("#authDivider"),
-  authEmailArea: document.querySelector("#authEmailArea"),
-  authEmailInput: document.querySelector("#authEmailInput"),
   authSessionActions: document.querySelector("#authSessionActions"),
   authModalFooter: document.querySelector("#authModalFooter"),
   googleSignInBtn: document.querySelector("#googleSignInBtn"),
@@ -3152,36 +3143,7 @@ function setAuthBusy(busy) {
 
 async function onLogin(e) {
   e.preventDefault();
-  if (state.authBusy) return;
-  const email = new FormData(e.currentTarget).get("email")?.toString().trim() ?? "";
-  const displayName = readAuthDisplayNameInput();
-  if (!displayName) return;
-  if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_DEV_AUTH_BYPASS === "true") {
-    applyDevAuthBypass(displayName, email || `${slug(displayName)}@probable.local`);
-    return;
-  }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    setAuthFeedback("Enter a valid email address.", true);
-    dom.authEmailInput?.focus();
-    return;
-  }
-  const action = state.pendingAuthAction;
-  if (action) sessionStorage.setItem("probable_pending_auth_action", action);
-  setAuthBusy(true);
-  setAuthFeedback("Sending your sign-in link...");
-  try {
-    const supabase = await loadSupabaseRuntime();
-    const { error } = await withTimeout(supabase.auth.signInWithOtp({
-      email,
-      options: {emailRedirectTo: authRedirectUrl(), shouldCreateUser: true, data: {name: displayName, full_name: displayName}},
-    }), API_TIMEOUT_MS, "Sign-in");
-    if (error) throw error;
-    setAuthFeedback(`Check ${email} for your sign-in link. Check your spam folder if it does not arrive.`);
-  } catch (error) {
-    setAuthFeedback(error.message || "Could not send your sign-in link. Please try again.", true);
-  } finally {
-    setAuthBusy(false);
-  }
+  if (!isLoggedIn()) await onGoogleSignIn();
 }
 
 async function onGoogleSignIn() {
@@ -13044,11 +13006,9 @@ function updateAuthModal() {
   }
   dom.authCurrent.innerHTML = loggedIn
     ? `You’re signed in as <strong>${esc(authDisplayName())}</strong>.`
-    : "Use Google or get an email link. No password needed.";
-  dom.authNameArea.classList.toggle("hidden", loggedIn);
+    : "Continue with Google to sign in or create an account.";
+  dom.authNameArea.classList.toggle("hidden", loggedIn || !devBypass);
   dom.authProviderArea.classList.toggle("hidden", loggedIn);
-  dom.authDivider.classList.toggle("hidden", loggedIn);
-  dom.authEmailArea.classList.toggle("hidden", loggedIn);
   dom.authModalFooter.classList.add("hidden");
   dom.authSessionActions.classList.toggle("hidden", !loggedIn);
 }
