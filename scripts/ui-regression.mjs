@@ -218,7 +218,9 @@ try {
       await noOverflow(page);
       await page.reload();
       await page.getByRole('heading').first().waitFor();
+      await page.waitForFunction(() => document.querySelector('.pl-pick-progress, .bracket-mobile-svg'));
       await noOverflow(page);
+      await accessible(page, `${path.slice(1)}-mobile`);
       await page.screenshot({path:`${output}/${path.slice(1)}-mobile.png`,fullPage:true});
     }
   },{width:390,height:844});

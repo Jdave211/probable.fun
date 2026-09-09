@@ -5925,7 +5925,7 @@ function renderPremierLeaguePredictor() {
             </div>
             <button type="button" data-pl-undo ${locked || !state.plRanking.length ? "disabled" : ""}>Undo</button>
           </div>
-          <div class="pl-pick-progress" aria-label="${state.plRanking.length} of ${activeLeaguePredictor().clubs.length} clubs picked">
+          <div class="pl-pick-progress" role="progressbar" aria-label="Clubs picked" aria-valuemin="0" aria-valuemax="${activeLeaguePredictor().clubs.length}" aria-valuenow="${state.plRanking.length}">
             <span style="width:${(state.plRanking.length / activeLeaguePredictor().clubs.length) * 100}%"></span>
           </div>
           ${premierLeagueMobileTableHtml({ locked })}
@@ -10078,7 +10078,7 @@ function bracketMobileSvgHtml(rounds, champion) {
 
   return `
     <div class="bracket-mobile-svg-shell">
-      <svg class="bracket-svg bracket-mobile-svg" viewBox="0 0 430 1375" role="img" aria-label="One-sided World Cup bracket path">
+      <svg class="bracket-svg bracket-mobile-svg" viewBox="0 0 430 1375" role="group" aria-label="One-sided World Cup bracket path">
         <text class="bracket-svg-title" x="95" y="24" text-anchor="middle">ROUND OF 32</text>
         <text class="bracket-svg-title" x="226" y="24" text-anchor="middle">R16</text>
         <text class="bracket-svg-title" x="297" y="24" text-anchor="middle">QF</text>
@@ -10179,7 +10179,7 @@ function bracketActionControlsHtml(champion) {
         <span>Champion</span>
         <strong>${champion ? `${teamFlag(champion)} ${esc(champion)}` : "TBD"}</strong>
       </div>
-      <button class="btn btn-ghost btn-sm bracket-share-btn" type="button" data-share-bracket>${shareArrowIconSvg()}<span>Share</span></button>
+      <button class="btn btn-ghost btn-sm bracket-share-btn" type="button" aria-label="Share bracket" data-share-bracket>${shareArrowIconSvg()}<span>Share</span></button>
       <button class="btn btn-ghost btn-sm" type="button" data-reset-bracket ${locked ? "disabled" : ""}>Reset</button>
       <button class="btn btn-primary btn-sm" type="button" data-submit-bracket ${locked ? "disabled" : ""}>${locked ? "Submitted" : "Submit bracket"}</button>
     </div>
