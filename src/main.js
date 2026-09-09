@@ -1,4 +1,6 @@
 import "./styles.css";
+import { activateDialog, deactivateDialog, enhanceForms, visibleDialogs } from "./accessibility.js";
+import { readApiResponse } from "./http.js";
 import { DEMO_GROUP_ID, DEMO_NO_ID, DEMO_YES_ID, PRESENTATION_GROUP_ID, PRESENTATION_LOVE_GROUP_ID, PRESENTATION_PRIMARY_ID, applyDemoTrade, buildDemoGroup, buildPresentationDemoGroups, resolveDemoMarket, simulateDemoApi } from "./demo.js";
 import { startTutorial, stopTutorial, tutorialOnRender } from "./tutorial.js";
 import { DEFAULT_PREDICTOR_ID, LEAGUE_PREDICTOR_LIST, LEAGUE_PREDICTOR_ROUTES as LEAGUE_PREDICTORS } from "./challenge-routes.js";
@@ -324,7 +326,6 @@ function loadSupabaseRuntime() {
 }
 
 const API = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-const API_CONFIG_ERROR = "Production API is not configured. Set VITE_API_BASE_URL in Vercel to your Render backend URL.";
 const DEFAULT_BALANCE = 100000;
 const DEFAULT_MARKET_LIQUIDITY = 20000;
 const MARKET_FEE_RATE = 0.015;
@@ -388,6 +389,7 @@ const state = {
   pendingAuthAction: null,
   authUser: null,
   authAccessToken: null,
+  authBusy: false,
   accountMenuOpen: false,
   notificationsOpen: false,
   liveStatus: "connecting",
@@ -576,7 +578,7 @@ document.querySelector("#app").innerHTML = `
           <div class="field emoji-field">
             <label class="field-label">Mark</label>
             <input type="hidden" name="emoji" value="⚽" />
-            <div class="emoji-wheel" role="radiogroup" aria-label="Group mark">
+            <div class="emoji-wheel" role="group" aria-label="Group mark">
               <button type="button" class="emoji-chip active" data-emoji-option="⚽" aria-pressed="true">⚽</button>
               <button type="button" class="emoji-chip" data-emoji-option="🏆" aria-pressed="false">🏆</button>
               <button type="button" class="emoji-chip" data-emoji-option="🥇" aria-pressed="false">🥇</button>
@@ -748,7 +750,7 @@ document.querySelector("#app").innerHTML = `
             <div class="prediction-builder">
               <div class="prediction-builder-head">
                 <span>Outcome set</span>
-                <div class="market-type-toggle" role="radiogroup" aria-label="Market type">
+                <div class="market-type-toggle" role="group" aria-label="Market type">
                   <button type="button" class="active" data-market-type="binary" aria-pressed="true">Binary</button>
                   <button type="button" data-market-type="multi" aria-pressed="false">Multiple</button>
                 </div>
@@ -918,6 +920,10 @@ dom.signOutBtn?.addEventListener("click", onSignOut);
 document.querySelector("#authSignUpBtn")?.addEventListener("click", () => dom.authNameInput?.focus());
 dom.marketForm?.addEventListener("submit", onCreateMarket);
 
+document.addEventListener("click", e => {
+  if (e.target.closest("[data-exit-practice]")) exitDemo();
+  if (e.target.closest("[data-retry-catalog]")) void loadGlobalMarkets({ refresh: true }).catch(() => {});
+});
 document.addEventListener("click", onGlobalClick);
 document.addEventListener("click", onTradeSubmitClickCapture, true);
 document.addEventListener("click", onTradeAmountChipClick, true);
@@ -926,6 +932,11 @@ document.addEventListener("input", onGlobalInput);
 document.addEventListener("submit", onGlobalSubmit);
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
+    const overlay = visibleDialogs().at(-1);
+    if (overlay) {
+      closeModal(overlay.id.replace("ModalOverlay", ""));
+      return;
+    }
     if (state.demoMode && !state.presentationMode) {
       exitDemo();
       return;
@@ -1003,59 +1014,19 @@ async function init() {
   }
   render();
   loadMarketImages().catch(() => {});
-  let keepInitialLoading = false;
   loadInitialAppData()
     .catch(err => {
-      if (
-        !restoredFromCache &&
-        !state.sharedMarketId &&
-        !state.inviteToken &&
-        isRecoverableBackendError(err)
-      ) {
-        state.bootError = "";
-        state.marketLinkError = "";
-        keepInitialLoading = false;
-        const hasCachedState = restoreBootCacheState();
-        if (isLoggedIn() && (state.groups.length || hasCachedState)) {
-          state.shell = "app";
-          state.view = "dashboard";
-          return;
-        }
-        enterDemo({ skipTutorial: true });
-        return;
-      }
-      if (!restoredFromCache && isWakeTimeoutError(err)) {
-        state.bootError = "";
-        state.marketLinkError = "";
-        keepInitialLoading = true;
-        scheduleInitialLoadRetry();
-        return;
-      }
       if (restoredFromCache) {
-        console.warn("Initial refresh deferred", err);
+        setLiveStatus("offline");
+        toast("Showing your last saved view. Live updates are unavailable.");
         return;
       }
-      state.bootError = err.message || "Could not load groups.";
-      toast(err.message || "Could not load groups.");
+      state.bootError = err.message || "Could not load your groups. Please try again.";
     })
     .finally(() => {
-      if (!keepInitialLoading) state.loaded = true;
+      state.loaded = true;
       render();
-      if (!keepInitialLoading) {
-        if (state.currentGroupId) loadQuestionSuggestions(state.currentGroupId);
-        if (
-          !state.bootError &&
-          !state.inviteToken &&
-          !state.sharedMarketId &&
-          !state.currentGroupId &&
-          !state.groups.some(groupHasCurrentMember) &&
-          !localStorage.getItem("probable_demo_done") &&
-          !sessionStorage.getItem("probable_pending_auth_action")
-        ) {
-          enterDemo({ skipTutorial: true });
-        }
-        runStoredPendingAuthAction();
-      }
+      if (!state.bootError) runStoredPendingAuthAction();
     });
 }
 
@@ -1064,6 +1035,7 @@ init();
 async function loadInitialAppData() {
   state.bootError = "";
   state.marketLinkError = "";
+
   if (state.view === "markets") void loadGlobalMarkets().catch(() => {});
   if (state.view === "bracket" && !state.sharedMarketId && !state.inviteToken) {
     await loadBracketRuntime();
@@ -1145,7 +1117,7 @@ async function loadInitialAppData() {
 }
 
 async function loadGlobalMarkets({ refresh = false } = {}) {
-  if (state.globalMarketsLoading || (state.globalMarketsLoaded && !refresh)) return state.globalMarkets;
+  if (state.globalMarketsLoading || ((state.globalMarketsLoaded || state.globalMarketsError) && !refresh)) return state.globalMarkets;
   state.globalMarketsLoading = true;
   state.globalMarketsError = "";
   if (state.view === "markets") render();
@@ -1368,44 +1340,20 @@ function scheduleInitialLoadRetry() {
   }, 1800);
 }
 
-async function retryInitialLoad({ auto = false } = {}) {
+async function retryInitialLoad() {
+  if (!state.loaded) return;
   state.loaded = false;
   state.bootError = "";
   state.marketLinkError = "";
   render();
-  loadMarketImages().catch(() => {});
-  let keepLoading = false;
   try {
     await loadInitialAppData();
   } catch (err) {
-    if (!state.sharedMarketId && !state.inviteToken && isRecoverableBackendError(err)) {
-      const hasCachedState = restoreBootCacheState();
-      if (isLoggedIn() && (state.groups.length || hasCachedState)) {
-        state.shell = "app";
-        state.view = "dashboard";
-        state.bootError = "";
-        state.marketLinkError = "";
-        state.loaded = true;
-        return;
-      }
-      state.bootError = "";
-      state.marketLinkError = "";
-      state.loaded = true;
-      enterDemo({ skipTutorial: true });
-      if (!auto) toast("Backend is unavailable. Showing practice market demo.");
-      return;
-    }
-    if (isWakeTimeoutError(err)) {
-      keepLoading = true;
-      scheduleInitialLoadRetry();
-      return;
-    }
-    state.bootError = err.message || "Could not load groups.";
-    if (!auto) toast(state.bootError);
+    state.bootError = err.message || "Could not load your groups. Please try again.";
   } finally {
-    if (!keepLoading) state.loaded = true;
+    state.loaded = true;
     render();
-    if (!keepLoading) runStoredPendingAuthAction();
+    if (!state.bootError) runStoredPendingAuthAction();
   }
 }
 
@@ -3058,7 +3006,7 @@ async function onGlobalSubmit(e) {
   try {
     const data = await api(`/api/markets/${market.id}/trade`, {
       method: "POST",
-      body: JSON.stringify({ participant: state.activeMember, side, amount, action, outcomeId }),
+      body: JSON.stringify({ participant: state.activeMember, side, amount, action, outcomeId, ...(state.demoMode && action === "sell" ? { shares: rawAmount } : {}) }),
     });
     state.pendingUi.tradeMarketId = null;
     setButtonPending(submit, false);
@@ -3084,6 +3032,12 @@ async function onGlobalSubmit(e) {
     render();
     toast(`${state.activeMember} ${action === "sell" ? "sold" : "bought"} ${side.toUpperCase()}.`);
   } catch (err) {
+    const currentPanel = findTradePanelForMarket(market.id);
+    const currentInput = currentPanel?.querySelector(".trade-input");
+    if (currentInput && state.trade.marketId === market.id && state.trade.mode === action && state.trade.side === side) {
+      setTradeInputAmount(currentInput, rawAmount);
+      renderTradePreview(market, rawAmount);
+    }
     toast(err.message || "Trade failed.");
   } finally {
     if (state.pendingUi.tradeMarketId === market.id) state.pendingUi.tradeMarketId = null;
@@ -3180,8 +3134,25 @@ function runPendingAuthAction() {
   }
 }
 
+function setAuthFeedback(message, error = false) {
+  let feedback = document.querySelector("#authFeedback");
+  if (!feedback) {
+    dom.loginForm.insertAdjacentHTML("beforeend", '<p id="authFeedback" class="auth-feedback" role="status" aria-live="polite"></p>');
+    feedback = document.querySelector("#authFeedback");
+  }
+  feedback.classList.toggle("is-error", error);
+  feedback.textContent = message;
+}
+
+function setAuthBusy(busy) {
+  state.authBusy = busy;
+  dom.loginForm.setAttribute("aria-busy", String(busy));
+  for (const button of dom.loginForm.querySelectorAll('button[type="submit"], #googleSignInBtn')) button.disabled = busy;
+}
+
 async function onLogin(e) {
   e.preventDefault();
+  if (state.authBusy) return;
   const email = new FormData(e.currentTarget).get("email")?.toString().trim() ?? "";
   const displayName = readAuthDisplayNameInput();
   if (!displayName) return;
@@ -3189,32 +3160,28 @@ async function onLogin(e) {
     applyDevAuthBypass(displayName, email || `${slug(displayName)}@probable.local`);
     return;
   }
-  if (!email) {
-    toast("Enter your email address.");
-    dom.authEmailInput?.focus();
-    return;
-  }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    toast("Enter a valid email address.");
+    setAuthFeedback("Enter a valid email address.", true);
     dom.authEmailInput?.focus();
     return;
   }
   const action = state.pendingAuthAction;
   if (action) sessionStorage.setItem("probable_pending_auth_action", action);
-  const supabase = await loadSupabaseRuntime();
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: {
-      emailRedirectTo: authRedirectUrl(),
-      shouldCreateUser: true,
-      data: { name: displayName, full_name: displayName },
-    },
-  });
-  if (error) {
-    toast(error.message || "Email sign-in failed.");
-    return;
+  setAuthBusy(true);
+  setAuthFeedback("Sending your sign-in link...");
+  try {
+    const supabase = await loadSupabaseRuntime();
+    const { error } = await withTimeout(supabase.auth.signInWithOtp({
+      email,
+      options: {emailRedirectTo: authRedirectUrl(), shouldCreateUser: true, data: {name: displayName, full_name: displayName}},
+    }), API_TIMEOUT_MS, "Sign-in");
+    if (error) throw error;
+    setAuthFeedback(`Check ${email} for your sign-in link. Check your spam folder if it does not arrive.`);
+  } catch (error) {
+    setAuthFeedback(error.message || "Could not send your sign-in link. Please try again.", true);
+  } finally {
+    setAuthBusy(false);
   }
-  toast("Check your email for a sign-in link.");
 }
 
 async function onGoogleSignIn() {
@@ -3296,14 +3263,20 @@ function readAuthDisplayNameInput() {
 }
 
 async function onOAuthSignIn(provider) {
+  if (state.authBusy) return;
   const action = state.pendingAuthAction;
   if (action) sessionStorage.setItem("probable_pending_auth_action", action);
-  const supabase = await loadSupabaseRuntime();
-  const { error } = await supabase.auth.signInWithOAuth({
-    provider,
-    options: { redirectTo: authRedirectUrl() },
-  });
-  if (error) toast(error.message || `${provider} sign-in failed.`);
+  setAuthBusy(true);
+  setAuthFeedback("Opening Google sign-in...");
+  try {
+    const supabase = await loadSupabaseRuntime();
+    const { error } = await withTimeout(supabase.auth.signInWithOAuth({provider, options: {redirectTo: authRedirectUrl()}}), API_TIMEOUT_MS, "Sign-in");
+    if (error) throw error;
+  } catch (error) {
+    setAuthFeedback(error.message || "Could not open sign-in. Please try again.", true);
+  } finally {
+    setAuthBusy(false);
+  }
 }
 
 function authRedirectUrl() {
@@ -3326,23 +3299,48 @@ async function onSignOut() {
 
 async function onJoinGroupSubmit(e) {
   e.preventDefault();
+  const form = e.currentTarget;
+  if (state.pendingUi.groupJoin) return;
   if (!requireLogin("join-group")) return;
-  const rawTarget = new FormData(e.currentTarget).get("groupId")?.toString().trim() ?? "";
+  const rawTarget = new FormData(form).get("groupId")?.toString().trim() ?? "";
   const inviteToken = extractInviteToken(rawTarget);
-  if (inviteToken) {
-    state.inviteToken = inviteToken;
-    await loadInvitePreview(inviteToken);
-    await joinCurrentInvite();
-    closeModal("join");
-    return;
-  }
   const groupId = extractJoinGroupId(rawTarget);
-  if (!groupId) {
+  if (!inviteToken && !groupId) {
     toast("Paste an invite link or group ID.");
     return;
   }
-  await joinGroup(groupId, authDisplayName());
-  closeModal("join");
+  let feedback = form.querySelector("[data-join-feedback]");
+  if (!feedback) {
+    feedback = document.createElement("p");
+    feedback.dataset.joinFeedback = "";
+    feedback.setAttribute("role", "alert");
+    feedback.className = "form-error";
+    form.querySelector(".modal-footer").before(feedback);
+  }
+  feedback.textContent = "";
+  const submit = form.querySelector('[type="submit"]');
+  state.pendingUi.groupJoin = true;
+  form.setAttribute("aria-busy", "true");
+  setButtonPending(submit, true, "Joining");
+  try {
+    let joined = false;
+    if (inviteToken) {
+      state.inviteToken = inviteToken;
+      state.inviteJoinError = "";
+      const preview = await loadInvitePreview(inviteToken);
+      if (preview) joined = await joinCurrentInvite();
+    } else {
+      joined = await joinGroup(groupId, authDisplayName());
+    }
+    if (joined) closeModal("join");
+    else feedback.textContent = state.inviteJoinError || (inviteToken && state.inviteError) || "Could not join this group. Check your invite and try again.";
+  } catch (error) {
+    feedback.textContent = error.message || "Could not join this group. Please try again.";
+  } finally {
+    state.pendingUi.groupJoin = false;
+    form.removeAttribute("aria-busy");
+    setButtonPending(submit, false);
+  }
 }
 
 async function onDashboardCreate(e) {
@@ -4564,22 +4562,23 @@ async function regenerateInviteLink() {
 }
 
 async function joinCurrentInvite() {
+  if (state.pendingUi.inviteJoin) return false;
   const token = state.inviteToken || state.invitePreview?.token;
   if (!token) {
     toast("Invite link missing.");
-    return;
+    return false;
   }
   if (!isLoggedIn()) {
     state.pendingAuthAction = "join-invite";
     sessionStorage.setItem("probable_pending_invite_token", token);
     sessionStorage.setItem("probable_pending_auth_action", "join-invite");
     openModal("login");
-    return;
+    return false;
   }
   const name = authDisplayName();
   if (!name) {
     toast("Sign in to join this group.");
-    return;
+    return false;
   }
   const previewGroupId = state.invitePreview?.groupId || state.invitePreview?.group_id;
   const existingGroup = previewGroupId ? state.groups.find(group => group.id === previewGroupId) : null;
@@ -4598,8 +4597,11 @@ async function joinCurrentInvite() {
     normalizeSelection();
     render();
     toast("Opened group.");
-    return;
+    return true;
   }
+  state.pendingUi.inviteJoin = true;
+  state.inviteJoinError = "";
+  document.querySelectorAll("[data-join-invite]").forEach(button => setButtonPending(button, true, "Joining"));
   try {
     const data = await api(`/api/invites/${encodeURIComponent(token)}/join`, {
       method: "POST",
@@ -4619,15 +4621,21 @@ async function joinCurrentInvite() {
     normalizeSelection();
     render();
     toast("Joined group.");
+    return true;
   } catch (err) {
-    state.inviteError = err.message || "Could not join this group.";
-    render();
-    toast(state.inviteError);
+    state.inviteJoinError = err.message || "Could not join this group. Please try again.";
+    toast(state.inviteJoinError);
+    return false;
+  } finally {
+    state.pendingUi.inviteJoin = false;
+    if (state.inviteToken) render();
   }
 }
 
 async function onCreateGroup(e) {
   e.preventDefault();
+  const form = e.currentTarget;
+  if (form.getAttribute("aria-busy") === "true") return;
   if (!requireLogin("create-group")) return;
   const fd = new FormData(e.currentTarget);
   const name = fd.get("name")?.toString().trim() ?? "";
@@ -4638,8 +4646,16 @@ async function onCreateGroup(e) {
     toast("Add a group name.");
     return;
   }
-  await createGroup({ name, emoji, members, activeMember: creator, form: e.currentTarget });
-  closeModal("group");
+  const submit = form.querySelector('button[type="submit"]');
+  form.setAttribute("aria-busy", "true");
+  submit.disabled = true;
+  try {
+    const created = await createGroup({ name, emoji, members, activeMember: creator, form });
+    if (created) closeModal("group");
+  } finally {
+    form.setAttribute("aria-busy", "false");
+    submit.disabled = false;
+  }
 }
 
 async function createGroup({ name, emoji, members, activeMember, form }) {
@@ -4661,8 +4677,23 @@ async function createGroup({ name, emoji, members, activeMember, form }) {
     normalizeSelection();
     render();
     toast("Group created.");
+    form?.querySelector("[data-form-error]")?.remove();
+    return true;
   } catch (err) {
-    toast(err.message || "Failed to create group.");
+    const message = err.message || "Could not create your group. Please try again.";
+    if (form) {
+      let error = form.querySelector("[data-form-error]");
+      if (!error) {
+        error = document.createElement("p");
+        error.dataset.formError = "";
+        error.className = "auth-feedback is-error";
+        error.setAttribute("role", "alert");
+        form.append(error);
+      }
+      error.textContent = message;
+    }
+    toast(message);
+    return false;
   }
 }
 
@@ -4750,7 +4781,7 @@ async function joinGroup(groupId, myName) {
     routeToApp({ replace: true });
     normalizeSelection();
     render();
-    return;
+    return true;
   }
   try {
     const data = await api(`/api/groups/${groupId}/join`, {
@@ -4768,8 +4799,10 @@ async function joinGroup(groupId, myName) {
     normalizeSelection();
     render();
     toast(`Joined as ${myName}.`);
+    return true;
   } catch (err) {
     toast(err.message || "Could not join group.");
+    return false;
   }
 }
 
@@ -5038,7 +5071,7 @@ function render() {
     renderEmbedRoute();
   } else if (state.shell === "app" && state.view !== "markets" && state.view !== "challenges" && state.view !== "bracket" && state.view !== "plPredictor" && !state.loaded && !getCurrentGroup()) {
     renderMarketLinkLoading();
-  } else if (state.shell === "app" && state.view !== "markets" && state.view !== "challenges" && state.view !== "bracket" && state.view !== "plPredictor" && (state.bootError || unresolvedMarketLink)) {
+  } else if (state.shell === "app" && (state.bootError || unresolvedMarketLink)) {
     renderMarketLinkLoading({ error: state.bootError || state.marketLinkError || "That market link could not be found." });
   } else if (state.shell === "invite") {
     renderInvitePreview();
@@ -5070,6 +5103,10 @@ function render() {
     }
   } else {
     renderDashboard();
+  }
+  enhanceForms(dom.mainContent);
+  if (state.demoMode && !state.presentationMode) {
+    dom.mainContent.insertAdjacentHTML("afterbegin", '<aside class="practice-banner" role="status"><div><strong>Practice market</strong><span>Simulated trades. Nothing here affects your account.</span></div><button type="button" class="btn btn-ghost" data-exit-practice>Exit practice</button></aside>');
   }
   requestAnimationFrame(() => {
     renderCharts(renderEpoch);
@@ -6643,7 +6680,7 @@ function catalogPreviewPanel(item) {
 }
 
 function renderMarketsHub() {
-  if (!state.globalMarketsLoaded && !state.globalMarketsLoading) void loadGlobalMarkets().catch(() => {});
+  if (!state.globalMarketsLoaded && !state.globalMarketsLoading && !state.globalMarketsError) void loadGlobalMarkets().catch(() => {});
   const categories = ["All", ...new Set(state.globalMarkets.map(item => item.category).filter(Boolean))];
   const filtered = state.globalMarketCategory === "All"
     ? state.globalMarkets
@@ -6656,11 +6693,11 @@ function renderMarketsHub() {
         <div class="explore-count"><strong>${state.globalMarkets.length}</strong><span>live questions</span></div>
       </header>
       <label class="markets-search explore-search motion-item">${appNavIcon("explore")}<input type="search" data-market-search placeholder="Search teams, leagues, people, or outcomes…" aria-label="Search markets" /><kbd>/</kbd></label>
-      <div class="market-category-tabs motion-item" role="tablist" aria-label="Market categories">
+      <div class="market-category-tabs motion-item" role="group" aria-label="Market categories">
         ${categories.map(category => `<button type="button" data-market-category="${esc(category)}" class="${state.globalMarketCategory === category ? "active" : ""}">${esc(category)}</button>`).join("")}
       </div>
       ${state.globalMarketsLoading && !state.globalMarkets.length ? `<div class="catalog-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>Loading markets</strong></div>` : ""}
-      ${state.globalMarketsError ? `<div class="catalog-error"><p>${esc(state.globalMarketsError)}</p><button class="btn btn-ghost btn-sm" type="button" data-go-markets>Retry</button></div>` : ""}
+      ${state.globalMarketsError ? `<div class="catalog-error"><p>${esc(state.globalMarketsError)}</p><button class="btn btn-ghost btn-sm" type="button" data-retry-catalog>Try again</button></div>` : ""}
       ${featured ? `<section class="explore-feature-section motion-item"><div class="catalog-section-head"><div><p class="eyebrow">Trending now</p><h2>Most traded</h2></div><span>Open it to add and trade in your group.</span></div>${featuredCatalogMarket(featured)}</section>` : ""}
       <div class="catalog-section-head motion-item"><div><p class="eyebrow">Market library</p><h2>${esc(state.globalMarketCategory === "All" ? "All questions" : state.globalMarketCategory)}</h2></div><span>${filtered.length} available</span></div>
       <div class="catalog-market-grid">${filtered.map(globalMarketCard).join("")}</div>
@@ -6809,7 +6846,7 @@ function homeMarketBoardHtml(group) {
     <div class="market-list-head motion-item">
       <div><h2>${activeStatus === "open" ? "Markets" : "Settled"}</h2><p>${activeStatus === "open" ? "Questions created or traded by this group" : "Final calls and completed markets"}</p></div>
       <div class="market-list-tools">
-        <div class="market-status-tabs" role="tablist" aria-label="Market status">
+        <div class="market-status-tabs" role="group" aria-label="Market status">
           <button class="${activeStatus === "open" ? "active" : ""}" type="button" data-market-status-filter="open">Open <span>${open}</span></button>
           <button class="${activeStatus === "closed" ? "active" : ""}" type="button" data-market-status-filter="closed">Settled <span>${closed}</span></button>
         </div>
@@ -6954,7 +6991,7 @@ function renderFocusedTradeView(group, market, event) {
             ${leadingMarkets.map((item, index) => focusedLegendItem(item, index, event)).join("")}
           </div>
 
-          <span class="focused-chart-watermark">probable</span>
+          <span class="focused-chart-watermark" aria-hidden="true">probable</span>
           <div class="focused-chart-shell">
             <canvas data-event-chart-canvas="${esc(event.key)}" aria-label="${esc(eventTitle)} probability history"></canvas>
             ${tradeMarket.status === "open" ? `<button class="mobile-trade-fab" type="button" data-mobile-trade-toggle>${tradeFabIconSvg()}<span>Trade</span></button>` : ""}
@@ -7257,7 +7294,8 @@ function renderInvitePreview() {
             <span><strong>${Number(invite.closedCount || 0)}</strong><em>closed</em></span>
           </div>
           ${invite.active ? `
-            <button class="btn btn-primary btn-lg" type="button" data-join-invite>${isLoggedIn() ? "Join group" : "Sign in to join"}</button>
+            <button class="btn btn-primary btn-lg" type="button" data-join-invite ${state.pendingUi.inviteJoin ? "disabled" : ""}>${state.pendingUi.inviteJoin ? "Joining" : isLoggedIn() ? "Join group" : "Sign in to join"}</button>
+            ${state.inviteJoinError ? `<p class="form-error" role="alert">${esc(state.inviteJoinError)}</p>` : ""}
           ` : `
             <p class="invite-error">This invite has been revoked. Ask for a fresh link.</p>
             <button class="btn btn-primary" type="button" data-go-welcome>Back to Probable</button>
@@ -7339,12 +7377,12 @@ function getGroupForEvent(event) {
 }
 
 function renderEmptyDashboard() {
-  const currentGroup = getCurrentGroup() || firstSelectableGroup();
+  const currentGroup = isLoggedIn() ? getCurrentGroup() || firstSelectableGroup() : null;
   const enterLabel = currentGroup ? `Open ${currentGroup.name}` : isLoggedIn() ? "Create your first group" : "Get started";
   const welcomeActions = `
     <div class="welcome-button-row">
       <button class="btn btn-primary btn-lg" type="button" data-enter-app>${esc(enterLabel)} <span aria-hidden="true">→</span></button>
-      <button class="btn btn-ghost btn-lg" type="button" data-try-demo>Try a live demo</button>
+      <button class="btn btn-ghost btn-lg" type="button" data-try-demo>Try a practice market</button>
     </div>
     <div class="welcome-secondary-actions">
       <button type="button" data-join-group>Have an invite? Join a group</button>
@@ -7902,7 +7940,7 @@ function tradePanel(market, yesPrice, noPrice, event = null) {
           <label class="trade-amount-label"><span data-trade-input-label>${sellMode ? "Shares" : "Amount"}</span> <span data-trade-limit-copy>${sellMode ? sellLimitCopy(sellState) : `${money(balance)} cash`}</span></label>
           <div class="trade-input-row ${sellMode ? "sell" : "buy"}">
             ${sellMode ? "" : `<span class="trade-suffix">$</span>`}
-            <input class="trade-input" type="text" min="${sellMode ? "0.01" : "1"}" ${sellMode ? "" : `max="${max}"`} data-raw-max="${formatShareInput(max)}" step="any" placeholder="0" inputmode="decimal" autocomplete="off" value="${state.presentationMode && !sellMode ? "1000" : ""}" ${inputDisabled} />
+            <input aria-label="${mode === "sell" ? "Shares to sell" : "Amount to spend"}" class="trade-input" type="text" min="${sellMode ? "0.01" : "1"}" ${sellMode ? "" : `max="${max}"`} data-raw-max="${formatShareInput(max)}" step="any" placeholder="0" inputmode="decimal" autocomplete="off" value="${state.presentationMode && !sellMode ? "1000" : ""}" ${inputDisabled} />
           </div>
         </div>
         <div class="trade-chip-row ${mode === "sell" ? "sell" : ""}">
@@ -9083,6 +9121,7 @@ function updateRenderedTradeSellControls(market) {
   const balance = getCurrentGroup()?.balances?.[state.activeMember] ?? DEFAULT_BALANCE;
   const max = Math.max(0, mode === "sell" ? sellState.shares : Math.floor(Math.min(balance, maxSingleBuyAmount(market))));
   if (inputLabel) inputLabel.textContent = mode === "sell" ? "Shares" : "Amount";
+  input?.setAttribute("aria-label", mode === "sell" ? "Shares to sell" : "Amount to spend");
   if (limitCopy) limitCopy.textContent = mode === "sell" ? sellLimitCopy(sellState) : `${money(getCurrentGroup()?.balances?.[state.activeMember] ?? 0)} cash`;
   if (inputRow) {
     inputRow.classList.toggle("sell", mode === "sell");
@@ -12322,6 +12361,10 @@ function destroyCharts() {
 }
 
 async function animateIn() {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    initGooeyText();
+    return;
+  }
   const items = document.querySelectorAll(".motion-item");
   if (!items.length) {
     initGooeyText();
@@ -12499,9 +12542,13 @@ function mergeFocusedGroupContext(group) {
 }
 
 function persistBootCache() {
-  if (!Array.isArray(state.groups) || !state.groups.length) return;
   try {
+    if (!state.authUser?.id || !Array.isArray(state.groups) || !state.groups.length) {
+      localStorage.removeItem(STORAGE_KEYS.bootCache);
+      return;
+    }
     localStorage.setItem(STORAGE_KEYS.bootCache, JSON.stringify({
+      userId: state.authUser.id,
       groups: state.groups,
       currentGroupId: state.currentGroupId,
       activeMember: state.activeMember,
@@ -12514,9 +12561,14 @@ function persistBootCache() {
 
 function readBootCache() {
   try {
+    if (!state.authUser?.id) return null;
     const raw = localStorage.getItem(STORAGE_KEYS.bootCache);
     if (!raw) return null;
     const cache = JSON.parse(raw);
+    if (cache?.userId !== state.authUser.id) {
+      localStorage.removeItem(STORAGE_KEYS.bootCache);
+      return null;
+    }
     if (!Array.isArray(cache?.groups) || !cache.groups.length) return null;
     return cache;
   } catch {
@@ -12712,16 +12764,16 @@ function groupHasCurrentMember(group) {
 
 function renderMarketLinkLoading({ error = "" } = {}) {
   const isError = Boolean(error);
+  const marketLink = Boolean(state.sharedMarketId);
   dom.mainContent.innerHTML = `
-    <section class="invite-preview-page">
+    <section class="invite-preview-page" aria-busy="${!isError}">
       <div class="invite-preview-card motion-item market-link-card">
-        <button class="logo invite-preview-logo" type="button" data-go-welcome>probable<span class="logo-dot">.</span></button>
-        <p class="eyebrow">Market link</p>
-        <h1>${isError ? "Could not open market" : "Opening market"}</h1>
-        <p class="${isError ? "invite-error" : "muted"}">${esc(isError ? error : "Loading the latest prices and trade panel.")}</p>
+        <p class="eyebrow">${marketLink ? "Shared market" : "Your workspace"}</p>
+        <h1>${isError ? (marketLink ? "Could not open this market" : "Could not load your workspace") : (marketLink ? "Opening market" : "Loading your workspace")}</h1>
+        <p class="${isError ? "invite-error" : "muted"}" role="${isError ? "alert" : "status"}">${esc(isError ? error : "Getting the latest prices and activity. This may take a moment.")}</p>
         <div class="market-link-actions">
-          <button class="btn btn-primary" type="button" data-retry-initial-load>${isError ? "Retry" : "Still loading?"}</button>
-          <button class="btn btn-ghost" type="button" data-enter-app>Enter app</button>
+          ${isError ? '<button class="btn btn-primary" type="button" data-retry-initial-load>Try again</button>' : '<span class="spinner" aria-hidden="true"></span>'}
+          <button class="btn btn-ghost" type="button" data-go-welcome>Back to home</button>
         </div>
       </div>
     </section>`;
@@ -12884,15 +12936,29 @@ function openModal(type) {
   if (type === "login") {
     updateAuthModal();
   }
-  dom[`${type}ModalOverlay`].classList.remove("hidden");
+  const overlay = dom[`${type}ModalOverlay`];
+  overlay.classList.remove("hidden");
+  activateDialog(overlay);
 }
 
 function closeModal(type) {
   if (type === "login") state.pendingAuthAction = null;
-  dom[`${type}ModalOverlay`].classList.add("hidden");
+  const overlay = dom[`${type}ModalOverlay`];
+  const wasOpen = !overlay.classList.contains("hidden");
+  overlay.classList.add("hidden");
+  if (wasOpen) deactivateDialog(overlay);
 }
 
 function applyAuthSession(session, { renderNow = true } = {}) {
+  const previousUserId = state.authUser?.id || null;
+  const nextUserId = session?.user?.id || null;
+  if (previousUserId !== nextUserId) {
+    state.groups = [];
+    state.currentGroupId = null;
+    tradeQuoteCache.clear();
+    tradeQuoteInflight.clear();
+    if (previousUserId) localStorage.removeItem(STORAGE_KEYS.bootCache);
+  }
   state.authUser = session?.user ?? null;
   state.authAccessToken = session?.access_token ?? null;
   if (state.authUser) {
@@ -12924,6 +12990,8 @@ function applyAuthSession(session, { renderNow = true } = {}) {
 
 function resetToWelcomeAfterSignOut() {
   applyAuthSession(null, { renderNow: false });
+  state.groups = [];
+  localStorage.removeItem(STORAGE_KEYS.bootCache);
   state.currentGroupId = null;
   state.activeMember = null;
   enterWelcomeShell();
@@ -12976,11 +13044,11 @@ function updateAuthModal() {
   }
   dom.authCurrent.innerHTML = loggedIn
     ? `You’re signed in as <strong>${esc(authDisplayName())}</strong>.`
-    : "Welcome back. Sign in with Google to create markets.";
-  dom.authNameArea.classList.toggle("hidden", loggedIn || !devBypass);
+    : "Use Google or get an email link. No password needed.";
+  dom.authNameArea.classList.toggle("hidden", loggedIn);
   dom.authProviderArea.classList.toggle("hidden", loggedIn);
-  dom.authDivider.classList.add("hidden");
-  dom.authEmailArea.classList.add("hidden");
+  dom.authDivider.classList.toggle("hidden", loggedIn);
+  dom.authEmailArea.classList.toggle("hidden", loggedIn);
   dom.authModalFooter.classList.add("hidden");
   dom.authSessionActions.classList.toggle("hidden", !loggedIn);
 }
@@ -13046,6 +13114,8 @@ function toLocalDatetime(date) {
 
 let toastTimer = null;
 function toast(msg) {
+  dom.toast.setAttribute("role", "status");
+  dom.toast.setAttribute("aria-live", "polite");
   dom.toast.textContent = msg;
   dom.toast.classList.remove("hidden");
   clearTimeout(toastTimer);
@@ -13080,9 +13150,6 @@ async function api(path, opts = {}) {
     const demoGroup = state.groups.find(group => (group.markets || []).some(market => path.includes(`/markets/${market.id}`))) || getCurrentGroup();
     return simulateDemoApi(path, opts, demoGroup, state.groups);
   }
-  if (!API && import.meta.env.PROD && !isLocalHost()) {
-    throw new Error(API_CONFIG_ERROR);
-  }
   const { timeoutMs = API_TIMEOUT_MS, ...fetchOpts } = opts;
   const identityHeaders = {};
   if (state.authAccessToken) {
@@ -13096,12 +13163,7 @@ async function api(path, opts = {}) {
     timeoutMs,
     headers: { "Content-Type": "application/json", ...identityHeaders, ...(opts.headers ?? {}) },
   });
-  if (!res.ok) {
-    let msg = "Request failed";
-    try { msg = (await res.json()).detail || msg; } catch { msg = res.statusText || msg; }
-    throw new Error(msg);
-  }
-  return res.json();
+  return readApiResponse(res);
 }
 
 async function fetchWithTimeout(url, opts = {}) {
@@ -13115,11 +13177,13 @@ async function fetchWithTimeout(url, opts = {}) {
     if (err?.name === "AbortError") {
       throw new Error("Connection timed out. Check your connection and try again.");
     }
+    if (err instanceof TypeError) throw new Error("Could not connect. Check your internet connection and try again.");
     throw err;
   } finally {
     window.clearTimeout(timer);
   }
 }
+
 
 function withTimeout(promise, timeoutMs, label = "Request") {
   let timer = null;

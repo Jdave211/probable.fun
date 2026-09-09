@@ -278,35 +278,35 @@ ALTER TABLE market_outcomes ADD COLUMN IF NOT EXISTS elimination_notes text;
 ALTER TABLE market_events ALTER COLUMN liquidity_b SET DEFAULT 20000.0;
 ALTER TABLE group_members ALTER COLUMN balance SET DEFAULT 100000.0;
 
--- Disable RLS for development (no auth yet)
-ALTER TABLE groups        DISABLE ROW LEVEL SECURITY;
-ALTER TABLE group_members DISABLE ROW LEVEL SECURITY;
-ALTER TABLE group_invites DISABLE ROW LEVEL SECURITY;
-ALTER TABLE markets       DISABLE ROW LEVEL SECURITY;
-ALTER TABLE trades        DISABLE ROW LEVEL SECURITY;
-ALTER TABLE market_events DISABLE ROW LEVEL SECURITY;
-ALTER TABLE market_outcomes DISABLE ROW LEVEL SECURITY;
-ALTER TABLE event_positions DISABLE ROW LEVEL SECURITY;
-ALTER TABLE event_trades DISABLE ROW LEVEL SECURITY;
-ALTER TABLE bracket_entries DISABLE ROW LEVEL SECURITY;
-ALTER TABLE season_predictions DISABLE ROW LEVEL SECURITY;
-ALTER TABLE group_challenges DISABLE ROW LEVEL SECURITY;
-ALTER TABLE market_resolution_approvals DISABLE ROW LEVEL SECURITY;
+-- Application data is available only through the authenticated backend.
+ALTER TABLE groups        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE group_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE group_invites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE markets       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE trades        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE market_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE market_outcomes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE event_positions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE event_trades ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bracket_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE season_predictions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE group_challenges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE market_resolution_approvals ENABLE ROW LEVEL SECURITY;
 
--- Grant full access to the anon/publishable key role
-GRANT ALL ON groups        TO anon;
-GRANT ALL ON group_members TO anon;
-GRANT ALL ON group_invites TO anon;
-GRANT ALL ON markets       TO anon;
-GRANT ALL ON trades        TO anon;
-GRANT ALL ON market_events TO anon;
-GRANT ALL ON market_outcomes TO anon;
-GRANT ALL ON event_positions TO anon;
-GRANT ALL ON event_trades TO anon;
-GRANT ALL ON bracket_entries TO anon;
-GRANT ALL ON season_predictions TO anon;
-GRANT ALL ON group_challenges TO anon;
-GRANT ALL ON market_resolution_approvals TO anon;
+-- The backend uses the server-only service role.
+GRANT ALL ON groups        TO service_role;
+GRANT ALL ON group_members TO service_role;
+GRANT ALL ON group_invites TO service_role;
+GRANT ALL ON markets       TO service_role;
+GRANT ALL ON trades        TO service_role;
+GRANT ALL ON market_events TO service_role;
+GRANT ALL ON market_outcomes TO service_role;
+GRANT ALL ON event_positions TO service_role;
+GRANT ALL ON event_trades TO service_role;
+GRANT ALL ON bracket_entries TO service_role;
+GRANT ALL ON season_predictions TO service_role;
+GRANT ALL ON group_challenges TO service_role;
+GRANT ALL ON market_resolution_approvals TO service_role;
 
 CREATE OR REPLACE FUNCTION probable_reprice_event(p_event_id text)
 RETURNS void
@@ -714,7 +714,7 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION resolve_event_market(text, text, text, text, jsonb) TO anon;
+GRANT EXECUTE ON FUNCTION resolve_event_market(text, text, text, text, jsonb) TO service_role;
 
 CREATE TABLE IF NOT EXISTS market_catalog (
   id text PRIMARY KEY,
@@ -741,5 +741,28 @@ ALTER TABLE market_events ADD COLUMN IF NOT EXISTS catalog_market_id text;
 CREATE INDEX IF NOT EXISTS market_catalog_status_category_idx ON market_catalog (status, category, featured DESC);
 CREATE INDEX IF NOT EXISTS market_events_catalog_market_id_idx ON market_events (catalog_market_id) WHERE catalog_market_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS market_events_group_catalog_unique_idx ON market_events (group_id, catalog_market_id) WHERE catalog_market_id IS NOT NULL;
-ALTER TABLE market_catalog DISABLE ROW LEVEL SECURITY;
-GRANT ALL ON TABLE market_catalog TO anon;
+ALTER TABLE market_catalog ENABLE ROW LEVEL SECURITY;
+GRANT ALL ON TABLE market_catalog TO service_role;
+
+-- Revoke PostgreSQL default PUBLIC execution privileges as well as role grants.
+DO $$
+DECLARE v_table text; v_function record;
+BEGIN
+  FOREACH v_table IN ARRAY ARRAY['groups','group_members','group_invites','markets','trades','market_events',
+    'market_outcomes','event_positions','event_trades','bracket_entries','season_predictions','group_challenges',
+    'market_resolution_approvals','market_catalog']
+  LOOP
+    EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC, anon, authenticated', v_table);
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', v_table);
+    EXECUTE format('GRANT ALL ON TABLE public.%I TO service_role', v_table);
+  END LOOP;
+  FOR v_function IN SELECT p.oid::regprocedure AS signature FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname IN ('probable_reprice_event','place_event_trade',
+      'place_event_trade_for_user','place_complement_event_trade_for_user','resolve_event_market','probable_production_readiness')
+  LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon, authenticated', v_function.signature);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO service_role', v_function.signature);
+  END LOOP;
+END;
+$$;
+

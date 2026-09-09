@@ -632,8 +632,13 @@ export function simulateDemoApi(path, opts, group, allGroups) {
     };
   }
   if (path.endsWith("/trade")) {
-    if (body.action === "sell") throw new Error("Selling isn't part of the practice market.");
     const market = group.markets.find(item => item.id === body.outcomeId) || group.markets[0];
+    if (body.action === "sell") {
+      const held = Number(market?.positions?.[body.participant]?.[body.outcomeId] || 0);
+      if (!Number.isFinite(body.shares) || body.shares <= 0 || body.shares > held) {
+        throw new Error("Choose a number of shares you own to sell.");
+      }
+    }
     const probabilityBefore = Number(market?.probability || 0);
     const balanceBefore = Number(group.balances?.[body.participant] || 0);
     const shares = applyDemoTrade(group, body);
@@ -642,7 +647,7 @@ export function simulateDemoApi(path, opts, group, allGroups) {
       groups: allGroups,
       trade: {
         shares,
-        cashAmount: Number(body.amount || 0),
+        cashAmount: Math.abs(Number(group.balances?.[body.participant] || 0) - balanceBefore),
         probabilityBefore,
         probabilityAfter: Number(updated?.probability || 0),
         balanceBefore,

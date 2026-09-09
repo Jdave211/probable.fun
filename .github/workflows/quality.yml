@@ -1,0 +1,41 @@
+name: Production regression checks
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - name: Install backend dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements.txt
+      - run: npx playwright install --with-deps chromium --only-shell
+      - run: npm run test:unit
+      - run: npm run test:db
+      - run: npm run test:api
+      - run: npm run test:ui
+      - run: npm run build
+      - run: npm audit --audit-level=high
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-regression-results
+          path: |
+            output/playwright/*.json
+            output/playwright/*.png
+          retention-days: 7

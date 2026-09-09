@@ -8240,6 +8240,16 @@ button { color: inherit; }
   color: var(--text-2);
   font-size: 1rem;
 }
+.backend-readiness-issues {
+  margin: 0;
+  padding-left: 22px;
+  color: var(--red);
+  display: grid;
+  gap: 6px;
+}
+.backend-readiness-issues li {
+  line-height: 1.35;
+}
 .market-link-actions {
   display: flex;
   flex-wrap: wrap;
@@ -13461,3 +13471,41 @@ body.app-active:not(.focused-market-active) {
   .presentation-market-story-list time { display:none; }
   .presentation-market-story-list p { font-size:9px; }
 }
+
+/* Production accessibility and recovery states. */
+:focus-visible { outline: 3px solid #a7f36b; outline-offset: 3px; }
+body.dialog-open { overflow: hidden; }
+.modal { max-height: calc(100dvh - 36px); overflow-y: auto; overscroll-behavior: contain; }
+.auth-feedback { margin: 0; color: var(--text-2); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.auth-feedback:empty { display: none; }
+.auth-feedback.is-error { color: #ffb4ab; }
+button:disabled { cursor: not-allowed; }
+.practice-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 auto 20px; padding: 14px 18px; max-width: 1120px; border: 1px solid var(--amber); border-radius: 8px; background: var(--amber-bg); }
+.practice-banner div { display: grid; gap: 4px; }
+.practice-banner strong { color: #f5b84b; }
+.practice-banner span { font-size: 13px; color: var(--text); }
+@media (max-width: 620px) {
+  .modal-x, .market-link-actions .btn, .auth-provider-btn, .emoji-chip { min-width: 44px; min-height: 44px; }
+  .modal input, .modal textarea, .modal select { font-size: 16px; }
+  .practice-banner { align-items: flex-start; padding: 12px; }
+  .practice-banner button { flex-shrink: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+.welcome-how .eyebrow, .welcome-step-grid article p { color: var(--text-2); }
+.welcome-trust-row span { color: #a9b5bd; }
+.market-history-kicker, .market-history-actions > span, .market-history-empty p,
+.market-history-empty time, .rules-title-row > span, .rules-card-label,
+.mp-col-vol, .mp-col-hold, .trade-fee-note { color: #a9b5bd; }
+.trade-panel-context.yes em { color: #8be6ae; }
+.trade-pick.yes.active, .trade-submit.yes,
+.trade-submit.yes.is-loading:disabled { color: #fff; background: #237747; }
+.focused-market-shell .focused-chart-watermark,
+.focused-market-shell .market-history-line small,
+.focused-market-shell .market-history-row time,
+.focused-market-shell .rules-title-row > span,
+.focused-market-shell .rules-card-label { color: #a9b5bd; }
+.focused-market-shell .mp-col-label { color: #a9b5bd; opacity: 1; }
+.focused-market-shell .market-history-price strong.yes { color: #8be6ae; }

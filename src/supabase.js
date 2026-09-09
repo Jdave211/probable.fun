@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-const authConfigError = "Supabase Auth is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in Vercel.";
+const authConfigError = "Sign-in is temporarily unavailable. Please try again later.";
 
 function authNotConfigured() {
   return { data: null, error: new Error(authConfigError) };

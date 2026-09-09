@@ -1,30 +1,26 @@
--- Probable public-launch Supabase lockdown.
---
--- Run this only after the deployed FastAPI backend is configured with
--- SUPABASE_SERVICE_ROLE_KEY. The frontend should use Supabase Auth only; all
--- app data reads/writes should go through the backend.
+-- Apply after schema.sql and the production integrity migration.
+-- Browser clients use Supabase Auth; application data goes through the API.
+BEGIN;
+DO $$
+DECLARE v_table text; v_function record;
+BEGIN
+  FOREACH v_table IN ARRAY ARRAY['groups','group_members','group_invites','markets','trades','market_events',
+    'market_outcomes','event_positions','event_trades','bracket_entries','season_predictions','group_challenges',
+    'market_resolution_approvals','market_catalog']
+  LOOP
+    EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC, anon, authenticated', v_table);
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', v_table);
+    EXECUTE format('GRANT ALL ON TABLE public.%I TO service_role', v_table);
+  END LOOP;
+  FOR v_function IN SELECT p.oid::regprocedure AS signature FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname IN ('probable_reprice_event','place_event_trade',
+      'place_event_trade_for_user','place_complement_event_trade_for_user','resolve_event_market','probable_production_readiness')
+  LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon, authenticated', v_function.signature);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO service_role', v_function.signature);
+  END LOOP;
+END;
+$$;
 
-REVOKE ALL ON groups FROM anon, authenticated;
-REVOKE ALL ON group_members FROM anon, authenticated;
-REVOKE ALL ON group_invites FROM anon, authenticated;
-REVOKE ALL ON markets FROM anon, authenticated;
-REVOKE ALL ON trades FROM anon, authenticated;
-REVOKE ALL ON market_events FROM anon, authenticated;
-REVOKE ALL ON market_outcomes FROM anon, authenticated;
-REVOKE ALL ON event_positions FROM anon, authenticated;
-REVOKE ALL ON event_trades FROM anon, authenticated;
 
-REVOKE EXECUTE ON FUNCTION probable_reprice_event(text) FROM anon, authenticated;
-REVOKE EXECUTE ON FUNCTION place_event_trade(text, text, text, text, numeric) FROM anon, authenticated;
-REVOKE EXECUTE ON FUNCTION place_event_trade_for_user(text, text, text, text, numeric, uuid) FROM anon, authenticated;
-REVOKE EXECUTE ON FUNCTION resolve_event_market(text, text, text, text, jsonb) FROM anon, authenticated;
-
-ALTER TABLE groups ENABLE ROW LEVEL SECURITY;
-ALTER TABLE group_members ENABLE ROW LEVEL SECURITY;
-ALTER TABLE group_invites ENABLE ROW LEVEL SECURITY;
-ALTER TABLE markets ENABLE ROW LEVEL SECURITY;
-ALTER TABLE trades ENABLE ROW LEVEL SECURITY;
-ALTER TABLE market_events ENABLE ROW LEVEL SECURITY;
-ALTER TABLE market_outcomes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE event_positions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE event_trades ENABLE ROW LEVEL SECURITY;
+COMMIT;

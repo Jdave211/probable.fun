@@ -20,10 +20,10 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -98,7 +98,7 @@ class MarketOddsSeed(BaseModel):
 class TradeCreate(BaseModel):
     participant: str = Field(min_length=1, max_length=40)
     side: Literal["yes", "no"]
-    amount: float = Field(gt=0, le=1_000_000)
+    amount: float = Field(ge=0.01, le=1_000_000, multiple_of=0.01, allow_inf_nan=False)
     action: Literal["buy", "sell"] = "buy"
     outcomeId: str | None = None
 
@@ -771,6 +771,36 @@ _close_expired_lock = threading.Lock()
 CLOSE_EXPIRED_INTERVAL_SECONDS = int(os.environ.get("CLOSE_EXPIRED_INTERVAL_SECONDS", "60"))
 
 
+def _normalize_origin(value: str | None) -> str | None:
+    parsed = (value or "").strip().rstrip("/")
+    if not parsed:
+        return None
+    parsed_url = urlparse(parsed)
+    if parsed_url.scheme and parsed_url.netloc:
+        return f"{parsed_url.scheme}://{parsed_url.netloc}"
+    return None
+
+
+def _split_origins(value: str | None) -> list[str]:
+    origins: list[str] = []
+    for origin in (value or "").split(","):
+        normalized = _normalize_origin(origin)
+        if normalized:
+            origins.append(normalized)
+    return origins
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen = set()
+    deduped: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
 def close_expired_markets(db, *, force: bool = False) -> None:
     global _last_close_expired_at
     monotonic_now = time.monotonic()
@@ -811,6 +841,8 @@ _legacy_identity_claims_checked: set[str] = set()
 
 def get_db():
     global _db
+    if os.environ.get("APP_ENV", "").strip().lower() == "production" and not os.environ.get("SUPABASE_SERVICE_ROLE_KEY"):
+        raise HTTPException(503, "Production backend requires SUPABASE_SERVICE_ROLE_KEY")
     if _db is None:
         from supabase import create_client
         url = os.environ.get("SUPABASE_URL") or os.environ.get("VITE_SUPABASE_URL")
@@ -837,6 +869,9 @@ def identity_display_name(user: object) -> str:
 
 
 def request_identity(request: Request, *, required: bool = False) -> AuthIdentity | None:
+    cached = getattr(request.state, "auth_identity", None)
+    if cached is not None:
+        return cached
     authorization = request.headers.get("authorization", "").strip()
     if authorization.lower().startswith("bearer "):
         token = authorization[7:].strip()
@@ -849,15 +884,17 @@ def request_identity(request: Request, *, required: bool = False) -> AuthIdentit
             UUID(user_id)
         except Exception as exc:
             raise HTTPException(401, "Your sign-in expired. Sign in again to continue") from exc
-        return AuthIdentity(
+        identity = AuthIdentity(
             user_id=user_id,
             display_name=identity_display_name(user),
             email=clean_person(getattr(user, "email", None), "") or None,
         )
+        request.state.auth_identity = identity
+        return identity
 
     # The frontend's explicit dev bypass never runs in production builds. Keep
     # local development usable without weakening production authorization.
-    if os.environ.get("ALLOW_DEV_AUTH_BYPASS", "").lower() in {"1", "true", "yes"}:
+    if os.environ.get("APP_ENV", "").strip().lower() in {"development", "test"} and os.environ.get("ALLOW_DEV_AUTH_BYPASS", "").lower() in {"1", "true", "yes"}:
         dev_user_id = request.headers.get("x-probable-dev-user", "").strip()
         if dev_user_id:
             raw_name = unquote(request.headers.get("x-probable-dev-name", ""))
@@ -1576,10 +1613,14 @@ def strip_data_url_images(groups: list[dict]) -> list[dict]:
     return groups
 
 
-def load_all_groups(*, compact: bool = True, group_id: str | None = None, limit: int | None = None) -> list[dict]:
+def load_all_groups(*, compact: bool = True, group_id: str | None = None, limit: int | None = None, allowed_group_ids: list[str] | None = None) -> list[dict]:
+    if allowed_group_ids is not None and not allowed_group_ids:
+        return []
     db = get_db()
     close_expired_markets(db)
     query = db.table("groups").select(GROUPS_SELECT_COMPACT if compact else GROUPS_SELECT_FULL)
+    if allowed_group_ids is not None:
+        query = query.in_("id", allowed_group_ids)
     if group_id:
         query = query.eq("id", group_id)
     if compact and limit:
@@ -1614,14 +1655,13 @@ def groups_response(
     user_id: str | None = None,
     **extra,
 ) -> dict:
-    aliases = {
-        clean_person(item).casefold()
-        for item in (members or "").split(",")
-        if clean_person(item)
-    }
-    aliases = expand_member_aliases(aliases)
+    if not user_id:
+        return {"groups": [], **extra}
+    memberships = get_db().table("group_members").select("group_id").eq("user_id", user_id).execute().data or []
+    allowed_ids = list({row["group_id"] for row in memberships})
+    aliases: set[str] = set()
     filter_by_identity = bool(user_id or aliases)
-    groups = load_all_groups(compact=compact, group_id=group_id, limit=None if filter_by_identity else limit)
+    groups = load_all_groups(compact=compact, group_id=group_id, limit=None if filter_by_identity else limit, allowed_group_ids=allowed_ids)
     if filter_by_identity:
         def matches_current_identity(group: dict) -> bool:
             if user_id:
@@ -1639,7 +1679,7 @@ def groups_response(
         ]
         if limit:
             groups = groups[:max(1, min(int(limit), 50))]
-    if include and not any(group.get("id") == include for group in groups):
+    if include in allowed_ids and not any(group.get("id") == include for group in groups):
         groups.extend(load_all_groups(compact=compact, group_id=include))
     if user_id:
         for group in groups:
@@ -2968,10 +3008,19 @@ async def lifespan(app_: FastAPI):
 # ── FastAPI app ────────────────────────────────────────────────────────
 
 def allowed_cors_origins() -> list[str]:
-    configured = os.environ.get("ALLOWED_ORIGINS", "")
-    origins = [origin.strip().rstrip("/") for origin in configured.split(",") if origin.strip()]
+    origins = _dedupe(_split_origins(os.environ.get("ALLOWED_ORIGINS")))
+    if not origins:
+        fallback_values = [
+            os.environ.get("FRONTEND_BASE_URL"),
+            os.environ.get("VITE_PUBLIC_APP_BASE_URL"),
+            os.environ.get("APP_BASE_URL"),
+            os.environ.get("PUBLIC_APP_BASE_URL"),
+        ]
+        origins = _dedupe(_split_origins(",".join(value for value in fallback_values if value)))
     if origins:
         return origins
+    if os.environ.get("APP_ENV", "").lower() == "production":
+        return []
     return [
         "http://127.0.0.1:5173",
         "http://localhost:5173",
@@ -2985,7 +3034,55 @@ def allowed_cors_origins() -> list[str]:
     ]
 
 
-app = FastAPI(title="Probable API", lifespan=lifespan)
+def production_readiness() -> dict:
+    issues: list[str] = []
+    details = {
+        "app_env": os.environ.get("APP_ENV", "development"),
+        "frontend_origins_configured": bool(allowed_cors_origins()),
+        "supabase_url_set": bool(os.environ.get("SUPABASE_URL") or os.environ.get("VITE_SUPABASE_URL")),
+        "supabase_service_role_set": bool(os.environ.get("SUPABASE_SERVICE_ROLE_KEY")),
+    }
+
+    if not details["supabase_url_set"]:
+        issues.append("SUPABASE_URL is required.")
+    if not details["supabase_service_role_set"] and os.environ.get("APP_ENV", "").lower() == "production":
+        issues.append("SUPABASE_SERVICE_ROLE_KEY is required in production.")
+    if not details["frontend_origins_configured"]:
+        issues.append(
+            "No frontend origin configured. Set ALLOWED_ORIGINS or FRONTEND_BASE_URL / VITE_PUBLIC_APP_BASE_URL."
+        )
+
+    if os.environ.get("APP_ENV", "").strip().lower() == "production" and os.environ.get("ALLOW_DEV_AUTH_BYPASS", "").lower() in {"1", "true", "yes"}:
+        issues.append("Disable ALLOW_DEV_AUTH_BYPASS in production.")
+    db_key_set = bool(details["supabase_service_role_set"] or os.environ.get("SUPABASE_KEY") or os.environ.get("VITE_SUPABASE_PUBLISHABLE_KEY"))
+    if not db_key_set:
+        issues.append("A backend database credential is required.")
+    db_status = "unchecked"
+    if details["supabase_url_set"] and db_key_set:
+        try:
+            get_db().table("groups").select("id").limit(1).execute()
+            get_db().table("group_members").select("user_id").limit(1).execute()
+            get_db().table("season_predictions").select("user_id,share_code").limit(1).execute()
+            get_db().rpc("probable_production_readiness", {}).execute()
+            db_status = "ok"
+        except Exception as exc:
+            print(f"Readiness database check failed: {type(exc).__name__}")
+            db_status = "unavailable"
+            issues.append("Database is unavailable or the production migration has not been applied.")
+    details["supabase_connectivity"] = db_status
+
+    ready = not issues
+    details["ready"] = ready
+    details["issues"] = issues
+    return details
+
+
+def require_mutation_identity(request: Request) -> None:
+    if request.url.path.startswith("/api/") and request.method not in {"GET", "HEAD", "OPTIONS"}:
+        request_identity(request, required=True)
+
+
+app = FastAPI(title="Probable API", lifespan=lifespan, dependencies=[Depends(require_mutation_identity)])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_cors_origins(),
@@ -2997,6 +3094,12 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 @app.get("/api/health")
 def health() -> dict:
     return {"ok": True}
+
+
+@app.get("/api/ready")
+def ready() -> Response:
+    state = production_readiness()
+    return JSONResponse(status_code=200 if state["ready"] else 503, content=state, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/groups")
@@ -3023,6 +3126,7 @@ def list_groups(
 def get_market_context(market_id: str, request: Request) -> dict:
     group = load_market_context_group(market_id)
     identity = request_identity(request)
+    is_member = identity and any(str(row.get("userId")) == identity.user_id for row in group.get("memberRecords", []))
     if identity:
         claim_legacy_identity_memberships(get_db(), identity)
         groups = groups_response(
@@ -3032,11 +3136,21 @@ def get_market_context(market_id: str, request: Request) -> dict:
             user_id=identity.user_id,
         ).get("groups", [])
     else:
-        # A public market link only needs its own group context. Returning a
-        # random page of unrelated groups also lets that partial result replace
-        # a signed-in user's membership list during auth hydration.
-        groups = [group]
+        groups = []
+    if not is_member:
+        group = public_market_context(group)
+    if not any(item["id"] == group["id"] for item in groups):
+        groups.append(group)
     return {"group": group, "groups": groups}
+
+
+def public_market_context(group: dict) -> dict:
+    """A shared market reveals its prices, not a group's accounts or holdings."""
+    preview = deepcopy(group)
+    preview.update(members=[], memberRecords=[], balances={}, challenges=[], createdBy=None, createdByUserId=None)
+    for market in preview.get("markets", []):
+        market.update(positions={}, trades=[], eventTrades=[], creatorUserId=None, verificationAttempts=[], oracleProposal=None)
+    return preview
 
 
 @app.get("/api/markets/{market_id}/image")
@@ -3071,8 +3185,9 @@ def get_market_image(market_id: str) -> Response:
         return RedirectResponse(image_url, status_code=307)
 
     if image_url.startswith("/"):
-        path = BASE_DIR / "public" / image_url.lstrip("/")
-        if path.exists() and path.is_file():
+        public_dir = (BASE_DIR / "public").resolve()
+        path = (public_dir / image_url.lstrip("/")).resolve()
+        if path.is_relative_to(public_dir) and path.exists() and path.is_file():
             return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
 
     raise HTTPException(404, "Market image not found")
@@ -3083,8 +3198,15 @@ def create_group(payload: GroupCreate, request: Request) -> dict:
     db = get_db()
     identity = request_identity(request, required=True)
     assert identity is not None
+    if not payload.name.strip():
+        raise HTTPException(400, "Enter a group name")
     cleaned = [identity.display_name]
-    cleaned.extend(m.strip() for m in payload.members if m.strip() and person_key(m) != person_key(identity.display_name))
+    seen_members = {person_key(identity.display_name)}
+    for raw_member in payload.members:
+        member_name = clean_person(raw_member)[:40]
+        if member_name and person_key(member_name) not in seen_members:
+            cleaned.append(member_name)
+            seen_members.add(person_key(member_name))
 
     group_id = create_id()
     founder = identity.display_name
@@ -3621,7 +3743,9 @@ def remove_group_challenge(group_id: str, challenge_id: str, request: Request) -
 
 
 @app.get("/api/groups/{group_id}/challenges/{challenge_id}/leaderboard")
-def get_group_challenge_leaderboard(group_id: str, challenge_id: str) -> dict:
+def get_group_challenge_leaderboard(group_id: str, challenge_id: str, request: Request) -> dict:
+    identity = request_identity(request, required=True)
+    require_group_member_identity(get_db(), group_id, identity)
     clean_challenge = clean_group_challenge_id(challenge_id)
     predictor_id = challenge_predictor_id(clean_challenge)
     if not predictor_id:
@@ -4005,8 +4129,8 @@ def get_season_prediction_entry(request: Request, challenge_id: str, participant
     clean_participant = clean_person(participant)
     if not clean_participant:
         raise HTTPException(400, "Prediction entry identity is missing")
-    rows = query.eq("participant", clean_participant).limit(1).execute().data or []
-    return {"entry": assemble_season_prediction(rows[0] if rows else None)}
+    rows = query.eq("participant", clean_participant).not_.is_("submitted_at", "null").limit(1).execute().data or []
+    return {"entry": public_season_prediction(rows[0] if rows else None)}
 
 
 @app.post("/api/predictors/{challenge_id}/entry", status_code=201)
@@ -4275,12 +4399,21 @@ def get_bracket_entry(request: Request, challenge_id: str, participant: str | No
         .select("*")
         .eq("challenge_id", clean_challenge)
         .eq("participant", clean_participant)
+        .not_.is_("submitted_at", "null")
         .limit(1)
         .execute()
         .data
         or []
     )
-    return {"entry": assemble_bracket_entry(rows[0] if rows else None)}
+    return {"entry": public_bracket_entry(rows[0] if rows else None)}
+
+
+def public_bracket_entry(row: dict | None) -> dict | None:
+    entry = assemble_bracket_entry(row)
+    if entry:
+        entry.pop("userEmail", None)
+        entry.pop("userId", None)
+    return entry
 
 
 @app.post("/api/brackets/{challenge_id}/entry", status_code=201)
@@ -4490,12 +4623,13 @@ def get_bracket_entry_by_id(challenge_id: str, entry_id: str | None) -> dict | N
             .select("*")
             .eq("challenge_id", clean_challenge)
             .eq("id", clean_entry_id)
+            .not_.is_("submitted_at", "null")
             .limit(1)
             .execute()
             .data
             or []
         )
-        return assemble_bracket_entry(rows[0]) if rows else None
+        return public_bracket_entry(rows[0]) if rows else None
     except Exception:
         return None
 
@@ -5055,167 +5189,16 @@ async def seed_market_odds(payload: MarketOddsSeed) -> dict:
 
 
 def place_complement_event_trade(
-    db,
-    event: dict,
-    outcomes: list[dict],
-    excluded_outcome_id: str,
-    payload: TradeCreate,
-    identity: AuthIdentity,
+    db, event: dict, outcomes: list[dict], excluded_outcome_id: str,
+    payload: TradeCreate, identity: AuthIdentity,
 ) -> dict:
-    member = require_group_member_identity(db, event["group_id"], identity)
-    participant = clean_person(member.get("name"), identity.display_name)
-    amount = round(float(payload.amount or 0), 4)
-    if amount <= 0:
-        raise HTTPException(400, "Trade amount must be positive")
-    if event["status"] != "open":
-        raise HTTPException(400, "Market is not open for trading")
-    closes_at = parse_iso_datetime(event.get("closes_at"))
-    if closes_at and closes_at <= datetime.now(timezone.utc):
-        db.table("market_events").update({"status": "closed"}).eq("id", event["id"]).execute()
-        raise HTTPException(400, "Market is closed for trading")
-
-    target = next((item for item in outcomes if item["id"] == excluded_outcome_id), None)
-    if not target:
-        raise HTTPException(400, "Outcome not found")
-    if outcome_is_eliminated(target):
-        raise HTTPException(400, f"{target.get('title') or 'This outcome'} has been eliminated")
-    active = active_outcomes(outcomes)
-    if len(active) < 2:
-        raise HTTPException(400, "NO basket trades require at least two active outcomes")
-    complement = [item for item in active if item["id"] != excluded_outcome_id]
-    if not complement:
-        raise HTTPException(400, "No complement outcomes available")
-
-    member_rows = (
-        db.table("group_members")
-        .select("balance")
-        .eq("group_id", event["group_id"])
-        .eq("user_id", identity.user_id)
-        .execute()
-        .data or []
-    )
-    balance = float(member_rows[0].get("balance") or 0)
-
-    b = float(event.get("liquidity_b") or DEFAULT_FAKE_BALANCE)
-    prices_before = {item["id"]: round(float(item.get("price") or 0), 8) for item in outcomes}
-    quantities = {item["id"]: float(item.get("quantity") or 0) for item in outcomes}
-
-    if payload.action == "buy":
-        if amount > balance:
-            raise HTTPException(400, f"{participant} only has ${round(balance, 0)}")
-        shares = lmsr_complement_buy_shares(active, b, excluded_outcome_id, amount)
-        if shares <= 0:
-            raise HTTPException(400, "Trade amount is too small")
-        cash_delta = -amount
-        share_delta = shares
-    else:
-        position_rows = (
-            db.table("event_positions")
-            .select("outcome_id, shares")
-            .eq("event_id", event["id"])
-            .eq("user_id", identity.user_id)
-            .execute()
-            .data or []
-        )
-        positions = {row["outcome_id"]: float(row.get("shares") or 0) for row in position_rows}
-        max_shares = min([positions.get(item["id"], 0.0) for item in complement] or [0.0])
-        max_cash = lmsr_complement_sell_cash_for_shares(active, b, excluded_outcome_id, max_shares)
-        if amount > max_cash + 0.0001:
-            raise HTTPException(400, f"{participant} can cash out up to ${round(max_cash, 2)} on this NO basket")
-        shares = lmsr_complement_sell_shares_for_cash(active, b, excluded_outcome_id, amount, max_shares)
-        if shares <= 0 or shares > max_shares + 0.0001:
-            raise HTTPException(400, f"{participant} does not have enough NO shares to sell")
-        cash_delta = amount
-        share_delta = -shares
-
-    for item in complement:
-        quantities[item["id"]] = quantities[item["id"]] + share_delta
-        if quantities[item["id"]] < -1_000_000_000:
-            raise HTTPException(400, "Invalid complement trade")
-
-    priced_outcomes = [{**item, "quantity": quantities[item["id"]]} for item in outcomes]
-    prices_after = lmsr_prices_for_quantities(priced_outcomes, b)
-    now = now_iso()
-    for item in priced_outcomes:
-        db.table("market_outcomes").update({
-            "quantity": round(float(item["quantity"]), 8),
-            "price": round(float(prices_after[item["id"]]), 8),
-        }).eq("id", item["id"]).eq("event_id", event["id"]).execute()
-
-    db.table("group_members").update({
-        "balance": round(balance + cash_delta, 2),
-    }).eq("group_id", event["group_id"]).eq("user_id", identity.user_id).execute()
-
-    existing_positions = (
-        db.table("event_positions")
-        .select("id,outcome_id,shares")
-        .eq("event_id", event["id"])
-        .eq("user_id", identity.user_id)
-        .execute()
-        .data or []
-    )
-    position_lookup = {row["outcome_id"]: float(row.get("shares") or 0) for row in existing_positions}
-    for item in complement:
-        next_shares = round(position_lookup.get(item["id"], 0.0) + share_delta, 8)
-        if next_shares < -0.0001:
-            raise HTTPException(400, f"{participant} does not have enough NO shares to sell")
-        existing_position = next((row for row in existing_positions if row["outcome_id"] == item["id"]), None)
-        position_values = {
-            "participant": participant,
-            "user_id": identity.user_id,
-            "shares": max(0.0, next_shares),
-            "updated_at": now,
-        }
-        if existing_position:
-            db.table("event_positions").update(position_values).eq("id", existing_position["id"]).execute()
-        else:
-            db.table("event_positions").insert({
-                "event_id": event["id"],
-                "outcome_id": item["id"],
-                **position_values,
-            }).execute()
-
-    allocation_weights = [max(0.000001, float(prices_before.get(item["id"], 0))) for item in complement]
-    allocation_total = sum(allocation_weights) or len(complement)
-    trade_rows = []
-    remaining_cash = amount
-    display_group_id = create_id()
-    for idx, item in enumerate(complement):
-        if idx == len(complement) - 1:
-            cash_amount = remaining_cash
-        else:
-            cash_amount = round(amount * allocation_weights[idx] / allocation_total, 4)
-            remaining_cash = round(remaining_cash - cash_amount, 4)
-        trade_rows.append({
-            "id": create_id(),
-            "event_id": event["id"],
-            "outcome_id": item["id"],
-            "participant": participant,
-            "user_id": identity.user_id,
-            "action": payload.action,
-            "cash_amount": cash_amount,
-            "shares_delta": round(share_delta, 8),
-            "avg_price": round((amount / abs(shares)) if shares else 0, 8),
-            "prices_before": prices_before,
-            "prices_after": {key: round(value, 8) for key, value in prices_after.items()},
-            "display_group_id": display_group_id,
-            "display_outcome_id": excluded_outcome_id,
-            "display_side": "no",
-            "display_shares": round(abs(shares), 8),
-            "created_at": now,
-        })
-    insert_event_trade_rows(db, trade_rows)
-    db.table("market_events").update({
-        "total_volume": round(float(event.get("total_volume") or 0) + amount, 4),
-    }).eq("id", event["id"]).execute()
-    return {
-        "basket": True,
-        "synthetic": "complement_no",
-        "selectedOutcomeId": excluded_outcome_id,
-        "shares": round(shares, 8),
-        "amount": amount,
-        "trades": trade_rows,
-    }
+    return db.rpc("place_complement_event_trade_for_user", {
+        "p_event_id": event["id"],
+        "p_outcome_id": excluded_outcome_id,
+        "p_action": payload.action,
+        "p_cash_amount": payload.amount,
+        "p_user_id": identity.user_id,
+    }).execute().data
 
 
 @app.post("/api/groups/{group_id}/questions/suggest")
