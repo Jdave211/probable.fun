@@ -243,14 +243,14 @@ const portfolioEndMarkerPlugin = {
     const value = chart.data.datasets?.[0]?.data?.at(-1);
     const label = money(value);
     ctx.save();
-    ctx.shadowColor = "rgba(125, 155, 176, 0.34)";
+    ctx.shadowColor = "rgba(56, 189, 248, 0.34)";
     ctx.shadowBlur = 18;
-    ctx.fillStyle = "rgba(125, 155, 176, 0.16)";
+    ctx.fillStyle = "rgba(56, 189, 248, 0.16)";
     ctx.beginPath();
     ctx.arc(x, y, 12, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.fillStyle = options.color || "#7d9bb0";
+    ctx.fillStyle = options.color || "#38bdf8";
     ctx.strokeStyle = "rgba(255,255,255,0.94)";
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -265,7 +265,7 @@ const portfolioEndMarkerPlugin = {
     const labelX = Math.min(chartArea.right - width, Math.max(chartArea.left, x - width - 10));
     const labelY = Math.max(chartArea.top + 2, y - height - 12);
     ctx.fillStyle = options.labelBg || "rgba(15, 22, 26, 0.92)";
-    ctx.strokeStyle = options.labelBorder || "rgba(125, 155, 176, 0.28)";
+    ctx.strokeStyle = options.labelBorder || "rgba(56, 189, 248, 0.28)";
     ctx.lineWidth = 1;
     roundRect(ctx, labelX, labelY, width, height, 12);
     ctx.fill();
@@ -343,7 +343,7 @@ function defaultMarketLiquidityForOutcomeCount(count) {
 let rulesDraftPromise = null;
 const MAX_MARKET_IMAGE_BYTES = 650000;
 const EVENT_CHART_COLORS = ["#8fb0c4", "#cf7d74", "#d2b25c", "#8bb98d", "#a99bd0", "#6fb3ac", "#c8bfae", "#d9a468"];
-const BINARY_CHART_COLORS = { yes: "#8fb0c4", no: "#cf7d74" };
+const BINARY_CHART_COLORS = { yes: "#00D4AA", no: "#FF4757" };
 const charts = new Map();
 let chartRenderEpoch = 0;
 let gooeyCleanup = null;
@@ -6515,7 +6515,7 @@ function openCatalogMarket(catalogId, outcomeTitle = "", side = "yes") {
 function catalogConsensusChart(item) {
   const outcomes = catalogMarketOutcomes(item).slice(0, 4);
   if (!outcomes.length) return "";
-  const colors = ["#7d9bb0", "#8fc5ff", "#f5b84b", "#ff7a1a"];
+  const colors = ["#38bdf8", "#8fc5ff", "#f5b84b", "#ff7a1a"];
   const rows = outcomes.map((outcome, index) => {
     const current = Math.max(0, Math.min(1, Number(outcome.probability || 0)));
     const seeded = Number(item.initialProbabilities?.[outcome.title]);
@@ -6815,8 +6815,8 @@ function homeMarketBoardHtml(group) {
         ${marketSortControl()}
       </div>
     </div>
-    ${shownEvents.length ? `<div class="home-market-grid" data-market-grid>${shownEvents.map(event => homeEventCard(event)).join("")}</div>` : `<div class="home-market-empty"><div><strong>${activeStatus === "open" ? "No live markets" : "No settled markets"}</strong><span>${activeStatus === "open" ? "Start with one clear question for the group." : "Completed markets will appear here."}</span></div>${activeStatus === "open" ? `<button class="btn btn-primary" type="button" data-new-market>Create market</button>` : ""}</div>`}
-    ${recentSettled.length ? `<div class="recent-settled-head"><strong>Recently settled</strong><button type="button" data-market-status-filter="closed">View all →</button></div><div class="home-market-grid recent">${recentSettled.map(event => homeEventCard(event)).join("")}</div>` : ""}
+    ${shownEvents.length ? `<div class="market-terminal-list" data-market-grid>${shownEvents.map(event => homeEventRow(event)).join("")}</div>` : `<div class="home-market-empty"><div><strong>${activeStatus === "open" ? "No live markets" : "No settled markets"}</strong><span>${activeStatus === "open" ? "Start with one clear question for the group." : "Completed markets will appear here."}</span></div>${activeStatus === "open" ? `<button class="btn btn-primary" type="button" data-new-market>Create market</button>` : ""}</div>`}
+    ${recentSettled.length ? `<div class="recent-settled-head"><strong>Recently settled</strong><button type="button" data-market-status-filter="closed">View all →</button></div><div class="market-terminal-list recent">${recentSettled.map(event => homeEventRow(event)).join("")}</div>` : ""}
     ${(hiddenImported || additional) ? `<button class="home-explore-link" type="button" data-go-markets>${hiddenImported ? `${hiddenImported} more public market${hiddenImported === 1 ? "" : "s"}` : `${additional} more group market${additional === 1 ? "" : "s"}`} <span>Explore all →</span></button>` : ""}
   </div>`;
 }
@@ -6845,6 +6845,75 @@ function homeEventCard(event) {
     ${extra ? `<button class="home-market-more" type="button" data-open-activity-market="${esc(primary?.id || "")}">+${extra} more outcomes</button>` : ""}
     <footer><span>${compactMoney(event.volume)} volume</span><span>${event.tradeCount} trade${event.tradeCount === 1 ? "" : "s"}</span><time>${fmtClose({ closesAt: event.closesAt, status })}</time></footer>
   </article>`;
+}
+
+function sparklineSvg(seed, endPct, width = 132, height = 34) {
+  const n = 26;
+  let h = 2166136261;
+  for (const c of String(seed)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); }
+  const pts = [];
+  let v = 40 + ((h >>> 0) % 24);
+  for (let i = 0; i < n; i++) {
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    const r = ((h >>> 0) % 1000) / 1000;
+    v += (r - 0.5) * 10;
+    v = Math.max(6, Math.min(94, v));
+    pts.push(v);
+  }
+  pts[pts.length - 1] = Math.max(4, Math.min(96, Number(endPct) || 50));
+  const step = width / (n - 1);
+  const y = (val) => height - (val / 100) * height;
+  const path = pts.map((val, i) => `${i ? "L" : "M"}${(i * step).toFixed(1)},${y(val).toFixed(1)}`).join(" ");
+  const area = `${path} L${width},${height} L0,${height} Z`;
+  const id = `spark-${Math.abs(h)}`;
+  return `<svg class="sparkline" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+    <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#00d4aa" stop-opacity=".3"/><stop offset="1" stop-color="#00d4aa" stop-opacity="0"/></linearGradient></defs>
+    <path d="${area}" fill="url(#${id})"/>
+    <path d="${path}" fill="none" stroke="#00d4aa" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+  </svg>`;
+}
+
+function homeEventRow(event) {
+  const status = eventStatus(event);
+  const primary = event.markets.find(m => m.status === "open") || event.markets[0];
+  const pct = Math.round(displayedEventProbability(primary, event));
+  const outcomes = event.markets.filter(m => !marketOutcomeEliminated(m)).slice(0, 3);
+  const more = Math.max(0, event.markets.filter(m => !marketOutcomeEliminated(m)).length - outcomes.length);
+  return `<article class="market-row">
+    <div class="market-row-main">
+      <button class="market-row-title" type="button" data-open-activity-market="${esc(primary?.id || "")}">${esc(event.title)}</button>
+      <span class="market-row-meta">${event.markets.length} outcomes${more ? ` · +${more} hidden` : ""} · ${compactMoney(event.volume)} volume · ${event.tradeCount} trades</span>
+    </div>
+    <div class="market-row-outcomes">${outcomes.map(m => `<span>${esc(marketOptionTitle(m))} <strong>${Math.round(displayedEventProbability(m, event))}%</strong></span>`).join("")}</div>
+    <div class="market-row-spark">${sparklineSvg(event.title, pct)}</div>
+    <div class="market-row-prob"><strong>${pct}%</strong><span>${status === "open" ? "live" : status}</span></div>
+    <div class="market-row-actions" data-market-id="${esc(primary?.id || "")}">${status === "open" ? `<button type="button" data-buy="yes">Yes</button><button type="button" data-buy="no">No</button>` : `<span class="market-row-final">${status}</span>`}</div>
+  </article>`;
+}
+
+function marketRail(group) {
+  const events = sortedMarketEvents(dashboardVisibleMarkets(group.markets || []));
+  const focus = events[0];
+  const focusMarket = focus ? (focus.markets.find(m => m.status === "open") || focus.markets[0]) : null;
+  const focusPct = focusMarket ? Math.round(displayedEventProbability(focusMarket, focus)) : 0;
+  const standings = Object.entries(group.balances || {})
+    .filter(([, bal]) => Number(bal) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .slice(0, 5);
+  return `<aside class="market-rail">
+    ${focus ? `<section class="rail-panel focus-panel">
+      <p class="rail-kicker">Focus market</p>
+      <h3>${esc(focus.title)}</h3>
+      <div class="focus-prob"><strong>${focusPct}%</strong><span>implied yes</span></div>
+      <div class="focus-chart">${sparklineSvg(focus.title + "-focus", focusPct, 280, 92)}</div>
+      <div class="focus-outcomes">${focus.markets.slice(0, 4).map(m => `<button type="button" data-open-activity-market="${esc(m.id)}"><span>${esc(marketOptionTitle(m))}</span><strong>${Math.round(displayedEventProbability(m, focus))}%</strong></button>`).join("")}</div>
+    </section>` : ""}
+    ${standings.length ? `<section class="rail-panel">
+      <p class="rail-kicker">Standings</p>
+      <ol class="rail-standings">${standings.map(([name, bal], i) => `<li><span>${i + 1}</span><strong>${esc(name)}</strong><em>${money(bal)}</em></li>`).join("")}</ol>
+    </section>` : ""}
+    ${homeActivityPanel(group)}
+  </aside>`;
 }
 
 function groupHomeSummary(group) {
@@ -6888,10 +6957,11 @@ function renderDashboard() {
 
       ${activationProgressHtml(group)}
 
-      <div class="group-home-layout home-market-only">
+      <div class="group-home-layout">
         <section class="market-column">
           ${homeMarketBoardHtml(group)}
         </section>
+        ${marketRail(group)}
       </div>
     </section>
   `;
@@ -7377,6 +7447,16 @@ function renderEmptyDashboard() {
       : welcomeActions;
   dom.mainContent.innerHTML = `
     <section class="empty-dashboard welcome-hero welcome-rebuild">
+      <div class="market-tape" aria-label="Sample market prices">
+        ${[
+          ["Arsenal win the Premier League", 64, "+12"],
+          ["First to get married", 42, "+3"],
+          ["England win the World Cup", 27, "-4"],
+          ["Bitcoin above $150k", 71, "+8"],
+          ["Mbappé wins the Golden Boot", 24, "+2"],
+          ["Love Island final", 58, "-1"],
+        ].map(([q, p, d]) => `<span class="tape-item"><i class="${String(d).startsWith("-") ? "down" : "up"}"></i><b>${esc(q)}</b><strong>${p}%</strong><em class="${String(d).startsWith("-") ? "down" : "up"}">${d}</em></span>`).join("")}
+      </div>
       <div class="welcome-content">
         <div class="welcome-copy motion-item">
           <p class="eyebrow"><span></span> Private prediction markets</p>
@@ -7398,7 +7478,7 @@ function renderEmptyDashboard() {
           </div>
           <div class="preview-price"><span>YES</span><strong>64%</strong><em>+12 today</em></div>
           <svg class="preview-chart" viewBox="0 0 520 180" role="img" aria-label="Example probability rising from 44 to 64 percent">
-            <defs><linearGradient id="welcomeChartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c9a54a" stop-opacity=".28"/><stop offset="1" stop-color="#c9a54a" stop-opacity="0"/></linearGradient></defs>
+            <defs><linearGradient id="welcomeChartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#00d4aa" stop-opacity=".28"/><stop offset="1" stop-color="#00d4aa" stop-opacity="0"/></linearGradient></defs>
             <path class="preview-grid" d="M0 40H520M0 90H520M0 140H520" />
             <path class="preview-area" d="M0 150 C45 143 58 104 105 115 S180 138 225 92 S292 111 335 70 S405 86 447 45 S493 53 520 26 V180 H0Z" />
             <path class="preview-line" d="M0 150 C45 143 58 104 105 115 S180 138 225 92 S292 111 335 70 S405 86 447 45 S493 53 520 26" />
@@ -9491,7 +9571,7 @@ async function animateBracketAdvance() {
   animate(targets, { scale: [0.985, 1.012, 1], opacity: [0.92, 1] }, { duration: 0.38, easing: "ease-out" });
   const activeRows = document.querySelectorAll(".bracket-mini-match.just-picked .active, .bracket-matchup.just-picked .active");
   if (activeRows.length) {
-    animate(activeRows, { boxShadow: ["inset 4px 0 0 #169bff", "inset 4px 0 0 #7d9bb0"] }, { duration: 0.42 });
+    animate(activeRows, { boxShadow: ["inset 4px 0 0 #169bff", "inset 4px 0 0 #38bdf8"] }, { duration: 0.42 });
   }
   window.setTimeout(() => {
     state.bracketLastPickedId = "";
@@ -11794,7 +11874,7 @@ function renderPortfolioCharts() {
     const { labels, data, minY, maxY } = portfolioChartConfig();
     const ctx = canvas.getContext("2d");
     const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height || 300);
-    gradient.addColorStop(0, "rgba(125, 155, 176, 0.42)");
+    gradient.addColorStop(0, "rgba(56, 189, 248, 0.42)");
     gradient.addColorStop(0.42, "rgba(18, 79, 143, 0.24)");
     gradient.addColorStop(0.78, "rgba(18, 79, 143, 0.08)");
     gradient.addColorStop(1, "rgba(18, 79, 143, 0.00)");
@@ -11805,9 +11885,9 @@ function renderPortfolioCharts() {
         datasets: [{
           label: "Portfolio",
           data,
-          borderColor: "#7d9bb0",
+          borderColor: "#38bdf8",
           backgroundColor: gradient,
-          pointBackgroundColor: "#7d9bb0",
+          pointBackgroundColor: "#38bdf8",
           pointBorderColor: "rgba(255,255,255,0.92)",
           pointBorderWidth: ctx => ctx.dataIndex === data.length - 1 ? 2 : 0,
           pointRadius: ctx => ctx.dataIndex === data.length - 1 ? 4 : 0,
@@ -11828,13 +11908,13 @@ function renderPortfolioCharts() {
         layout: { padding: { top: 18, right: 62, bottom: 4, left: 2 } },
         plugins: {
           legend: { display: false },
-          portfolioEndMarker: { enabled: true, color: "#7d9bb0", labelBg: "rgba(15, 22, 26, 0.94)", labelColor: "rgba(244,247,249,0.86)", labelBorder: "rgba(125,155,176,0.3)" },
+          portfolioEndMarker: { enabled: true, color: "#38bdf8", labelBg: "rgba(15, 22, 26, 0.94)", labelColor: "rgba(244,247,249,0.86)", labelBorder: "rgba(56,189,248,0.3)" },
           tooltip: {
             displayColors: false,
             backgroundColor: "rgba(15,22,26,0.94)",
             titleColor: "rgba(174,188,198,0.78)",
             bodyColor: "#f4f7f9",
-            borderColor: "rgba(125,155,176,0.28)",
+            borderColor: "rgba(56,189,248,0.28)",
             borderWidth: 1,
             padding: 10,
             callbacks: {
@@ -11981,9 +12061,9 @@ async function renderCharts(renderEpoch = chartRenderEpoch) {
           {
             label: "YES",
             data: yesData,
-            borderColor: "#b08a3e",
-            pointBackgroundColor: "#b08a3e",
-            pointBorderColor: "#b08a3e",
+            borderColor: "#00b894",
+            pointBackgroundColor: "#00b894",
+            pointBorderColor: "#00b894",
             borderWidth: 2,
             pointRadius: ctx => chartFollowPointRadius(ctx, 3),
             pointHoverRadius: 4,
