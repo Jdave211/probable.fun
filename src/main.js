@@ -6831,7 +6831,8 @@ function homeEventCard(event) {
   const extra = binary ? 0 : Math.max(0, event.markets.filter(market => !marketOutcomeEliminated(market)).length - markets.length);
   return `<article class="home-market-card motion-item">
     <header>
-      <button class="home-market-title" type="button" data-open-activity-market="${esc(primary?.id || "")}">${esc(event.title)}</button>
+      <span class="home-market-thumb ${eventThumbClass(event.title, event.imageUrl)}" aria-hidden="true">${eventThumb(event.title, event.imageUrl)}</span>
+      <button type="button" data-open-activity-market="${esc(primary?.id || "")}">${esc(event.title)}</button>
       ${primary ? `<button class="home-market-share" type="button" data-share-market="${esc(primary.id)}" aria-label="Share market">${shareArrowIconSvg()}</button>` : ""}
     </header>
     <div class="home-market-quotes">${markets.map(market => {
@@ -6843,77 +6844,8 @@ function homeEventCard(event) {
       </div>`;
     }).join("")}</div>
     ${extra ? `<button class="home-market-more" type="button" data-open-activity-market="${esc(primary?.id || "")}">+${extra} more outcomes</button>` : ""}
-    <footer><span>${compactMoney(event.volume)} volume</span><span>${event.tradeCount} trade${event.tradeCount === 1 ? "" : "s"}</span><time>${fmtClose({ closesAt: event.closesAt, status })}</time></footer>
+    <footer><span>${compactMoney(event.volume)} Vol.</span><span>${event.tradeCount} trade${event.tradeCount === 1 ? "" : "s"}</span><time>${fmtClose({ closesAt: event.closesAt, status })}</time></footer>
   </article>`;
-}
-
-function sparklineSvg(seed, endPct, width = 132, height = 34) {
-  const n = 26;
-  let h = 2166136261;
-  for (const c of String(seed)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); }
-  const pts = [];
-  let v = 40 + ((h >>> 0) % 24);
-  for (let i = 0; i < n; i++) {
-    h = Math.imul(h ^ (h >>> 13), 1274126177);
-    const r = ((h >>> 0) % 1000) / 1000;
-    v += (r - 0.5) * 10;
-    v = Math.max(6, Math.min(94, v));
-    pts.push(v);
-  }
-  pts[pts.length - 1] = Math.max(4, Math.min(96, Number(endPct) || 50));
-  const step = width / (n - 1);
-  const y = (val) => height - (val / 100) * height;
-  const path = pts.map((val, i) => `${i ? "L" : "M"}${(i * step).toFixed(1)},${y(val).toFixed(1)}`).join(" ");
-  const area = `${path} L${width},${height} L0,${height} Z`;
-  const id = `spark-${Math.abs(h)}`;
-  return `<svg class="sparkline" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
-    <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#00d4aa" stop-opacity=".3"/><stop offset="1" stop-color="#00d4aa" stop-opacity="0"/></linearGradient></defs>
-    <path d="${area}" fill="url(#${id})"/>
-    <path d="${path}" fill="none" stroke="#00d4aa" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
-  </svg>`;
-}
-
-function homeEventRow(event) {
-  const status = eventStatus(event);
-  const primary = event.markets.find(m => m.status === "open") || event.markets[0];
-  const pct = Math.round(displayedEventProbability(primary, event));
-  const outcomes = event.markets.filter(m => !marketOutcomeEliminated(m)).slice(0, 3);
-  const more = Math.max(0, event.markets.filter(m => !marketOutcomeEliminated(m)).length - outcomes.length);
-  return `<article class="market-row">
-    <div class="market-row-main">
-      <button class="market-row-title" type="button" data-open-activity-market="${esc(primary?.id || "")}">${esc(event.title)}</button>
-      <span class="market-row-meta">${event.markets.length} outcomes${more ? ` · +${more} hidden` : ""} · ${compactMoney(event.volume)} volume · ${event.tradeCount} trades</span>
-    </div>
-    <div class="market-row-outcomes">${outcomes.map(m => `<span>${esc(marketOptionTitle(m))} <strong>${Math.round(displayedEventProbability(m, event))}%</strong></span>`).join("")}</div>
-    <div class="market-row-spark">${sparklineSvg(event.title, pct)}</div>
-    <div class="market-row-prob"><strong>${pct}%</strong><span>${status === "open" ? "live" : status}</span></div>
-    <div class="market-row-actions" data-market-id="${esc(primary?.id || "")}">${status === "open" ? `<button type="button" data-buy="yes">Yes</button><button type="button" data-buy="no">No</button>` : `<span class="market-row-final">${status}</span>`}</div>
-  </article>`;
-}
-
-function marketRail(group) {
-  const events = sortedMarketEvents(dashboardVisibleMarkets(group.markets || []));
-  const focus = events[0];
-  const focusMarket = focus ? (focus.markets.find(m => m.status === "open") || focus.markets[0]) : null;
-  const focusPct = focusMarket ? Math.round(displayedEventProbability(focusMarket, focus)) : 0;
-  const standings = Object.entries(group.balances || {})
-    .filter(([, bal]) => Number(bal) > 0)
-    .sort((a, b) => Number(b[1]) - Number(a[1]))
-    .slice(0, 5);
-  return `<aside class="market-rail">
-    ${focus ? `<section class="rail-panel focus-panel">
-      <p class="rail-kicker">Focus market</p>
-      <h3>${esc(focus.title)}</h3>
-      <div class="focus-prob"><strong>${focusPct}%</strong><span>implied yes</span></div>
-      <div class="focus-chart">${sparklineSvg(focus.title + "-focus", focusPct, 280, 92)}</div>
-      <div class="focus-outcomes">${focus.markets.slice(0, 4).map(m => `<button type="button" data-open-activity-market="${esc(m.id)}"><span>${esc(marketOptionTitle(m))}</span><strong>${Math.round(displayedEventProbability(m, focus))}%</strong></button>`).join("")}</div>
-    </section>` : ""}
-    ${standings.length ? `<section class="rail-panel">
-      <p class="rail-kicker">Standings</p>
-      <ol class="rail-standings">${standings.map(([name, bal], i) => `<li><span>${i + 1}</span><strong>${esc(name)}</strong><em>${money(bal)}</em></li>`).join("")}</ol>
-    </section>` : ""}
-    ${homeActivityPanel(group)}
-  </aside>`;
 }
 
 function groupHomeSummary(group) {

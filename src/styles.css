@@ -13013,16 +13013,17 @@ body.app-active:not(.focused-market-active) {
   padding:18px;
   display:flex;
   flex-direction:column;
-  border:1px solid var(--line);
+  border:1px solid rgba(157,171,181,.1);
   border-radius:12px;
-  background:linear-gradient(180deg, rgba(255,255,255,.028), transparent 44%), #0d0f12;
-  box-shadow:0 1px 0 rgba(255,255,255,.03), 0 18px 40px rgba(0,0,0,.28);
+  background:#131a1f;
   transition:border-color .18s ease,background .18s ease,transform .18s ease;
 }
-.home-market-card:hover { border-color:rgba(0,212,170,.34); background:linear-gradient(180deg, rgba(0,212,170,.05), transparent 44%), #101418; transform:translateY(-1px); }
-.home-market-card > header { min-height:auto; display:grid; grid-template-columns:minmax(0,1fr) 26px; gap:11px; align-items:center; }
-.home-market-title { min-width:0; padding:0; color:var(--text); text-align:left; border:0; background:transparent; font-size:15px; font-weight:600; line-height:1.35; letter-spacing:-.01em; cursor:pointer; }
-.home-market-title:hover { color:#fff; }
+.home-market-card:hover { border-color:rgba(157,171,181,.2); background:#151d22; transform:translateY(-1px); }
+.home-market-card > header { min-height:50px; display:grid; grid-template-columns:40px minmax(0,1fr) 26px; gap:11px; align-items:start; }
+.home-market-thumb { width:40px; height:40px; display:grid; place-items:center; overflow:hidden; border-radius:9px; background:#20282e; font-size:20px; }
+.home-market-thumb img { width:100%; height:100%; object-fit:cover; }
+.home-market-card > header > button:nth-child(2) { min-width:0; padding:1px 0 0; color:#e8edef; text-align:left; border:0; background:transparent; font-size:15px; font-weight:650; line-height:1.35; cursor:pointer; }
+.home-market-card > header > button:nth-child(2):hover { color:#fff; }
 .home-market-share { width:22px; height:22px; display:grid; place-items:center; color:#65737d; border:0; border-radius:6px; background:transparent; cursor:pointer; }
 .home-market-share:hover { color:#dce3e7; background:rgba(255,255,255,.05); }
 .home-market-share svg { width:13px; height:13px; }
@@ -13033,13 +13034,13 @@ body.app-active:not(.focused-market-active) {
 .home-market-outcome strong { color:#eef2f4; font:650 14px/1 "IBM Plex Mono",monospace; }
 .home-market-actions { display:flex; gap:4px; }
 .home-market-actions button { min-width:40px; height:32px; padding:0 9px; border:0; border-radius:7px; font-size:11px; font-weight:750; cursor:pointer; }
-.home-market-actions button:first-child { color:#86b897; background:transparent; box-shadow:inset 0 0 0 1px rgba(134,184,151,.24); }
-.home-market-actions button:last-child { color:#c2837c; background:transparent; box-shadow:inset 0 0 0 1px rgba(194,131,124,.24); }
-.home-market-actions button:hover:first-child { background:rgba(134,184,151,.1); }
-.home-market-actions button:hover:last-child { background:rgba(194,131,124,.1); }
+.home-market-actions button:first-child { color:#54c58a; background:rgba(52,168,104,.13); }
+.home-market-actions button:last-child { color:#ef7474; background:rgba(221,70,70,.13); }
+.home-market-actions button:hover:first-child { background:rgba(52,168,104,.22); }
+.home-market-actions button:hover:last-child { background:rgba(221,70,70,.22); }
 .home-market-final { color:#84919a; font:600 11px/1 "IBM Plex Mono",monospace; text-transform:uppercase; }
 .home-market-more { margin:9px 0 0; padding:9px 0 0; color:#919da5; text-align:left; border:0; border-top:1px solid rgba(157,171,181,.08); background:transparent; font-size:12px; cursor:pointer; }
-.home-market-more:hover { color:#00d4aa; }
+.home-market-more:hover { color:#c8ff62; }
 .home-market-card > footer { margin-top:auto; padding-top:16px; display:flex; gap:9px; color:#7e8b94; font:500 11px/1.3 "IBM Plex Mono",monospace; }
 .home-market-card > footer time { margin-left:auto; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .home-market-empty { min-height:120px; padding:22px; display:flex; align-items:center; justify-content:space-between; gap:20px; border:1px dashed rgba(157,171,181,.13); border-radius:12px; }
