@@ -243,14 +243,14 @@ const portfolioEndMarkerPlugin = {
     const value = chart.data.datasets?.[0]?.data?.at(-1);
     const label = money(value);
     ctx.save();
-    ctx.shadowColor = "rgba(45, 156, 255, 0.34)";
+    ctx.shadowColor = "rgba(125, 155, 176, 0.34)";
     ctx.shadowBlur = 18;
-    ctx.fillStyle = "rgba(45, 156, 255, 0.16)";
+    ctx.fillStyle = "rgba(125, 155, 176, 0.16)";
     ctx.beginPath();
     ctx.arc(x, y, 12, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.fillStyle = options.color || "#2d9cff";
+    ctx.fillStyle = options.color || "#7d9bb0";
     ctx.strokeStyle = "rgba(255,255,255,0.94)";
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -265,7 +265,7 @@ const portfolioEndMarkerPlugin = {
     const labelX = Math.min(chartArea.right - width, Math.max(chartArea.left, x - width - 10));
     const labelY = Math.max(chartArea.top + 2, y - height - 12);
     ctx.fillStyle = options.labelBg || "rgba(15, 22, 26, 0.92)";
-    ctx.strokeStyle = options.labelBorder || "rgba(45, 156, 255, 0.28)";
+    ctx.strokeStyle = options.labelBorder || "rgba(125, 155, 176, 0.28)";
     ctx.lineWidth = 1;
     roundRect(ctx, labelX, labelY, width, height, 12);
     ctx.fill();
@@ -342,8 +342,8 @@ function defaultMarketLiquidityForOutcomeCount(count) {
 }
 let rulesDraftPromise = null;
 const MAX_MARKET_IMAGE_BYTES = 650000;
-const EVENT_CHART_COLORS = ["#2d9cff", "#f23645", "#f2c414", "#ff861c", "#8bd450", "#b87cff", "#18c3b6", "#78b7ff"];
-const BINARY_CHART_COLORS = { yes: "#2d9cff", no: "#f23645" };
+const EVENT_CHART_COLORS = ["#8fb0c4", "#cf7d74", "#d2b25c", "#8bb98d", "#a99bd0", "#6fb3ac", "#c8bfae", "#d9a468"];
+const BINARY_CHART_COLORS = { yes: "#8fb0c4", no: "#cf7d74" };
 const charts = new Map();
 let chartRenderEpoch = 0;
 let gooeyCleanup = null;
@@ -5302,7 +5302,7 @@ function renderNav() {
     dom.appSidebar.hidden = !showAppNavigation || focusedMarket;
     dom.appSidebar.innerHTML = showAppNavigation ? `
       <div class="sidebar-section">
-        <div class="sidebar-label"><span>Your groups</span><button type="button" data-group-id="__new" aria-label="Add group">+</button></div>
+        <div class="sidebar-label"><span>Groups</span><button type="button" data-group-id="__new" aria-label="Add group">+</button></div>
         <div class="sidebar-groups">
           ${navGroups.map(g => {
             const openCount = marketEvents(g.markets || []).filter(event => eventStatus(event) === "open").length;
@@ -6515,7 +6515,7 @@ function openCatalogMarket(catalogId, outcomeTitle = "", side = "yes") {
 function catalogConsensusChart(item) {
   const outcomes = catalogMarketOutcomes(item).slice(0, 4);
   if (!outcomes.length) return "";
-  const colors = ["#2d9cff", "#8fc5ff", "#f5b84b", "#ff7a1a"];
+  const colors = ["#7d9bb0", "#8fc5ff", "#f5b84b", "#ff7a1a"];
   const rows = outcomes.map((outcome, index) => {
     const current = Math.max(0, Math.min(1, Number(outcome.probability || 0)));
     const seeded = Number(item.initialProbabilities?.[outcome.title]);
@@ -6782,12 +6782,12 @@ function groupPulseHtml(group) {
 function homeActivityPanel(group) {
   const activity = groupRecentActivity(group, 6);
   return `<section class="home-activity-panel" data-home-activity>
-    <header><div><h2>Group activity</h2><p>Trades from your people</p></div><span class="live-status"><i class="${state.liveStatus}"></i>${state.liveStatus === "live" ? "Live" : "Syncing"}</span></header>
+    <header><div><h2>Group activity</h2><p>Recent trades</p></div><span class="live-status"><i class="${state.liveStatus}"></i>${state.liveStatus === "live" ? "Live" : "Syncing"}</span></header>
     ${activity.length ? `<div class="home-activity-list">${activity.map(item => `<button type="button" data-open-activity-market="${esc(item.marketId)}">
       <span class="activity-avatar">${esc(personInitials(item.participant))}</span>
       <span><strong>${esc(item.participant)}</strong><small>${item.action === "sell" ? "sold" : "bought"} ${esc(item.outcome)} · ${money(item.amount)}</small><em>${esc(item.title)}</em></span>
       <time>${esc(relativeActivityTime(item.createdAt))}</time>
-    </button>`).join("")}</div>` : `<div class="home-activity-empty"><strong>No trades yet</strong><span>Your group’s moves will show up here without refreshing.</span></div>`}
+    </button>`).join("")}</div>` : `<div class="home-activity-empty"><strong>No trades yet</strong><span>Be the first to make a call.</span></div>`}
   </section>`;
 }
 
@@ -6806,7 +6806,7 @@ function homeMarketBoardHtml(group) {
   const additional = Math.max(0, events.length - shownEvents.length);
   return `<div data-home-market-board>
     <div class="market-list-head motion-item">
-      <div><h2>${activeStatus === "open" ? "Markets" : "Settled"}</h2><p>${activeStatus === "open" ? "Questions created or traded by this group" : "Final calls and completed markets"}</p></div>
+      <div><h2>${activeStatus === "open" ? "Open questions" : "Settled"}</h2><p>${activeStatus === "open" ? "Trading now" : "Final calls"}</p></div>
       <div class="market-list-tools">
         <div class="market-status-tabs" role="group" aria-label="Market status">
           <button class="${activeStatus === "open" ? "active" : ""}" type="button" data-market-status-filter="open">Open <span>${open}</span></button>
@@ -6831,8 +6831,7 @@ function homeEventCard(event) {
   const extra = binary ? 0 : Math.max(0, event.markets.filter(market => !marketOutcomeEliminated(market)).length - markets.length);
   return `<article class="home-market-card motion-item">
     <header>
-      <span class="home-market-thumb ${eventThumbClass(event.title, event.imageUrl)}" aria-hidden="true">${eventThumb(event.title, event.imageUrl)}</span>
-      <button type="button" data-open-activity-market="${esc(primary?.id || "")}">${esc(event.title)}</button>
+      <button class="home-market-title" type="button" data-open-activity-market="${esc(primary?.id || "")}">${esc(event.title)}</button>
       ${primary ? `<button class="home-market-share" type="button" data-share-market="${esc(primary.id)}" aria-label="Share market">${shareArrowIconSvg()}</button>` : ""}
     </header>
     <div class="home-market-quotes">${markets.map(market => {
@@ -6844,7 +6843,7 @@ function homeEventCard(event) {
       </div>`;
     }).join("")}</div>
     ${extra ? `<button class="home-market-more" type="button" data-open-activity-market="${esc(primary?.id || "")}">+${extra} more outcomes</button>` : ""}
-    <footer><span>${compactMoney(event.volume)} Vol.</span><span>${event.tradeCount} trade${event.tradeCount === 1 ? "" : "s"}</span><time>${fmtClose({ closesAt: event.closesAt, status })}</time></footer>
+    <footer><span>${compactMoney(event.volume)} volume</span><span>${event.tradeCount} trade${event.tradeCount === 1 ? "" : "s"}</span><time>${fmtClose({ closesAt: event.closesAt, status })}</time></footer>
   </article>`;
 }
 
@@ -7380,9 +7379,9 @@ function renderEmptyDashboard() {
     <section class="empty-dashboard welcome-hero welcome-rebuild">
       <div class="welcome-content">
         <div class="welcome-copy motion-item">
-          <p class="eyebrow"><span></span> Prediction markets for your group chats</p>
-          <h1 class="welcome-headline">Put your hot takes<br />on the line.</h1>
-          <p>Create a question, trade with play money, and find out who actually knows what they’re talking about.</p>
+          <p class="eyebrow"><span></span> Private prediction markets</p>
+          <h1 class="welcome-headline">Who actually<br />knows?</h1>
+          <p>Create private markets on the questions your group argues about. Prices move with every trade — the leaderboard settles it.</p>
           <div class="welcome-action-stack">${welcomeEntry}</div>
           <div class="welcome-trust-row" aria-label="Product details">
             <span><strong>$100K</strong> play-money bankroll</span>
@@ -7399,7 +7398,7 @@ function renderEmptyDashboard() {
           </div>
           <div class="preview-price"><span>YES</span><strong>64%</strong><em>+12 today</em></div>
           <svg class="preview-chart" viewBox="0 0 520 180" role="img" aria-label="Example probability rising from 44 to 64 percent">
-            <defs><linearGradient id="welcomeChartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a7f36b" stop-opacity=".28"/><stop offset="1" stop-color="#a7f36b" stop-opacity="0"/></linearGradient></defs>
+            <defs><linearGradient id="welcomeChartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c9a54a" stop-opacity=".28"/><stop offset="1" stop-color="#c9a54a" stop-opacity="0"/></linearGradient></defs>
             <path class="preview-grid" d="M0 40H520M0 90H520M0 140H520" />
             <path class="preview-area" d="M0 150 C45 143 58 104 105 115 S180 138 225 92 S292 111 335 70 S405 86 447 45 S493 53 520 26 V180 H0Z" />
             <path class="preview-line" d="M0 150 C45 143 58 104 105 115 S180 138 225 92 S292 111 335 70 S405 86 447 45 S493 53 520 26" />
@@ -7415,7 +7414,7 @@ function renderEmptyDashboard() {
         <div class="welcome-step-grid">
           <article><span>01</span><h3>Bring your people</h3><p>Create a private group and share one invite link.</p></article>
           <article><span>02</span><h3>Ask the question</h3><p>Turn the debate into a clear market with a deadline.</p></article>
-          <article><span>03</span><h3>Trade the truth</h3><p>Prices move with every trade. The best calls rise to the top.</p></article>
+          <article><span>03</span><h3>Make the call</h3><p>Prices move with every trade. The best calls rise to the top.</p></article>
         </div>
       </div>
     </section>
@@ -7580,7 +7579,6 @@ function eventCard(event) {
     <article class="event-card ${expanded ? "event-card-expanded" : ""} motion-item" data-event-key="${esc(event.key)}" aria-expanded="${expanded ? "true" : "false"}">
       <div class="event-card-inner">
         <div class="event-card-head">
-          <div class="event-thumb ${eventThumbClass(event.title, event.imageUrl)}" aria-hidden="true">${eventThumb(event.title, event.imageUrl)}</div>
           <div class="event-title-wrap">
             <p class="event-title">${esc(event.title)}</p>
           </div>
@@ -7597,7 +7595,7 @@ function eventCard(event) {
         ) : ""}
         ${expanded ? eventDetailStrip(event, status) : ""}
         <div class="event-card-foot">
-          <span>${resolvedOutcome ? `Winner: ${esc(resolvedOutcome.label)}` : `${compactMoney(event.volume)} Vol.`}</span>
+          <span>${resolvedOutcome ? `Winner: ${esc(resolvedOutcome.label)}` : `${compactMoney(event.volume)} volume`}</span>
           <span class="event-card-creator">by ${esc(eventCreatorLabel(event))}</span>
         </div>
       </div>
@@ -8064,10 +8062,9 @@ function marketHistoryPanel(market, event) {
         </div>
       ` : `
         <div class="market-history-empty">
-          <span class="market-history-thumb ${eventThumbClass(title, imageUrl)}" aria-hidden="true">${eventThumb(title, imageUrl)}</span>
           <div>
             <strong>Market opened</strong>
-            <p>Trades will appear here as people buy or sell outcomes.</p>
+            <p>No trades yet.</p>
           </div>
           <time>${esc(fmtDate(market.createdAt || event?.createdAt || Date.now()))}</time>
         </div>
@@ -8106,7 +8103,6 @@ function marketHistoryRow(trade, market, eventMeta) {
   const sideClass = trade.side === "no" || normalizedOutcomeTitle === "no" || normalizedOutcomeTitle.endsWith("· no") ? "no" : "yes";
   return `
     <div class="market-history-row ${isSell ? "sell" : "buy"}">
-      <span class="market-history-thumb ${eventThumbClass(eventMeta.title, eventMeta.imageUrl)}" aria-hidden="true">${eventThumb(eventMeta.title, eventMeta.imageUrl)}</span>
       <div class="market-history-main">
         <span class="market-history-line">
           <em>${isSell ? "Sold" : "Bought"}</em>
@@ -8515,7 +8511,7 @@ function tradePreviewHtml(market, amount) {
     updateTradeSubmitState(market, { held: 0, oversell: false, needsQuote: true }, amount);
     return `
       <div class="trade-payout-label">
-        <span>To win 💸</span>
+        <span>To win</span>
         <small>${outcomeTitleHtml(outcome?.title || marketOptionTitle(market))} · getting market quote</small>
       </div>
       <strong class="trade-payout-value">...</strong>
@@ -8536,7 +8532,7 @@ function tradePreviewHtml(market, amount) {
   const insufficientBalance = amount > balance;
   return `
     <div class="trade-payout-label">
-      <span>${mode === "sell" ? "You receive" : "To win 💸"}</span>
+      <span>${mode === "sell" ? "You receive" : "To win"}</span>
       <small>${outcomeTitleHtml(outcome?.title || marketOptionTitle(market))} · Avg. Price ${(avgPrice * 100).toFixed(1)}¢</small>
     </div>
     <strong class="trade-payout-value">${money(payout)}</strong>
@@ -9495,7 +9491,7 @@ async function animateBracketAdvance() {
   animate(targets, { scale: [0.985, 1.012, 1], opacity: [0.92, 1] }, { duration: 0.38, easing: "ease-out" });
   const activeRows = document.querySelectorAll(".bracket-mini-match.just-picked .active, .bracket-matchup.just-picked .active");
   if (activeRows.length) {
-    animate(activeRows, { boxShadow: ["inset 4px 0 0 #169bff", "inset 4px 0 0 #2d9cff"] }, { duration: 0.42 });
+    animate(activeRows, { boxShadow: ["inset 4px 0 0 #169bff", "inset 4px 0 0 #7d9bb0"] }, { duration: 0.42 });
   }
   window.setTimeout(() => {
     state.bracketLastPickedId = "";
@@ -11798,7 +11794,7 @@ function renderPortfolioCharts() {
     const { labels, data, minY, maxY } = portfolioChartConfig();
     const ctx = canvas.getContext("2d");
     const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height || 300);
-    gradient.addColorStop(0, "rgba(45, 156, 255, 0.42)");
+    gradient.addColorStop(0, "rgba(125, 155, 176, 0.42)");
     gradient.addColorStop(0.42, "rgba(18, 79, 143, 0.24)");
     gradient.addColorStop(0.78, "rgba(18, 79, 143, 0.08)");
     gradient.addColorStop(1, "rgba(18, 79, 143, 0.00)");
@@ -11809,9 +11805,9 @@ function renderPortfolioCharts() {
         datasets: [{
           label: "Portfolio",
           data,
-          borderColor: "#2d9cff",
+          borderColor: "#7d9bb0",
           backgroundColor: gradient,
-          pointBackgroundColor: "#2d9cff",
+          pointBackgroundColor: "#7d9bb0",
           pointBorderColor: "rgba(255,255,255,0.92)",
           pointBorderWidth: ctx => ctx.dataIndex === data.length - 1 ? 2 : 0,
           pointRadius: ctx => ctx.dataIndex === data.length - 1 ? 4 : 0,
@@ -11832,13 +11828,13 @@ function renderPortfolioCharts() {
         layout: { padding: { top: 18, right: 62, bottom: 4, left: 2 } },
         plugins: {
           legend: { display: false },
-          portfolioEndMarker: { enabled: true, color: "#2d9cff", labelBg: "rgba(15, 22, 26, 0.94)", labelColor: "rgba(244,247,249,0.86)", labelBorder: "rgba(45,156,255,0.3)" },
+          portfolioEndMarker: { enabled: true, color: "#7d9bb0", labelBg: "rgba(15, 22, 26, 0.94)", labelColor: "rgba(244,247,249,0.86)", labelBorder: "rgba(125,155,176,0.3)" },
           tooltip: {
             displayColors: false,
             backgroundColor: "rgba(15,22,26,0.94)",
             titleColor: "rgba(174,188,198,0.78)",
             bodyColor: "#f4f7f9",
-            borderColor: "rgba(45,156,255,0.28)",
+            borderColor: "rgba(125,155,176,0.28)",
             borderWidth: 1,
             padding: 10,
             callbacks: {
@@ -11985,9 +11981,9 @@ async function renderCharts(renderEpoch = chartRenderEpoch) {
           {
             label: "YES",
             data: yesData,
-            borderColor: "#124f8f",
-            pointBackgroundColor: "#124f8f",
-            pointBorderColor: "#124f8f",
+            borderColor: "#b08a3e",
+            pointBackgroundColor: "#b08a3e",
+            pointBorderColor: "#b08a3e",
             borderWidth: 2,
             pointRadius: ctx => chartFollowPointRadius(ctx, 3),
             pointHoverRadius: 4,

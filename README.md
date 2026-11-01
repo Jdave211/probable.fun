@@ -12,6 +12,10 @@ A private, group-native prediction markets, built with Vite, Tailwind CSS, and F
 - Update a leaderboard automatically from winning picks
 - Persist groups, markets, trades, and balances in Supabase Postgres
 
+## Demo mode (no sign-in required)
+
+The app ships with a client-side demo at `/demo/wealthsimple` that renders a full group, market, and trade flow with synthetic data. No Supabase project or backend is required, which makes it useful for local screenshots, portfolio links, and reviewing UI changes when auth is unavailable.
+
 ## Stack
 
 - Vite for the frontend toolchain
@@ -135,5 +139,9 @@ uvicorn backend.main:app --reload
 Apply `supabase/migrations/20260909000000_production_integrity.sql` before deploying the updated backend. Fresh databases require `backend/schema.sql` first, followed by the migrations. The migration makes multi-outcome NO trades atomic and limits all application tables and trading RPCs to the backend service role. Do not reapply historical migrations after the lockdown. `/api/ready` checks database access, schema support, and browser-role restrictions and must return HTTP 200 before routing traffic. `/api/health` is process liveness only.
 
 Browser database subscriptions are deliberately denied by the lockdown; the existing authenticated API polling remains the update mechanism. Add scoped RLS read policies before enabling direct Realtime subscriptions. Never expose the service-role key as a `VITE_` variable.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 Production regression commands: `npm run test:unit`, `npm run test:db`, `npm run test:api`, `npm run test:ui`, and `npm run build`. Browser tests start their own Vite server and intercept API/auth responses for deterministic recovery and interaction tests; they are not evidence of a live OAuth or deployed-database test. Install Chromium with `npx playwright install chromium --only-shell` first.

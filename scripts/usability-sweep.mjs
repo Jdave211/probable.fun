@@ -166,12 +166,12 @@ try {
     await page.getByRole('heading', { name: 'QA Friends', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Account', exact: true }).click();
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-    await page.getByRole('heading', { name: /Put your hot takes/ }).waitFor();
+    await page.getByRole('heading', { name: /Who actually knows/ }).waitFor();
     assert.equal(await page.getByText('QA Friends', { exact: true }).count(), 0);
     assert.equal(await page.evaluate(() => localStorage.getItem('sb-probable-qa-auth-token')), null);
     assert.equal(await page.evaluate(() => localStorage.getItem('probable_boot_cache_v1')), null);
     await page.reload();
-    await page.getByRole('heading', { name: /Put your hot takes/ }).waitFor();
+    await page.getByRole('heading', { name: /Who actually knows/ }).waitFor();
     assert.equal(await page.getByRole('button', { name: /Open QA Friends/ }).count(), 0);
     assert.equal(await page.getByText('QA Friends', { exact: true }).count(), 0);
     await audit(page);
@@ -182,7 +182,7 @@ try {
       localStorage.setItem('probable_boot_cache_v1', JSON.stringify({ groups: [group], currentGroupId: group.id, activeMember: 'QA Owner', savedAt: Date.now() }));
     }, group);
     await page.goto(base);
-    await page.getByRole('heading', { name: /Put your hot takes/ }).waitFor();
+    await page.getByRole('heading', { name: /Who actually knows/ }).waitFor();
     assert.equal(await page.getByRole('button', { name: /Open QA Friends/ }).count(), 0);
     await audit(page);
   }, { signedIn: false });

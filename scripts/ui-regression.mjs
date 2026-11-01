@@ -87,7 +87,7 @@ try {
   for(const width of [1280,768,390,320]) {
     await scenario(`Landing at ${width}px`,async(page,context,calls)=>{
       await page.goto(base);
-      await page.getByRole('heading',{name:'Put your hot takes on the line.'}).waitFor();
+      await page.getByRole('heading',{name:'Who actually knows?'}).waitFor();
       await noOverflow(page);
       assert.equal(await page.getByText('Practice market',{exact:true}).count(),0);
       assert.equal(calls.filter(c=>c.url.includes('/api/ready')).length,0,'Landing is independent of readiness/deployment order');
@@ -142,7 +142,7 @@ try {
     await noOverflow(page);
     await page.screenshot({path:`${output}/practice-mobile.png`,fullPage:true});
     await page.getByRole('button',{name:'Exit practice'}).click();
-    await page.getByRole('heading',{name:'Put your hot takes on the line.'}).waitFor();
+    await page.getByRole('heading',{name:'Who actually knows?'}).waitFor();
   },{width:390,height:844});
   await scenario('Catalog outage stops retrying and supports manual recovery',async(page,context)=>{
     let requests=0;
@@ -163,7 +163,7 @@ try {
     assert(await page.getByRole('button',{name:'Try again'}).isVisible());
     await accessible(page,'missing-market');
     await page.getByRole('button',{name:'Back to home'}).click();
-    await page.getByRole('heading',{name:'Put your hot takes on the line.'}).waitFor();
+    await page.getByRole('heading',{name:'Who actually knows?'}).waitFor();
   });
   await scenario('Signed-in workspace loads with a real-session-shaped token',async page=>{
     await page.goto(`${base}/app`);
