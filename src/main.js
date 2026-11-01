@@ -6815,8 +6815,8 @@ function homeMarketBoardHtml(group) {
         ${marketSortControl()}
       </div>
     </div>
-    ${shownEvents.length ? `<div class="market-terminal-list" data-market-grid>${shownEvents.map(event => homeEventRow(event)).join("")}</div>` : `<div class="home-market-empty"><div><strong>${activeStatus === "open" ? "No live markets" : "No settled markets"}</strong><span>${activeStatus === "open" ? "Start with one clear question for the group." : "Completed markets will appear here."}</span></div>${activeStatus === "open" ? `<button class="btn btn-primary" type="button" data-new-market>Create market</button>` : ""}</div>`}
-    ${recentSettled.length ? `<div class="recent-settled-head"><strong>Recently settled</strong><button type="button" data-market-status-filter="closed">View all →</button></div><div class="market-terminal-list recent">${recentSettled.map(event => homeEventRow(event)).join("")}</div>` : ""}
+    ${shownEvents.length ? `<div class="home-market-grid" data-market-grid>${shownEvents.map(event => homeEventCard(event)).join("")}</div>` : `<div class="home-market-empty"><div><strong>${activeStatus === "open" ? "No live markets" : "No settled markets"}</strong><span>${activeStatus === "open" ? "Start with one clear question for the group." : "Completed markets will appear here."}</span></div>${activeStatus === "open" ? `<button class="btn btn-primary" type="button" data-new-market>Create market</button>` : ""}</div>`}
+    ${recentSettled.length ? `<div class="recent-settled-head"><strong>Recently settled</strong><button type="button" data-market-status-filter="closed">View all →</button></div><div class="home-market-grid recent">${recentSettled.map(event => homeEventCard(event)).join("")}</div>` : ""}
     ${(hiddenImported || additional) ? `<button class="home-explore-link" type="button" data-go-markets>${hiddenImported ? `${hiddenImported} more public market${hiddenImported === 1 ? "" : "s"}` : `${additional} more group market${additional === 1 ? "" : "s"}`} <span>Explore all →</span></button>` : ""}
   </div>`;
 }
@@ -6957,11 +6957,10 @@ function renderDashboard() {
 
       ${activationProgressHtml(group)}
 
-      <div class="group-home-layout">
+      <div class="group-home-layout home-market-only">
         <section class="market-column">
           ${homeMarketBoardHtml(group)}
         </section>
-        ${marketRail(group)}
       </div>
     </section>
   `;
