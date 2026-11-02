@@ -330,7 +330,7 @@ const DEFAULT_BALANCE = 100000;
 const DEFAULT_MARKET_LIQUIDITY = 20000;
 const MARKET_FEE_RATE = 0.015;
 const API_TIMEOUT_MS = 18000;
-const BOOT_API_TIMEOUT_MS = 9000;
+const BOOT_API_TIMEOUT_MS = 12000;
 const AUTH_TIMEOUT_MS = 8000;
 const ALL_OUTCOMES_RESOLUTION = "__all__";
 
@@ -382,6 +382,7 @@ const state = {
   embedRoute: null,
   sharedMarketId: null,
   bootError: "",
+  bootWaking: false,
   marketLinkError: "",
   trade: { marketId: null, side: null, mode: "buy" },
   expandedEventKey: null,
@@ -1005,7 +1006,7 @@ async function init() {
   }
   render();
   loadMarketImages().catch(() => {});
-  loadInitialAppData()
+  loadInitialAppDataWithWake()
     .catch(err => {
       if (restoredFromCache) {
         setLiveStatus("offline");
@@ -1323,6 +1324,50 @@ function isRecoverableBackendError(err) {
   return /bad gateway|badgateway|502|503|service unavailable|failed to fetch|econnrefused|connection refused|could not connect|connection is closed/i.test(String(err?.message || ""));
 }
 
+function sleep(ms) {
+  return new Promise(resolve => window.setTimeout(resolve, ms));
+}
+
+// The free backend sleeps when idle. A raw fetch without a short abort lets the
+// browser wait out the Render cold start instead of failing the workspace load.
+async function warmBackend(totalMs = 90000) {
+  const started = Date.now();
+  while (Date.now() - started < totalMs) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 20000);
+    try {
+      const res = await fetch(`${API}/api/health`, { cache: "no-store", signal: controller.signal });
+      if (res.ok) return true;
+    } catch {
+      // Proxy or cold-start timeout; try again.
+    } finally {
+      window.clearTimeout(timer);
+    }
+    await sleep(3000);
+  }
+  return false;
+}
+
+async function loadInitialAppDataWithWake() {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const result = await loadInitialAppData();
+      state.bootWaking = false;
+      return result;
+    } catch (err) {
+      const recoverable = isWakeTimeoutError(err) || isRecoverableBackendError(err);
+      if (!recoverable || attempt === 2) {
+        state.bootWaking = false;
+        throw err;
+      }
+      state.bootWaking = true;
+      render();
+      await warmBackend(attempt === 0 ? 80000 : 45000);
+      await sleep(800);
+    }
+  }
+}
+
 function scheduleInitialLoadRetry() {
   if (bootRetryTimer) window.clearTimeout(bootRetryTimer);
   bootRetryTimer = window.setTimeout(() => {
@@ -1338,7 +1383,7 @@ async function retryInitialLoad() {
   state.marketLinkError = "";
   render();
   try {
-    await loadInitialAppData();
+    await loadInitialAppDataWithWake();
   } catch (err) {
     state.bootError = err.message || "Could not load your groups. Please try again.";
   } finally {
@@ -12734,12 +12779,23 @@ function groupHasCurrentMember(group) {
 function renderMarketLinkLoading({ error = "" } = {}) {
   const isError = Boolean(error);
   const marketLink = Boolean(state.sharedMarketId);
+  const waking = !isError && state.bootWaking;
+  const title = isError
+    ? (marketLink ? "Could not open this market" : "Could not load your workspace")
+    : waking
+      ? "Waking the server…"
+      : (marketLink ? "Opening market" : "Loading your workspace");
+  const body = isError
+    ? error
+    : waking
+      ? "The backend sleeps when idle. Waking it can take up to a minute — this continues automatically."
+      : "Getting the latest prices and activity. This may take a moment.";
   dom.mainContent.innerHTML = `
     <section class="invite-preview-page" aria-busy="${!isError}">
       <div class="invite-preview-card motion-item market-link-card">
         <p class="eyebrow">${marketLink ? "Shared market" : "Your workspace"}</p>
-        <h1>${isError ? (marketLink ? "Could not open this market" : "Could not load your workspace") : (marketLink ? "Opening market" : "Loading your workspace")}</h1>
-        <p class="${isError ? "invite-error" : "muted"}" role="${isError ? "alert" : "status"}">${esc(isError ? error : "Getting the latest prices and activity. This may take a moment.")}</p>
+        <h1>${title}</h1>
+        <p class="${isError ? "invite-error" : "muted"}" role="${isError ? "alert" : "status"}">${esc(body)}</p>
         <div class="market-link-actions">
           ${isError ? '<button class="btn btn-primary" type="button" data-retry-initial-load>Try again</button>' : '<span class="spinner" aria-hidden="true"></span>'}
           <button class="btn btn-ghost" type="button" data-go-welcome>Back to home</button>

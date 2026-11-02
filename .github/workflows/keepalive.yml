@@ -1,0 +1,30 @@
+name: Keep backend warm
+
+# Render's free tier sleeps after ~15 minutes of inactivity, which makes the
+# first workspace load slow. This pings the health endpoint so the service is
+# usually already awake when someone opens the app.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /api/health
+        run: |
+          URL="https://probable-fun.onrender.com/api/health"
+          for i in 1 2 3; do
+            code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 100 "$URL" || true)
+            echo "attempt $i -> $code"
+            if [ "$code" = "200" ]; then exit 0; fi
+            sleep 15
+          done
+          echo "backend did not wake" >&2
+          exit 1
